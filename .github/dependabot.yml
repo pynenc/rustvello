@@ -1,0 +1,50 @@
+version: 2
+updates:
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]
+    commit-message:
+      prefix: ci
+    labels: ["skip changelog"]
+
+  # Rust Components
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: monthly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]
+    commit-message:
+      prefix: build(rust)
+      prefix-development: chore(rust)
+    labels: ["skip changelog"]
+
+  - package-ecosystem: cargo
+    directory: "/py-rustvello"
+    schedule:
+      interval: monthly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]
+    commit-message:
+      prefix: build(python)
+      prefix-development: chore(python)
+    labels: ["skip changelog"]
+
+  # Python Components
+  - package-ecosystem: pip
+    directory: "/py-rustvello"
+    schedule:
+      interval: monthly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]
+    commit-message:
+      prefix: chore(python)
+    labels: ["skip changelog"]

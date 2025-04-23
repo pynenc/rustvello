@@ -1,0 +1,30 @@
+[package]
+name = "rustvello-python"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+description = "Python bindings to the Rust code using PyO3"
+readme = "../../README.md"
+
+[dependencies]
+rustvello = { workspace = true }
+rustvello-core = { workspace = true }
+rustvello-proto = { workspace = true }
+
+chrono = {workspace = true}
+num-traits = "0.2.19"
+pyo3 = { workspace = true, features=["chrono"] }
+pyo3-async-runtimes = { version = "0.22", features = ["attributes", "tokio-runtime"] }
+# pyo3-asyncio = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+[features]
+pymethods = []
+all = ["pymethods"]
+default = ["pymethods"]

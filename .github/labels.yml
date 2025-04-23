@@ -1,0 +1,54 @@
+---
+# SemVer Labels
+- name: major
+  description: Introduces incompatible API changes
+  color: d73a4a
+- name: minor
+  description: Adds functionality in a backwards-compatible manner
+  color: a2eeef
+- name: patch
+  description: Backwards-compatible bug fixes
+  color: 00ce44
+
+# Conventional Commit Labels
+- name: feature
+  description: New features
+  color: a2eeef
+- name: fix
+  description: Bug fixes
+  color: d73a4a
+- name: docs
+  description: Documentation updates
+  color: 0075ca
+  patterns:
+    - "docs/**"
+    - "*.md"
+- name: chore
+  description: Maintenance tasks
+  color: "999999"
+- name: refactor
+  description: Code changes that neither fix a bug nor add a feature
+  color: d4c5f9
+- name: security
+  description: Security-related changes
+  color: e4e669
+- name: dependencies
+  description: Dependency updates
+  color: 00ce44
+
+# Additional Essential Labels
+- name: breaking
+  description: Breaking Changes
+  color: "7c3ea5"
+- name: deprecated
+  description: Deprecations
+  color: "f00000"
+- name: removed
+  description: Removals
+  color: "f00000"
+- name: testing
+  description: Adding missing tests or correcting existing tests
+  color: "79e57f"
+- name: skip-changelog
+  description: Changes that should be omitted from the release notes
+  color: "ededed"

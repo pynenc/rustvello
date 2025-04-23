@@ -1,0 +1,22 @@
+[package]
+name = "rustvello-proto"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+description = "Data structures used for communication and handle serialization"
+readme = "../../README.md"
+
+[features]
+python = []
+
+[dependencies]
+chrono = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_with = "3.9.0"
+twox-hash = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }

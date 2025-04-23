@@ -1,0 +1,23 @@
+name: "📖 Documentation improvement"
+description: Report an issue with or suggest an improvement to the documentation.
+labels: [documentation]
+
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: >
+        Describe the issue with the documentation or how it can be improved.
+    validations:
+      required: true
+
+  - type: input
+    id: link
+    attributes:
+      label: Link
+      description: >
+        Provide a link to the relevant documentation (if applicable).
+      placeholder: ex. https://rustvello.readthedocs.io/en/latest/...
+    validations:
+      required: false

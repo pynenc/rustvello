@@ -1,0 +1,19 @@
+# .readthedocs.yaml
+version: 2
+
+build:
+  os: ubuntu-lts-latest
+  tools:
+    python: "3.11"
+    rust: "1.78"
+  commands:
+    - pip install uv==0.5.2
+    - uv venv
+    - uv sync --group docs
+    - uv run pip install -e ./py-rustvello
+    - uv run python -m sphinx -T -b html -d _build/doctrees -D language=en -c docs/ docs/ $READTHEDOCS_OUTPUT/html
+
+sphinx:
+  configuration: docs/conf.py
+  builder: html
+  fail_on_warning: false

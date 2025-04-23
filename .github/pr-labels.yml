@@ -1,0 +1,23 @@
+feature:
+  - title: ['^feat(:|\()']
+
+fix:
+  - title: ['^fix(:|\()']
+
+docs:
+  - title: ['^docs(:|\()']
+
+chore:
+  - title: ['^chore(:|\()']
+
+refactor:
+  - title: ['^refactor(:|\()']
+
+security:
+  - title: ['^security(:|\()']
+
+dependencies:
+  - title: ['^deps?(:|\()']
+
+breaking:
+  - title: ['^feat\(.*!\)(:|\()']

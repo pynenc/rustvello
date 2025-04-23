@@ -1,0 +1,62 @@
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+
+categories:
+  - title: "🚀 Features"
+    labels:
+      - "feat"
+      - "feature"
+      - "enhancement"
+  - title: "🐛 Bug Fixes"
+    labels:
+      - "fix"
+      - "bugfix"
+  - title: "🧰 Maintenance"
+    labels:
+      - "chore"
+      - "refactor"
+  - title: "📝 Documentation"
+    labels:
+      - "docs"
+  - title: "🔧 Dependencies"
+    labels:
+      - "deps"
+      - "dependencies"
+  - title: "📦 Miscellaneous"
+    labels: []
+
+change-template: "- $TITLE @$AUTHOR (#$NUMBER)"
+
+template: |
+  ## v$RESOLVED_VERSION - {{date}}
+
+  ### What's Changed
+
+  $CATEGORIES
+
+  ### Contributors
+
+  $CONTRIBUTORS
+
+version-resolver:
+  major:
+    labels:
+      - "breaking"
+  minor:
+    labels:
+      - "feat"
+      - "feature"
+      - "enhancement"
+  patch:
+    labels:
+      - "fix"
+      - "bugfix"
+      - "chore"
+      - "refactor"
+  default: patch
+
+exclude-labels:
+  - "skip-changelog"
+
+sort-by: "merged_at"
+sort-direction: "ascending"

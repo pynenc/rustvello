@@ -1,0 +1,30 @@
+[package]
+name = "rustvello-core"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+description = "Infinite Haiku Muse Core"
+readme = "../../README.md"
+
+[features]
+python = []
+
+[dependencies]
+rustvello-proto = { workspace = true }
+
+arc-swap = "1.7"
+async-trait = { workspace = true }
+chrono = { workspace = true }
+crossbeam-queue = "0.3"
+hashbrown = { workspace = true }
+imbl = "3.0"
+log = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }

@@ -1,0 +1,136 @@
+# pyproject.toml
+
+[tool.uv]
+managed = true
+package = false
+
+[tool.uv.workspace]
+members = ["py-rustvello"]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.2.0",
+    "pre-commit>=2.20.0",
+    "tox-uv>=1.11.3",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.6.9",
+    "maturin>=1.7.4",
+    "mypy>=1.13.0",
+]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-autodoc2>=0.5.0",
+    "sphinx-copybutton>=0.5.2",
+    "sphinx-design>=0.5.0",
+    "sphinx-inline-tabs>=2023.4.21",
+    "myst-parser>=2",
+    "furo>=2023",
+]
+
+[tool.mypy]
+files = ["py-rustvello/rustvello", "tests"]
+strict = true
+enable_error_code = [
+  "redundant-expr",
+  "truthy-bool",
+  "ignore-without-code",
+]
+disable_error_code = [
+  "empty-body",
+]
+follow_imports = "silent"
+disallow_untyped_defs = true
+disallow_any_unimported = true
+no_implicit_optional = true
+check_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+show_error_codes = true
+warn_unused_configs = true
+ignore_missing_imports = true
+disallow_incomplete_defs = true
+pretty = true
+allow_redefinition = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+  "py_rustvello.*",
+  "rustvello.rustvello",
+]
+ignore_missing_imports = true
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.isort]
+profile = "black"
+lines_between_types = 1
+
+[tool.ruff]
+line-length = 88
+preview = true
+fix = true
+extend-exclude = [
+    "docs/conf.py",
+]
+
+[tool.ruff.lint]
+select = [
+  "ANN", # flake8-annotations
+  "B", # flake8-bugbear
+  "C4", # flake8-comprehensions
+  "D", # flake8-docstrings
+  "E", # pycodestyle
+  "EM", # flake8-errmsg
+  "F", # pyflakes
+  "FA", # flake8-future-annotations
+  "FBT001", # flake8-boolean-trap
+  "I", # isort # Using isort for now
+  "ICN", # flake8-import-conventions
+  "INT", # flake8-gettext
+  "PERF", # perflint
+  "PIE", # flake8-pie
+  "PT", # flake8-pytest-style
+  "PTH", # flake8-use-pathlib
+  "PYI", # flake8-pyi
+  "RUF", # ruff-specific rules
+  "SIM", # flake8-simplify
+  "TCH", # flake8-type-checking
+  "TD", # flake8-todos
+  "TID", # flake8-tidy-imports
+  "TRY", # tryceratops
+  "UP", # pyupgrade
+  "W", # pycodestyle
+]
+per-file-ignores = { "tests/*" = ["S101"] }
+ignore = [
+    "D203",  # Ignore one-blank-line-before-class
+    "D213",  # Ignore multi-line-summary-second-line
+    "UP007", # Ignore Use `X | Y` for type annotations
+    "ANN101", # Ignore Missing type annotation for `self` in method
+]
+
+[tool.ruff.lint.isort]
+lines-between-types = 1
+
+[tool.ruff.format]
+preview = true
+
+[tool.coverage.report]
+fail_under = 85
+skip_covered = true
+show_missing = true
+exclude_lines = [
+  "pragma: no cover",
+  "@overload",
+  "except ImportError",
+  "if TYPE_CHECKING:",
+  "from typing_extensions import ",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["rustvello"]

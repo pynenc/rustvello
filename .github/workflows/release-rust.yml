@@ -1,0 +1,40 @@
+name: Release Rust
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+
+  release:
+    types:
+      - released
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  rust-release:
+    name: Rust Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish rustvello package
+        run: |
+          cd crates
+          cargo publish --allow-dirty -p rustvello-proto --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          cargo publish --allow-dirty -p rustvello-core --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          cargo publish --allow-dirty -p rustvello-record --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          cargo publish --allow-dirty -p rustvello-client --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          cargo publish --allow-dirty -p rustvello --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          cargo publish --allow-dirty -p rustvello-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}

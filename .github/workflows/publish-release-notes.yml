@@ -1,0 +1,53 @@
+name: Publish Release Notes and Update Changelog
+
+on:
+  workflow_run:
+    workflows:
+      - Release Rust
+      - Release Python
+    types:
+      - completed
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  publish-release-notes:
+    name: Publish Release Notes
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Ensure full history is fetched
+
+      - name: Extract version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -n 1 | cut -d '"' -f 2)
+          echo "Detected version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Generate Release Notes
+        id: release-notes
+        uses: release-drafter/release-drafter@v5.23.0
+        with:
+          publish: true
+          tag: v${{ steps.version.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Changelog
+        uses: stefanzweifel/changelog-updater-action@v1
+        with:
+          latest-version: ${{ steps.version.outputs.version }}
+          release-notes: ${{ steps.release-notes.outputs.body }}
+
+      - name: Commit Updated Changelog
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          branch: main
+          commit_message: "docs(changelog): update changelog"
+          file_pattern: CHANGELOG.md

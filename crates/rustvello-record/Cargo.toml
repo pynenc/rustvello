@@ -1,0 +1,25 @@
+[package]
+name = "rustvello-record"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+description = "Record Muse Api usage for testing purposes"
+readme = "../../README.md"
+
+[features]
+python = []
+
+[dependencies]
+rustvello-core = { workspace = true }
+rustvello-proto = { workspace = true }
+
+async-trait = { workspace = true }
+bincode = "1.3.3"
+log = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }

@@ -1,0 +1,62 @@
+**Example:**
+
+If you're using `sphinx_design` and `sphinx_inline_tabs`, ensure they're included in your dependencies and installed via `uv sync`.
+
+**Check Dependencies in `pyproject.toml`:**
+
+```toml
+docs = [
+    "sphinx>=7.0",
+    "sphinx-autodoc2>=0.5.0",
+    "sphinx-copybutton>=0.5.2",
+    "sphinx-design>=0.5.0",
+    "sphinx-inline-tabs>=2023.4.21",
+    "myst-parser>=2",
+    "furo>=2023",
+]
+```
+
+---
+
+### **8. Rebuild and Test Locally**
+
+After making these changes, rebuild your documentation:
+
+```bash
+make docs-build
+```
+
+Then, serve the documentation locally to verify that everything works:
+
+```bash
+make docs-serve
+```
+
+Visit `http://localhost:8000` in your browser to view the documentation.
+
+---
+
+### **9. Review Remaining Warnings**
+
+Some warnings may remain after these fixes. Review and address them to ensure your documentation is error-free.
+
+**Common Warnings:**
+
+- **Nonexisting Documents**: Ensure all references point to existing files.
+- **Syntax Issues**: Double-check the syntax of your directives and cross-references.
+
+---
+
+### **Summary**
+
+- **Fix Paths in `conf.py`**: Correct `autodoc2_packages` to point to the right location.
+- **Install Your Package**: Ensure `rustvello` is installed before building docs.
+- **Correct Tabs Syntax**: Adjust your Markdown files to fix tab-related errors.
+- **Update `toctree` Directives**: Ensure all documents are properly included.
+- **Resolve Cross-Reference Warnings**: Correct any broken links.
+- **Install Dependencies**: Make sure all required packages are installed.
+- **Rebuild and Test**: Verify that the documentation builds without errors.
+
+---
+
+If you follow these steps, you should be able to resolve the issues with your documentation build. Let me know if you need further assistance or if any specific errors persist after making these changes!
