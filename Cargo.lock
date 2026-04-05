@@ -2888,21 +2888,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "monitoring-server-example"
-version = "0.0.0"
-dependencies = [
- "rustvello",
- "rustvello-core",
- "rustvello-mem",
- "rustvello-monitoring",
- "rustvello-proto",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"

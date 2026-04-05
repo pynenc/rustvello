@@ -2,9 +2,9 @@
 [workspace]
 members = [
   "crates/*",
-  "examples/*",
   "py-rustvello",
 ]
+exclude = ["fuzz"]
 resolver = "2"
 
 default-members = [
