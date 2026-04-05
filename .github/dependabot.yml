@@ -24,6 +24,9 @@ updates:
       prefix: build(rust)
       prefix-development: chore(rust)
     labels: ["skip-changelog"]
+    groups:
+      rust-dependencies:
+        patterns: ["*"]
 
   - package-ecosystem: cargo
     directory: "/py-rustvello"
@@ -36,6 +39,9 @@ updates:
       prefix: build(python)
       prefix-development: chore(python)
     labels: ["skip-changelog"]
+    groups:
+      rust-python-dependencies:
+        patterns: ["*"]
 
   # Python Components
   - package-ecosystem: pip
@@ -48,3 +54,6 @@ updates:
     commit-message:
       prefix: chore(python)
     labels: ["skip-changelog"]
+    groups:
+      python-dependencies:
+        patterns: ["*"]
