@@ -81,7 +81,7 @@ deadpool-postgres = "0.14"
 postgres-native-tls = "0.5"
 native-tls = "0.2"
 rayon = "1.10"
-testcontainers = "0.23"
+testcontainers = "0.24"
 trybuild = "1"
 testcontainers-modules = { version = "0.11", features = ["redis", "mongo", "postgres", "rabbitmq"] }
 
