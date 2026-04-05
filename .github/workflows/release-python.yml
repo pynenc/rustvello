@@ -241,7 +241,7 @@ jobs:
 
     steps:
       - name: Download sdists and wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: "*"
           path: dist
@@ -277,7 +277,7 @@ jobs:
 
     steps:
       - name: Download sdists and wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: "*"
           path: dist
