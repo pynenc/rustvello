@@ -58,7 +58,7 @@ log = "0.4"
 lru = "0.12"
 proptest = "1"
 pyo3 = { version = "0.22", features = ["multiple-pymethods"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 sha2 = "0.10"
