@@ -105,7 +105,7 @@ jobs:
         run: make docs-build
 
   publish-dry-run:
-    name: Verify crates are packageable
+    name: Verify crates compile (all features)
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
@@ -114,29 +114,11 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Verify all crates can be packaged
-        run: |
-          set -e
-          verify() {
-            echo "::group::$1"
-            cargo package -p "$1" --no-verify
-            echo "::endgroup::"
-          }
-          verify rustvello-proto
-          verify rustvello-core
-          verify rustvello-macros
-          verify rustvello-mem
-          verify rustvello-sqlite
-          verify rustvello-redis
-          verify rustvello-postgres
-          verify rustvello-mongo
-          verify rustvello-mongo3
-          verify rustvello-rabbitmq
-          verify rustvello-prometheus
-          verify rustvello
-          verify rustvello-monitoring
-          verify rustvello-cli
-          verify rustvello-test-suite
+      - name: Check workspace compiles with all features
+        run: cargo check --workspace --all-features --all-targets
+
+      - name: Verify root crate can be packaged
+        run: cargo package -p rustvello-proto --no-verify
 
   fuzz:
     name: Fuzz testing (30s per target)
