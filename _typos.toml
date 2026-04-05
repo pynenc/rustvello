@@ -1,0 +1,7 @@
+# typos configuration — false positive suppressions
+
+[default.extend-words]
+# Variable names in test code (broker_a, broker_b → ba, bb)
+ba = "ba"
+# CSS class prefix for overlap-tooltip (ot-row, ot-dot, etc.)
+ot = "ot"

@@ -1,0 +1,131 @@
+{% if !workflow_types.is_empty() %}
+<div class="table-responsive">
+  <table class="table table-hover pynmon-table mb-0">
+    <thead>
+      <tr>
+        <th>Workflow Type</th>
+        <th>Runs</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for wt in workflow_types %}
+      <tr>
+        <td>
+          <a
+            href="/workflows/{{ wt.workflow_type }}"
+            class="text-decoration-none"
+          >
+            <strong>{{ wt.workflow_type }}</strong>
+          </a>
+        </td>
+        <td><span class="badge bg-primary">{{ wt.run_count }}</span></td>
+        <td>
+          <a
+            href="/workflows/{{ wt.workflow_type }}"
+            class="btn btn-sm btn-outline-primary"
+            >View Details</a
+          >
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="alert alert-info mb-0">
+  <h6>No workflows found</h6>
+  <p class="mb-0">No workflow executions have been registered yet.</p>
+</div>
+{% endif %}
+
+<!-- Workflow Runs Section -->
+<div class="mt-4">
+  <h6 class="section-title">
+    All Workflow Runs
+    <span class="badge bg-primary ms-2">{{ workflow_runs.len() }}</span>
+  </h6>
+  {% if !workflow_runs.is_empty() %}
+  <div class="table-responsive">
+    <table class="table table-hover pynmon-table mb-0">
+      <thead>
+        <tr>
+          <th>Invocation ID</th>
+          <th>Task</th>
+          <th>Status</th>
+          <th>Children</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in workflow_runs %}
+        <tr>
+          <td>
+            <a
+              href="/invocations/{{ run.invocation_id }}"
+              class="text-decoration-none"
+            >
+              <code class="text-primary" title="{{ run.invocation_id }}"
+                >{{ run.short_id }}</code
+              >
+            </a>
+          </td>
+          <td>
+            <a href="/tasks/{{ run.task_id }}" class="text-decoration-none"
+              >{{ run.task_id }}</a
+            >
+          </td>
+          <td>
+            <span class="badge {{ run.status_class }}">{{ run.status }}</span>
+          </td>
+          <td>
+            {% if run.child_count > 0 %}
+            <button
+              class="btn btn-sm btn-link p-0 text-info"
+              hx-get="/workflows/children/{{ run.invocation_id }}"
+              hx-target="#children-{{ run.short_id }}"
+              hx-swap="innerHTML"
+              onclick="this.closest('tr').nextElementSibling.classList.toggle('d-none'); this.innerHTML = this.innerHTML.includes('▶') ? '▼ {{ run.child_count }}' : '▶ {{ run.child_count }}'"
+            >
+              ▶ {{ run.child_count }}
+            </button>
+            {% else %}
+            <span class="badge bg-info">0</span>
+            {% endif %}
+          </td>
+          <td>
+            <a
+              href="/invocations/{{ run.invocation_id }}"
+              class="btn btn-sm btn-outline-primary"
+              >View</a
+            >
+            <a
+              href="/invocations?status=&task_id={{ run.task_id }}"
+              class="btn btn-sm btn-outline-info"
+              >Invocations</a
+            >
+          </td>
+        </tr>
+        {% if run.child_count > 0 %}
+        <tr class="d-none" id="children-row-{{ run.short_id }}">
+          <td colspan="5" class="p-0">
+            <table class="table table-sm mb-0">
+              <tbody id="children-{{ run.short_id }}">
+                <tr>
+                  <td class="text-muted small ps-4">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </td>
+        </tr>
+        {% endif %} {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-muted small mb-0">
+    No workflow runs found. Workflow runs appear when invocations have child
+    invocations.
+  </p>
+  {% endif %}
+</div>

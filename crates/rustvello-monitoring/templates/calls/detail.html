@@ -1,0 +1,132 @@
+{% extends "base.html" %} {% block title %}Call: {{ call_id }} — Rustvello
+Monitor{% endblock %} {% block content %}
+<div class="pynmon-container">
+  <div class="row">
+    <div class="col-12">
+      <div class="card pynmon-card">
+        <div
+          class="card-header pynmon-card-header d-flex justify-content-between align-items-center"
+        >
+          <span class="compact-header">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 20px"
+              >phone_callback</span
+            >
+            Call Detail
+          </span>
+          <a href="/invocations" class="btn btn-sm btn-outline-secondary">
+            <span class="material-icons align-middle" style="font-size: 16px"
+              >arrow_back</span
+            >
+            Back to Invocations
+          </a>
+        </div>
+        <div class="card-body pynmon-card-body">
+          <!-- Call Info -->
+          <div class="row pynmon-row-compact">
+            <div class="col-md-6">
+              <div class="card pynmon-card">
+                <div class="card-header compact-header">Call Information</div>
+                <div class="card-body">
+                  <table class="table pynmon-table">
+                    <tbody>
+                      <tr>
+                        <th>Call ID:</th>
+                        <td>
+                          <code style="font-size: 11px; word-break: break-all"
+                            >{{ call_id }}</code
+                          >
+                        </td>
+                      </tr>
+                      {% if !task_id.is_empty() %}
+                      <tr>
+                        <th>Task:</th>
+                        <td>
+                          <a
+                            href="/tasks/{{ task_id }}"
+                            class="text-decoration-none"
+                            >{{ task_id }}</a
+                          >
+                        </td>
+                      </tr>
+                      {% endif %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="card pynmon-card">
+                <div class="card-header compact-header">Summary</div>
+                <div class="card-body">
+                  <div class="metric-grid">
+                    <div class="metric-item">
+                      <span class="metric-label">Invocations</span>
+                      <span class="badge bg-primary"
+                        >{{ invocation_ids.len() }}</span
+                      >
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Invocations -->
+          <div class="row pynmon-row-compact">
+            <div class="col-12">
+              <div class="card pynmon-card">
+                <div class="card-header compact-header">
+                  Invocations ({{ invocation_ids.len() }})
+                </div>
+                <div class="card-body">
+                  {% if !invocation_ids.is_empty() %}
+                  <div class="table-responsive">
+                    <table class="table table-hover pynmon-table">
+                      <thead>
+                        <tr>
+                          <th>Invocation ID</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for inv_id in invocation_ids %}
+                        <tr>
+                          <td>
+                            <a
+                              href="/invocations/{{ inv_id }}"
+                              class="text-decoration-none"
+                            >
+                              <code class="small text-primary"
+                                >{{ inv_id }}</code
+                              >
+                            </a>
+                          </td>
+                          <td>
+                            <a
+                              href="/invocations/{{ inv_id }}"
+                              class="btn btn-sm btn-outline-primary"
+                              >Details</a
+                            >
+                          </td>
+                        </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                  {% else %}
+                  <p class="text-muted mb-0">
+                    No invocations found for this call.
+                  </p>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

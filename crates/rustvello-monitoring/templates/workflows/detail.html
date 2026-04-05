@@ -1,0 +1,52 @@
+{% extends "base.html" %} {% block title %}Workflow: {{ workflow_type }} —
+Rustvello Monitor{% endblock %} {% block content %}
+<div class="pynmon-container">
+  <div class="row">
+    <div class="col-12">
+      <div class="card pynmon-card">
+        <div
+          class="card-header pynmon-card-header d-flex justify-content-between align-items-center"
+        >
+          <span class="compact-header">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 20px"
+              >workspaces</span
+            >
+            {{ workflow_type }}
+          </span>
+          <div class="d-flex gap-2">
+            <a href="/workflows" class="btn btn-sm btn-outline-secondary">
+              <span class="material-icons align-middle" style="font-size: 16px"
+                >arrow_back</span
+              >
+              Back
+            </a>
+            <button
+              class="btn btn-sm btn-outline-primary"
+              hx-get="/workflows/{{ workflow_type }}/refresh"
+              hx-target="#workflow-detail-content"
+              hx-swap="innerHTML"
+            >
+              <span class="material-icons align-middle" style="font-size: 16px"
+                >refresh</span
+              >
+              Refresh
+            </button>
+          </div>
+        </div>
+        <div class="card-body pynmon-card-body">
+          <div
+            id="workflow-detail-content"
+            hx-get="/workflows/{{ workflow_type }}/refresh"
+            hx-trigger="every 10s"
+            hx-swap="innerHTML"
+          >
+            {% include "workflows/partials/detail_content.html" %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

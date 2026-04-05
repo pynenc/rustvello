@@ -1,19 +1,23 @@
-// crates/rustvello-proto/src/lib.rs
+//! Data transfer objects and wire types for the Rustvello distributed task system.
+//!
+//! This crate contains the shared data model used across all Rustvello components:
+//! - Identifiers ([`TaskId`], [`CallId`], [`InvocationId`])
+//! - Status types and state machine definitions
+//! - DTOs for persistence and wire transfer
+//! - Configuration types
 
-mod cluster_state;
-mod element;
-mod element_kind;
-mod metric;
-mod node_elem_ranges;
-pub mod prelude;
-mod timestamp_resolution;
-pub mod types;
-mod utils;
+pub mod call;
+pub mod config;
+pub mod identifiers;
+pub mod invocation;
+pub mod status;
+pub mod trigger;
 
-pub use cluster_state::{NodeInfo, NodeState, NodeStatus};
-pub use element::{generate_local_element_id, ElementRegistration, NewElementsResponse};
-pub use element_kind::ElementKindRegistration;
-pub use metric::{metric_id_from_code, MetricDefinition, MetricPayload, MetricQuery};
-pub use node_elem_ranges::{GetRangesRequest, NodeElementRange, OrdRangeInc};
-pub use timestamp_resolution::TimestampResolution;
-pub use types::{ElementId, ElementKindId, LocalElementId, MetricId, MetricValue, Timestamp};
+pub mod prelude {
+    pub use crate::call::*;
+    pub use crate::config::*;
+    pub use crate::identifiers::*;
+    pub use crate::invocation::*;
+    pub use crate::status::*;
+    pub use crate::trigger::*;
+}

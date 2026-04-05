@@ -1,0 +1,203 @@
+{% extends "base.html" %} {% block title %}Orchestrator — Rustvello Monitor{%
+endblock %} {% block content %}
+<div class="container-fluid">
+  <!-- Page Header -->
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="h4 mb-0 text-primary">
+      <span
+        class="material-icons"
+        style="vertical-align: middle; margin-right: 0.25rem"
+        >settings</span
+      >
+      Orchestrator Monitor
+    </h2>
+    <button
+      class="btn btn-sm btn-outline-primary"
+      hx-get="/orchestrator/refresh"
+      hx-target="#orchestrator-stats"
+      hx-swap="innerHTML"
+    >
+      <span
+        class="material-icons"
+        style="font-size: 16px; vertical-align: middle"
+        >refresh</span
+      >
+      Refresh
+    </button>
+  </div>
+
+  <!-- Type Banner -->
+  <div class="info-card mb-4">
+    <h6 class="section-title">Orchestrator Type</h6>
+    <p class="mb-0 fw-semibold">
+      <span class="badge bg-primary fs-6">{{ backend_name }}</span>
+      <span class="text-muted small ms-2">implementation</span>
+    </p>
+  </div>
+
+  <!-- Live Stats (full width, auto-refreshing) -->
+  <div
+    id="orchestrator-stats"
+    class="mb-3"
+    hx-get="/orchestrator/refresh"
+    hx-trigger="every 5s"
+    hx-swap="innerHTML"
+  >
+    {% include "orchestrator/partials/stats.html" %}
+  </div>
+
+  <!-- Configuration, Storage, Recovery, and Runners Grid -->
+  <div class="row g-3">
+    <!-- Left Column: Recovery & Atomic Services + Active Runners -->
+    <div class="col-md-6">
+      <div class="metric-card">
+        <h6 class="section-title">Recovery &amp; Atomic Services</h6>
+        <div class="metric-grid">
+          <div class="metric-item">
+            <span class="metric-label">Atomic Svc Interval</span>
+            <span class="badge bg-info">{{ atomic_svc_interval }}m</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Spread Margin</span>
+            <span class="badge bg-info">{{ atomic_svc_spread_margin }}m</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Check Interval</span>
+            <span class="badge bg-info">{{ atomic_svc_check_interval }}m</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Recover Pending</span>
+            <span
+              class="d-inline-flex flex-column align-items-end"
+              style="line-height: 1.1"
+            >
+              <span class="text-muted" style="font-size: 9px"
+                >{{ recover_pending_human }}</span
+              >
+              <span
+                class="badge bg-info"
+                style="font-family: monospace; font-size: 10px"
+                >{{ recover_pending_cron }}</span
+              >
+            </span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Max Pending</span>
+            <span class="badge bg-info">{{ max_pending_seconds }}s</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Recover Running</span>
+            <span
+              class="d-inline-flex flex-column align-items-end"
+              style="line-height: 1.1"
+            >
+              <span class="text-muted" style="font-size: 9px"
+                >{{ recover_running_human }}</span
+              >
+              <span
+                class="badge bg-info"
+                style="font-family: monospace; font-size: 10px"
+                >{{ recover_running_cron }}</span
+              >
+            </span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Runner Dead After</span>
+            <span class="badge bg-info">{{ runner_dead_after_minutes }}m</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Active Runners Section -->
+      <div class="metric-card mt-3">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h6 class="section-title mb-0">Active Runners</h6>
+          <a href="/runners" class="btn btn-sm btn-outline-primary">View All</a>
+        </div>
+        <div class="metric-grid">
+          <div class="metric-item">
+            <span class="metric-label">Total Active</span>
+            <span class="badge bg-success">{{ active_runner_count }}</span>
+          </div>
+        </div>
+        {% if active_runner_count == 0 %}
+        <div class="text-center py-2">
+          <p class="small text-muted mb-0">No active runners</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Right Column: Configuration + Storage Load -->
+    <div class="col-md-6">
+      <div class="metric-card">
+        <h6 class="section-title">Configuration</h6>
+        <div class="metric-grid">
+          <div class="metric-item">
+            <span class="metric-label">Blocking Control</span>
+            <span
+              class="badge {% if blocking_control %}bg-success{% else %}bg-secondary{% endif %}"
+            >
+              {% if blocking_control %}Enabled{% else %}Disabled{% endif %}
+            </span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Auto Purge (hours)</span>
+            <span class="badge bg-info">{{ auto_purge_hours }}</span>
+          </div>
+        </div>
+      </div>
+
+      {% if !usage_stats.is_empty() %}
+      <!-- Storage Load -->
+      <div class="metric-card mt-3">
+        <h6 class="section-title">Storage Load</h6>
+        <div class="metric-grid">
+          {% for (label, value) in usage_stats %}
+          <div class="metric-item">
+            <span class="metric-label">{{ label }}</span>
+            <span class="badge bg-info">{{ value }}</span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Quick Actions -->
+  <div class="row mt-4">
+    <div class="col-12">
+      <div class="info-card text-center">
+        <h6 class="section-title">Quick Actions</h6>
+        <div class="d-flex justify-content-center gap-2 flex-wrap">
+          <a href="/invocations" class="btn btn-outline-primary btn-sm">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 14px"
+              >list</span
+            >
+            View All Invocations
+          </a>
+          <a href="/tasks" class="btn btn-outline-info btn-sm">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 14px"
+              >task</span
+            >
+            View All Tasks
+          </a>
+          <a href="/runners" class="btn btn-outline-success btn-sm">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 14px"
+              >devices</span
+            >
+            View Active Runners
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

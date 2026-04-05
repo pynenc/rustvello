@@ -1,0 +1,26 @@
+[package]
+name = "rustvello-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rustvello-proto = { path = "../crates/rustvello-proto" }
+serde_json = "1"
+toml = "0.7"
+
+[[bin]]
+name = "fuzz_json_trigger"
+path = "fuzz_targets/fuzz_json_trigger.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_toml_config"
+path = "fuzz_targets/fuzz_toml_config.rs"
+test = false
+doc = false

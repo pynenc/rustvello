@@ -1,153 +1,270 @@
-# Welcome to rustvello Documentation
+:::{image} \_static/logo.png
+:alt: rustvello
+:align: center
+:height: 90px
+:class: hero-logo
+:::
 
-```{raw} html
-<h1 style="text-align:center">rustvello: A Powerful Library for Muse Integration</h1>
-<div align="center">
-  <a href="https://docs.rs/rustvello/latest/rustvello/">
-    <img src="https://docs.rs/rustvello/badge.svg" alt="Rust docs latest"/>
-  </a>
-  <a href="https://crates.io/crates/rustvello">
-    <img src="https://img.shields.io/crates/v/rustvello.svg" alt="Rust crates Latest Release"/>
-  </a>
-  <a href="https://pypi.org/project/rustvello/">
-    <img src="https://img.shields.io/pypi/v/rustvello.svg" alt="PyPI Latest Release"/>
-  </a>
-  <a href="https://github.com/pynenc/rustvello">
-    <img src="https://img.shields.io/github/v/release/pynenc/rustvello.svg" alt="GitHub Latest Release"/>
-  </a>
-</div>
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: User Guide
+
+installation
+getting_started
+architecture
+configuration/index
+monitoring/index
+migration-0.2
 ```
 
 ```{toctree}
 :hidden:
 :maxdepth: 2
-:caption: Table of Contents
+:caption: Reference
 
-installation
-getting_started
-configuration/index
-recording/index
 cli/index
 api/index
-contributing/index
 faq
 changelog
 license
 ```
 
-rustvello is a library designed to interact seamlessly with the Muse system. It provides functionality for element registration, metric reporting, and event recording/replaying, making it easier to integrate Muse capabilities into your applications in both Rust and Python.
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Development
 
-## Key Features
-
-- **Element Registration:** Easily register elements with the Muse system, including metadata and hierarchical relationships.
-- **Metric Reporting:** Send metrics associated with elements to monitor performance and other metrics.
-- **Event Recording & Replaying:** Record events for later analysis or replay them for testing and debugging purposes.
-- **Configurable Client:** Choose between different client types (`Poet`, `Mock`) to suit your development and testing needs.
-- **Asynchronous Operations:** Built with async capabilities, enabling efficient, non-blocking operations.
-- **Multi-Language Support:** Available for both Rust and Python.
-
-```{note}
-**New to Muse?**
-
-Muse is a system designed for real-time monitoring and analytics. It allows for the registration of elements and the reporting of metrics associated with those elements, providing insights into system performance and behavior.
+contributing/index
 ```
 
-## Philosophy
+# rustvello
 
-The goal of rustvello is to provide an efficient and user-friendly library that:
+**The Rust engine behind [pynenc](https://docs.pynenc.org) distributed task orchestration.**
 
-- Utilizes the performance and safety features of Rust and the simplicity of Python.
-- Simplifies integration with the Muse system.
-- Provides flexibility through configuration and client types.
-- Enables easy recording and replaying of events for testing and analysis.
+Rustvello delivers the performance-critical core — broker, orchestrator, state backend,
+concurrency control, workflows, trigger scheduling, and a live monitoring dashboard —
+implemented in safe Rust. The [pynenc](https://docs.pynenc.org) Python framework mounts
+rustvello as its production backend through zero-overhead PyO3 bindings.
 
-## Example
-
-````{tab-set-code}
-
-```{code-block} python
-import asyncio
-from rustvello import Muse, Config, ClientType
-from rustvello.proto import (
-    ElementKindRegistration,
-    MetricDefinition,
-    TimestampResolution,
-)
-
-async def main():
-    config = Config(
-        endpoints=["http://localhost:8080"],
-        client_type=ClientType.Poet,
-        default_resolution=TimestampResolution.Milliseconds,
-        element_kinds=[ElementKindRegistration("kind_code", "description")],
-        metric_definitions=[MetricDefinition("metric_code", "description")],
-        max_reg_elem_retries=3,
-        max_endpoint_retries=None,
-        recording_enabled=False,
-    )
-    muse = Muse(config)
-    await muse.initialize(timeout=5.0)
-
-    local_elem_id = await muse.register_element(
-        kind_code="kind_code",
-        name="Element Name",
-        metadata={},
-        parent_id=None,
-    )
-
-    await muse.send_metric(local_elem_id, "metric_code", 42.0)
-
-asyncio.run(main())
+```bash
+cargo add rustvello
 ```
 
-```{code-block} rust
+or for Python:
+
+```bash
+pip install rustvello
+```
+
+---
+
+## Define a Task
+
+Use the `#[rustvello::task]` macro to turn any function into a distributed task:
+
+````{tab} Rust
+```rust
 use rustvello::prelude::*;
-use std::collections::HashMap;
+
+#[rustvello::task]
+fn add(x: i32, y: i32) -> i32 {
+    x + y
+}
 
 #[tokio::main]
-async fn main() -> MuseResult<()> {
-    let config = Config::new(
-        vec!["http://localhost:8080".to_string()],
-        ClientType::Poet,
-        false,
-        None,
-        TimestampResolution::Milliseconds,
-        vec![ElementKindRegistration::new("kind_code", "description")],
-        vec![MetricDefinition::new("metric_code", "description")],
-        Some(std::time::Duration::from_secs(60)),
-        3,
-    )?;
+async fn main() -> RustvelloResult<()> {
+    let app = Rustvello::builder()
+        .app_id("my-app")
+        .auto_discover_tasks()
+        .build().await?;
 
-    let mut muse = Muse::new(&config)?;
-    muse.initialize(Some(std::time::Duration::from_secs(5))).await?;
-
-    let local_elem_id = muse
-        .register_element(
-            "kind_code",
-            "Element Name".to_string(),
-            HashMap::new(),
-            None,
-        )
-        .await?;
-
-    muse.send_metric(local_elem_id, "metric_code", MetricValue::from(42.0))
-        .await?;
-
+    // Submit and wait for the result
+    let handle = app.submit_call(&AddTask, AddParams { x: 1, y: 2 }).await?;
+    let result = handle.result().await?;
+    println!("{result}");  // 3
     Ok(())
 }
 ```
 ````
 
-A more extensive introduction can be found in the {doc}`getting_started`.
+````{tab} Python (standalone)
+```python
+from rustvello import App
 
-## Community
+app = App(backend="sqlite", db_path="./tasks.db")
 
-rustvello is an open-source project, and we welcome contributions from the community. Join us on [GitHub](https://github.com/your-username/rustvello) to contribute, report issues, or request features.
+@app.task(max_retries=2)
+def add(x: int, y: int) -> int:
+    return x + y
 
-## Contributing
+# Submit and wait for the result
+inv = add(1, 2)
+result = inv.result(timeout=30)  # 3
+```
 
-We appreciate all contributions, from reporting bugs to implementing new features. Read our {doc}`contributing/index` to learn more.
+See {doc}`getting_started` Step 6 for backend selection, runners, triggers, and more.
+````
 
-## License
+````{tab} Python (via pynenc)
+```python
+from pynenc import Pynenc
 
-This project is licensed under the terms of the [MIT license](https://github.com/your-username/rustvello/blob/main/LICENSE).
+app = Pynenc()
+
+@app.task
+def add(x: int, y: int) -> int:
+    return x + y
+
+# Call it — returns an invocation; block for result
+result = add(1, 2).result  # 3
+```
+
+See the [pynenc documentation](https://docs.pynenc.org) for the full Python API.
+````
+
+---
+
+## Key Capabilities
+
+:::::{grid} 1 2 2 3
+:gutter: 3
+
+::::{grid-item-card} Invocation Lifecycle
+Every task call becomes a tracked **invocation** through an 11-state FSM:
+`Registered → Pending → Running → Success/Failed/Retry`. Ownership is
+recorded per runner, and recovery re-queues stale invocations automatically.
+
+{doc}`architecture`
+::::
+
+::::{grid-item-card} Concurrency Control
+Prevent duplicate work at registration and execution time. Four modes —
+`Disabled`, `Task`, `Arguments`, `Keys` — match any granularity need. Set
+per-task via the macro attribute or TOML config.
+
+{doc}`configuration/index`
+::::
+
+::::{grid-item-card} Trigger System
+Schedule tasks with cron expressions or fire them on invocation events.
+The atomic service framework guarantees each trigger fires exactly once
+across N distributed runners.
+
+{doc}`getting_started`
+::::
+
+::::{grid-item-card} Pluggable Backends
+Swap in-memory, SQLite, Redis, MongoDB, RabbitMQ, or PostgreSQL without
+touching task code. Feature flags select compiled backends; the builder API
+wires them together.
+
+{doc}`installation`
+::::
+
+::::{grid-item-card} Live Monitoring
+A built-in Axum web dashboard shows SVG timelines, invocation tables,
+runner status, log exploration with cross-highlighting, and Prometheus
+metrics export — all served from a single binary.
+
+{doc}`monitoring/index`
+::::
+
+::::{grid-item-card} Python Bindings
+Full PyO3 bridge (`py-rustvello`) with a standalone `App` class for Python-only
+use, plus deep integration with pynenc for the full framework experience.
+Backend selection, persistent runner, trigger scheduling — all from Python.
+
+{doc}`getting_started`
+::::
+
+:::::
+
+---
+
+## Pluggable Backends
+
+The default build includes the in-memory backend. Enable others with Cargo feature flags:
+
+| Feature      | Crate                  | Use case                             |
+| ------------ | ---------------------- | ------------------------------------ |
+| `mem`        | `rustvello-mem`        | Development & unit testing (default) |
+| `sqlite`     | `rustvello-sqlite`     | Single-host persistence              |
+| `redis`      | `rustvello-redis`      | Distributed production               |
+| `mongodb`    | `rustvello-mongo`      | Distributed production (document DB) |
+| `rabbitmq`   | `rustvello-rabbitmq`   | High-throughput broker               |
+| `postgres`   | `rustvello-postgres`   | PostgreSQL trigger store             |
+| `prometheus` | `rustvello-prometheus` | Prometheus metrics export            |
+| `rayon`      | _(rayon thread-pool)_  | CPU-bound parallel task execution    |
+| `full`       | all of the above       | Everything enabled                   |
+
+Switch backends in the builder — no code changes in task functions:
+
+```rust
+let app = Rustvello::builder()
+    .app_id("my-app")
+    .from_env()          // reads RUSTVELLO__* env vars
+    .build().await?;
+```
+
+---
+
+## Ecosystem
+
+Rustvello is available as both a **Rust crate** and a **Python package**:
+
+| Distribution                                                   | Install                        | Language | Purpose                                       |
+| -------------------------------------------------------------- | ------------------------------ | -------- | --------------------------------------------- |
+| `rustvello` (crate)                                            | `cargo add rustvello`          | Rust     | Distributed task engine with proc-macro       |
+| `rustvello` (wheel)                                            | `pip install rustvello`        | Python   | Standalone task queue (PyO3 bindings)         |
+| [`pynenc-rustvello`](https://pynenc-rustvello.readthedocs.io/) | `pip install pynenc-rustvello` | Python   | Pynenc plugin — Rust backends for pynenc apps |
+| [`pynenc`](https://docs.pynenc.org)                            | `pip install pynenc`           | Python   | Full distributed task framework               |
+
+### Capabilities by surface
+
+| Feature                       |      Rust crate      | Python standalone |  Python via pynenc  |
+| ----------------------------- | :------------------: | :---------------: | :-----------------: |
+| 7 backend types               |          ✅          |        ✅         |         ✅          |
+| Task registration             | `#[rustvello::task]` |    `@app.task`    |     `@app.task`     |
+| Persistent runner             |          ✅          |    `app.run()`    |     runner CLI      |
+| Cron/interval triggers        |   `TriggerBuilder`   |  `app.trigger()`  | Full trigger system |
+| Concurrency control (4 modes) |          ✅          |        ✅         |         ✅          |
+| Web monitoring dashboard      |          ✅          |         —         |          —          |
+| Prometheus metrics            |          ✅          |         —         |          —          |
+| CLI tooling                   |          ✅          |         —         |          —          |
+| Workflow support              |          ✅          |         —         |         ✅          |
+| Plugin system                 |          —           |         —         |         ✅          |
+
+---
+
+## Pynenc Integration
+
+Rustvello is the Rust core of the [pynenc](https://docs.pynenc.org) ecosystem.
+
+```text
+pynenc (Python, user-facing API)
+    └── pynenc-rustvello (plugin — stateless adapters)
+            └── py-rustvello (PyO3 wheel, Python bindings)
+                    └── rustvello (this repo — Rust core)
+```
+
+Python users install [`pynenc-rustvello`](https://pynenc-rustvello.readthedocs.io/) to
+get Rust-powered backends. The plugin registers itself via Python entry points and adds
+builder methods like `.rustvello_redis()` and `.rustvello_postgres()` to `PynencBuilder`.
+
+Python tasks decorated with `@app.task` and Rust tasks annotated with
+`#[rustvello::task]` share the same broker and orchestrator when deployed
+under the same `app_id`. The cross-language architecture uses
+language-qualified `TaskId`s (`py::module.name` / `rs::crate::name`)
+and a canonical JSON wire format so Python workers and Rust workers can
+invoke each other seamlessly.
+
+See the [pynenc documentation](https://docs.pynenc.org) to get started from Python.
+
+---
+
+## Community & License
+
+Rustvello is open source under the [MIT License](license).
+Contributions welcome — see the {doc}`contributing/index` guide.
+GitHub: [pynenc/rustvello](https://github.com/pynenc/rustvello)

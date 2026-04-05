@@ -1,5 +1,9 @@
 {
-    "extends": "markdownlint/style/prettier",
     "first-line-h1": false,
-    "no-inline-html": false
+    "no-inline-html": false,
+    "line-length": false,
+    "commands-show-output": false,
+    "no-duplicate-heading": {
+        "siblings_only": true
+    }
 }

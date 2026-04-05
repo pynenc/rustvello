@@ -1,0 +1,18 @@
+
+[package]
+name = "py-rustvello"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+license = "MIT"
+
+[lib]
+name = "rustvello"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustvello-python = { workspace = true, features = ["all-backends"] }
+pyo3 = { workspace = true, features = ["extension-module"] }
+
+[package.metadata.maturin]
+module-name = "rustvello"

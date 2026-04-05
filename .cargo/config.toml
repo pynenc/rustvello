@@ -1,0 +1,8 @@
+# PyO3/pyo3 cdylib: allow unresolved Python symbols on macOS.
+# These are resolved at runtime when the .so is loaded into the Python interpreter.
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-args=-undefined dynamic_lookup"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-args=-undefined dynamic_lookup"]

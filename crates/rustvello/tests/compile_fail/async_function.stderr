@@ -1,0 +1,5 @@
+error: #[rustvello::task] does not support async functions yet
+ --> tests/compile_fail/async_function.rs:2:1
+  |
+2 | async fn my_async_task(x: i32) -> i32 {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

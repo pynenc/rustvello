@@ -1,0 +1,377 @@
+{% extends "base.html" %} {% block title %}Dashboard — Rustvello Monitor{%
+endblock %} {% block content %}
+
+<!-- Quick Stats Bar -->
+<div class="row g-3 mb-4">
+  <div class="col-md-2">
+    <div class="metric-card text-center">
+      <span
+        class="material-icons"
+        style="color: var(--nav-active); font-size: 28px"
+        >hub</span
+      >
+      <h6 class="section-title mt-2 mb-1">Application</h6>
+      <p class="fw-bold mb-0" style="font-size: 0.95rem">{{ app_id }}</p>
+    </div>
+  </div>
+  <div class="col-md-2">
+    <a href="/tasks" class="text-decoration-none d-block h-100">
+      <div class="metric-card text-center">
+        <span
+          class="material-icons"
+          style="color: var(--nav-active); font-size: 28px"
+          >task</span
+        >
+        <h6 class="section-title mt-2 mb-1">Registered Tasks</h6>
+        <p class="h3 mb-0">{{ task_count }}</p>
+      </div>
+    </a>
+  </div>
+  <div class="col-md-2">
+    <a href="/broker" class="text-decoration-none d-block h-100">
+      <div class="metric-card text-center">
+        <span
+          class="material-icons"
+          style="color: var(--info-teal); font-size: 28px"
+          >queue</span
+        >
+        <h6 class="section-title mt-2 mb-1">Broker Queue</h6>
+        <p
+          class="h3 mb-0 {% if broker_pending > 0 %}text-warning{% else %}text-success{% endif %}"
+        >
+          {{ broker_pending }}
+        </p>
+        <small class="text-muted">pending</small>
+      </div>
+    </a>
+  </div>
+  <div class="col-md-2">
+    <a href="/runners" class="text-decoration-none d-block h-100">
+      <div class="metric-card text-center">
+        <span
+          class="material-icons"
+          style="color: var(--success-green); font-size: 28px"
+          >devices</span
+        >
+        <h6 class="section-title mt-2 mb-1">Active Runners</h6>
+        <p
+          class="h3 mb-0 {% if runner_count > 0 %}text-success{% else %}text-muted{% endif %}"
+        >
+          {{ runner_count }}
+        </p>
+      </div>
+    </a>
+  </div>
+  <div class="col-md-2">
+    <a href="/invocations" class="text-decoration-none d-block h-100">
+      <div class="metric-card text-center">
+        <span
+          class="material-icons"
+          style="color: var(--nav-active); font-size: 28px"
+          >fact_check</span
+        >
+        <h6 class="section-title mt-2 mb-1">Invocations</h6>
+        <p class="h3 mb-0">{{ total_invocations }}</p>
+        <small class="text-muted">total tracked</small>
+      </div>
+    </a>
+  </div>
+  <div class="col-md-2">
+    <a href="/invocations/timeline" class="text-decoration-none d-block h-100">
+      <div class="metric-card text-center">
+        <span
+          class="material-icons"
+          style="color: var(--nav-active); font-size: 28px"
+          >timeline</span
+        >
+        <h6 class="section-title mt-2 mb-1">Timeline</h6>
+        <p class="mb-0 text-muted" style="font-size: 0.85rem">
+          View execution timeline
+        </p>
+      </div>
+    </a>
+  </div>
+</div>
+
+<!-- Invocation Status Summary -->
+<div class="row g-3 mb-4">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <span class="material-icons align-middle me-1" style="font-size: 18px"
+          >monitoring</span
+        >
+        Invocation Status Summary
+      </div>
+      <div class="card-body py-3">
+        <div class="row g-2 text-center">
+          {% for entry in invocation_counts %}
+          <div class="col">
+            <div class="p-2 rounded" style="background: {{ entry.2 }}12;">
+              <div class="fw-bold h4 mb-0" style="color: {{ entry.2 }};">
+                {{ entry.1 }}
+              </div>
+              <small class="text-muted">{{ entry.0 }}</small>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Component Architecture -->
+<div class="row mb-4">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <span class="material-icons align-middle me-1" style="font-size: 18px"
+          >account_tree</span
+        >
+        Component Architecture
+      </div>
+      <div class="card-body">
+        <div class="row g-2">
+          {% for comp in components %}
+          <div class="col-lg col-md-4 col-sm-6">
+            <a href="{{ comp.href }}" class="text-decoration-none">
+              <div
+                class="metric-card text-center py-3 h-100"
+                style="transition: transform 0.15s; cursor: pointer"
+                onmouseover="this.style.transform='translateY(-2px)'"
+                onmouseout="this.style.transform='none'"
+              >
+                <span
+                  class="material-icons mb-1"
+                  style="font-size: 24px; color: var(--nav-active)"
+                  >{{ comp.icon }}</span
+                >
+                <div
+                  class="text-muted"
+                  style="font-size: 11px; font-weight: 500"
+                >
+                  {{ comp.label }}
+                </div>
+                <div
+                  class="fw-bold"
+                  style="font-size: 12px; color: var(--text-primary)"
+                >
+                  {{ comp.type_name }}
+                </div>
+              </div>
+            </a>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <!-- Configuration Summary -->
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header">
+        <span class="material-icons align-middle me-1" style="font-size: 18px"
+          >tune</span
+        >
+        Configuration
+      </div>
+      <div class="card-body">
+        <div class="row g-4">
+          <div class="col-6">
+            <div class="metric-grid">
+              <div class="metric-item">
+                <span class="metric-label">Dev Mode</span>
+                <span
+                  class="badge {% if dev_mode %}bg-warning{% else %}bg-secondary{% endif %}"
+                >
+                  {% if dev_mode %}ON{% else %}OFF{% endif %}
+                </span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">Log Level</span>
+                <span class="badge bg-info">{{ logging_level }}</span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">Log Format</span>
+                <span class="badge bg-info">{{ log_format }}</span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">Arg Print Mode</span>
+                <span class="badge bg-info">{{ arg_print_mode }}</span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">Compact Logs</span>
+                <span
+                  class="badge {% if compact_logs %}bg-success{% else %}bg-secondary{% endif %}"
+                >
+                  {% if compact_logs %}ON{% else %}OFF{% endif %}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="metric-grid">
+              <div class="metric-item">
+                <span class="metric-label">Blocking Control</span>
+                <span
+                  class="badge {% if blocking_control %}bg-success{% else %}bg-secondary{% endif %}"
+                >
+                  {% if blocking_control %}ON{% else %}OFF{% endif %}
+                </span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">Auto-Purge</span>
+                <span class="badge bg-info">{{ auto_purge_hours }}h</span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">Atomic Svc Interval</span>
+                <span class="badge bg-info">{{ atomic_svc_interval }}m</span>
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">Runner Dead After</span>
+                <span class="badge bg-info"
+                  >{{ runner_dead_after_minutes }}m</span
+                >
+              </div>
+              <div class="metric-item">
+                <span class="metric-label">Max Pending</span>
+                <span class="badge bg-info">{{ max_pending_seconds }}s</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Navigation + Danger Zone -->
+  <div class="col-lg-6">
+    <div class="card mb-3">
+      <div class="card-header">
+        <span class="material-icons align-middle me-1" style="font-size: 18px"
+          >explore</span
+        >
+        Quick Navigation
+      </div>
+      <div class="card-body">
+        <div class="d-flex flex-wrap gap-2">
+          <a href="/invocations" class="btn btn-outline-primary btn-sm">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 16px"
+              >list</span
+            >
+            Invocations
+          </a>
+          <a
+            href="/invocations/timeline"
+            class="btn btn-outline-primary btn-sm"
+          >
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 16px"
+              >timeline</span
+            >
+            Timeline
+          </a>
+          <a href="/tasks" class="btn btn-outline-primary btn-sm">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 16px"
+              >task</span
+            >
+            Tasks
+          </a>
+          <a href="/runners" class="btn btn-outline-primary btn-sm">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 16px"
+              >devices</span
+            >
+            Runners
+          </a>
+          <a href="/workflows" class="btn btn-outline-primary btn-sm">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 16px"
+              >workspaces</span
+            >
+            Workflows
+          </a>
+          <a href="/log-explorer" class="btn btn-outline-primary btn-sm">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 16px"
+              >search</span
+            >
+            Log Explorer
+          </a>
+        </div>
+      </div>
+    </div>
+    <div class="card border-danger">
+      <div class="card-header text-danger">
+        <span class="material-icons align-middle me-1" style="font-size: 18px"
+          >warning</span
+        >
+        Danger Zone
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-2">
+          Permanently delete all data from broker, orchestrator, state backend,
+          and data store.
+        </p>
+        <div class="d-flex flex-wrap gap-2">
+          <form
+            method="POST"
+            action="/broker/purge"
+            onsubmit="return confirm('Purge all broker data?')"
+          >
+            <button type="submit" class="btn btn-outline-danger btn-sm">
+              <span
+                class="material-icons align-middle me-1"
+                style="font-size: 14px"
+                >delete</span
+              >
+              Purge Broker
+            </button>
+          </form>
+          <form
+            method="POST"
+            action="/state-backend/purge"
+            onsubmit="return confirm('Purge all state backend data?')"
+          >
+            <button type="submit" class="btn btn-outline-danger btn-sm">
+              <span
+                class="material-icons align-middle me-1"
+                style="font-size: 14px"
+                >delete</span
+              >
+              Purge State Backend
+            </button>
+          </form>
+          <form
+            method="POST"
+            action="/client-data-store/purge"
+            onsubmit="return confirm('Purge all client data store data?')"
+          >
+            <button type="submit" class="btn btn-outline-danger btn-sm">
+              <span
+                class="material-icons align-middle me-1"
+                style="font-size: 14px"
+                >delete</span
+              >
+              Purge Data Store
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

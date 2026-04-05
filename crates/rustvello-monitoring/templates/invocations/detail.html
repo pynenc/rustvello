@@ -1,0 +1,511 @@
+{% extends "base.html" %} {% block title %}Invocation: {{ invocation_id }} —
+Rustvello Monitor{% endblock %} {% block content %}
+<div class="pynmon-container">
+  <div class="row">
+    <div class="col-12">
+      <div class="card pynmon-card">
+        <div
+          class="card-header pynmon-card-header d-flex justify-content-between align-items-center"
+        >
+          <span class="compact-header">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 20px"
+              >assignment</span
+            >
+            Invocation Details
+          </span>
+          <div class="d-flex gap-2">
+            <a href="/invocations" class="btn btn-sm btn-outline-secondary">
+              <span class="material-icons align-middle" style="font-size: 16px"
+                >arrow_back</span
+              >
+              Back
+            </a>
+            <a
+              href="#"
+              id="view-in-timeline-btn"
+              class="btn btn-sm btn-outline-success"
+              title="Zoom to this invocation in the timeline"
+            >
+              <span class="material-icons align-middle" style="font-size: 16px"
+                >zoom_in</span
+              >
+              Zoom to Timeline
+            </a>
+            <a
+              href="/tasks/{{ task_id }}"
+              class="btn btn-sm btn-outline-primary"
+            >
+              <span class="material-icons align-middle" style="font-size: 16px"
+                >task_alt</span
+              >
+              View Task
+            </a>
+            <form
+              method="post"
+              action="/invocations/{{ invocation_id }}/rerun"
+              class="d-inline"
+            >
+              <button
+                type="submit"
+                class="btn btn-sm btn-outline-warning"
+                onclick="return confirm('Register a new identical call. Continue?')"
+              >
+                <span
+                  class="material-icons align-middle"
+                  style="font-size: 16px"
+                  >replay</span
+                >
+                Re-run
+              </button>
+            </form>
+          </div>
+        </div>
+        <div class="card-body pynmon-card-body">
+          <div class="row pynmon-row-compact">
+            <!-- Invocation Info -->
+            <div class="col-md-6">
+              <div class="card pynmon-card">
+                <div class="card-header pynmon-card-header compact-header">
+                  Invocation Information
+                </div>
+                <div class="card-body pynmon-card-body">
+                  <table class="table pynmon-table">
+                    <tbody>
+                      <tr>
+                        <th>Invocation ID:</th>
+                        <td>
+                          <code style="font-size: 11px; word-break: break-all"
+                            >{{ invocation_id }}</code
+                          >
+                        </td>
+                      </tr>
+                      <tr>
+                        <th>Status:</th>
+                        <td>
+                          <span class="badge {{ status_class }}"
+                            >{{ status }}</span
+                          >
+                        </td>
+                      </tr>
+                      <tr>
+                        <th>Retries:</th>
+                        <td>{{ num_retries }}</td>
+                      </tr>
+                      <tr>
+                        <th>Parent Invocation:</th>
+                        <td>
+                          {% if let Some(pid) = parent_invocation_id %}
+                          <a
+                            href="/invocations/{{ pid }}"
+                            class="text-decoration-none"
+                          >
+                            <code style="font-size: 11px; word-break: break-all"
+                              >{{ pid }}</code
+                            >
+                          </a>
+                          {% else %}
+                          <span class="text-muted">None</span>
+                          {% endif %}
+                        </td>
+                      </tr>
+                      <tr>
+                        <th>Workflow:</th>
+                        <td>
+                          {% if let Some(wt) = workflow_type %}
+                          <a
+                            href="/workflows/{{ wt }}"
+                            class="text-decoration-none"
+                            title="View workflow type"
+                          >
+                            <span
+                              class="badge bg-info text-dark"
+                              style="font-size: 11px"
+                              >{{ wt }}</span
+                            >
+                          </a>
+                          {% if let Some(wid) = workflow_id %}
+                          <a
+                            href="/invocations/{{ wid }}"
+                            class="text-decoration-none ms-1"
+                            title="View workflow root invocation"
+                          >
+                            <code
+                              style="
+                                font-size: 10px;
+                                background: #e9ecef;
+                                padding: 1px 4px;
+                                border-radius: 2px;
+                              "
+                              >{{ wid }}</code
+                            >
+                          </a>
+                          {% endif %} {% else %}
+                          <span class="text-muted">None</span>
+                          {% endif %}
+                        </td>
+                      </tr>
+                      {% if let Some(c) = created_at %}
+                      <tr>
+                        <th>Created At:</th>
+                        <td>{{ c }}</td>
+                      </tr>
+                      {% endif %} {% if let Some(c) = completed_at %}
+                      <tr>
+                        <th>Completed At:</th>
+                        <td>{{ c }}</td>
+                      </tr>
+                      {% endif %} {% if let Some(d) = duration %}
+                      <tr>
+                        <th>Duration:</th>
+                        <td>{{ d }}</td>
+                      </tr>
+                      {% endif %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- Call & Task Info -->
+            <div class="col-md-6">
+              <div class="card pynmon-card">
+                <div class="card-header pynmon-card-header compact-header">
+                  Call &amp; Task Information
+                </div>
+                <div class="card-body pynmon-card-body">
+                  <table class="table pynmon-table">
+                    <tbody>
+                      <tr>
+                        <th>Call ID:</th>
+                        <td>
+                          <code style="font-size: 11px; word-break: break-all"
+                            >{{ call_id }}</code
+                          >
+                        </td>
+                      </tr>
+                      <tr>
+                        <th>Task:</th>
+                        <td>
+                          <a
+                            href="/tasks/{{ task_id }}"
+                            class="text-decoration-none"
+                            >{{ task_id }}</a
+                          >
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Arguments + Result/Exception -->
+          <div class="row pynmon-row-compact">
+            <div class="col-md-6">
+              <div class="card pynmon-card">
+                <div class="card-header pynmon-card-header compact-header">
+                  Arguments
+                </div>
+                <div class="card-body pynmon-card-body">
+                  {% if !arguments.is_empty() %}
+                  <table class="table pynmon-table">
+                    <tbody>
+                      {% for arg in arguments %}
+                      <tr>
+                        <th>{{ arg.0 }}:</th>
+                        <td>
+                          <code style="font-size: 11px">{{ arg.1 }}</code>
+                        </td>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                  {% else %}
+                  <p class="text-muted mb-0">No arguments provided</p>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <div class="card pynmon-card">
+                <div class="card-header pynmon-card-header compact-header">
+                  Result / Exception
+                </div>
+                <div class="card-body pynmon-card-body">
+                  {% if let Some(r) = result %}
+                  <h6 class="text-success">Result:</h6>
+                  <div class="result-container">
+                    <pre class="result-content mb-0"><code>{{ r }}</code></pre>
+                  </div>
+                  {% endif %} {% if let Some(e) = error %}
+                  <h6 class="text-danger">Exception:</h6>
+                  <div class="result-container">
+                    <pre class="result-content mb-0"><code>{{ e }}</code></pre>
+                  </div>
+                  {% endif %} {% if result.is_none() && error.is_none() %}
+                  <p class="text-muted mb-0">
+                    No result or exception available.
+                  </p>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Status Timeline -->
+          <div class="row pynmon-row-compact">
+            <div class="col-12">
+              <div class="card pynmon-card">
+                <div class="card-header pynmon-card-header compact-header">
+                  Status Timeline
+                </div>
+                <div class="card-body pynmon-card-body">
+                  {% if !history.is_empty() %}
+                  <div class="timeline compact-timeline">
+                    {% for entry in history %}
+                    <div class="timeline-item compact-timeline-item">
+                      <div
+                        class="timeline-marker {{ entry.status_class }}"
+                      ></div>
+                      <div class="timeline-content compact-timeline-content">
+                        <div class="timeline-title compact-timeline-title">
+                          <span class="badge {{ entry.status_class }}"
+                            >{{ entry.status }}</span
+                          >
+                        </div>
+                        <div class="timeline-date metadata-text">
+                          {{ entry.timestamp }}
+                        </div>
+                        {% if let Some(rid) = entry.runner_id %}
+                        <div
+                          class="timeline-runner-info"
+                          style="
+                            font-size: 11px;
+                            margin-top: 6px;
+                            background: #f8f9fa;
+                            padding: 8px;
+                            border-radius: 4px;
+                            border-left: 3px solid #6c757d;
+                          "
+                        >
+                          <strong style="color: #495057">Runner:</strong>
+                          {% if let Some(rcls) = entry.runner_cls %}
+                          <span
+                            class="badge bg-secondary"
+                            style="font-size: 9px; margin-right: 3px"
+                            >{{ rcls }}</span
+                          >
+                          {% endif %}
+                          <a
+                            href="/runners/{{ rid }}"
+                            class="text-decoration-none"
+                            title="View runner details"
+                          >
+                            <code
+                              style="
+                                font-size: 10px;
+                                background: #e9ecef;
+                                padding: 1px 4px;
+                                border-radius: 2px;
+                                color: #0d6efd;
+                              "
+                              >{{ rid }}</code
+                            >
+                          </a>
+                          {% if let Some(host) = entry.hostname %}
+                          <br />
+                          <small style="color: #6c757d">
+                            {{ host }}{% if let Some(p) = entry.pid %}:{{ p }}{%
+                            endif %} {% if let Some(tid) = entry.thread_id %}
+                            thread:{{ tid }}{% endif %}
+                          </small>
+                          {% endif %} {% if let Some(pcls) =
+                          entry.parent_runner_cls %}
+                          <br />
+                          <small style="color: #6c757d"
+                            >↑ {{ pcls }} {% if let Some(prid) =
+                            entry.parent_runner_id %}
+                            <a
+                              href="/runners/{{ prid }}"
+                              class="text-decoration-none"
+                              style="font-size: 10px; color: #0d6efd"
+                              >{{ prid }}</a
+                            >
+                            {% endif %}
+                          </small>
+                          {% endif %}
+                        </div>
+                        {% endif %} {% if let Some(m) = entry.message %}
+                        <div class="timeline-text data-text">{{ m }}</div>
+                        {% endif %}
+                      </div>
+                    </div>
+                    {% endfor %}
+                  </div>
+                  {% else %}
+                  <p class="text-muted">No history available.</p>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick Links -->
+          <div class="row pynmon-row-compact">
+            <div class="col-12">
+              <div class="d-flex gap-2">
+                <a
+                  href="/invocations/{{ invocation_id }}/history"
+                  class="btn btn-sm btn-outline-secondary"
+                >
+                  <span
+                    class="material-icons align-middle me-1"
+                    style="font-size: 16px"
+                    >history</span
+                  >
+                  History JSON
+                </a>
+                <a
+                  href="/invocations/{{ invocation_id }}/api"
+                  class="btn btn-sm btn-outline-secondary"
+                >
+                  <span
+                    class="material-icons align-middle me-1"
+                    style="font-size: 16px"
+                    >api</span
+                  >
+                  API JSON
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <!-- Family Tree -->
+          <div class="row pynmon-row-compact">
+            <div class="col-12">
+              <div class="card pynmon-card">
+                <div class="card-header pynmon-card-header compact-header">
+                  Family Tree
+                </div>
+                <div
+                  class="card-body pynmon-card-body"
+                  id="ft-detail-body"
+                  hx-get="/invocations/{{ invocation_id }}/family-tree"
+                  hx-trigger="load"
+                  hx-swap="innerHTML"
+                >
+                  <p class="text-muted">Loading family tree...</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document
+    .getElementById("view-in-timeline-btn")
+    ?.addEventListener("click", function (e) {
+      e.preventDefault();
+      fetch("/invocations/{{ invocation_id }}/history")
+        .then(function (r) {
+          return r.json();
+        })
+        .then(function (historyData) {
+          if (!historyData || historyData.length === 0) {
+            alert("No history data available for this invocation");
+            return;
+          }
+          var startTime = new Date(historyData[0].timestamp);
+          var endTime = new Date(historyData[historyData.length - 1].timestamp);
+          var durationMs = endTime - startTime;
+          var paddingMs = Math.max(durationMs * 0.5, 100);
+          var paddedStart = new Date(startTime.getTime() - paddingMs);
+          var paddedEnd = new Date(endTime.getTime() + paddingMs);
+          var fmt = function (d) {
+            var iso = d.toISOString();
+            return iso.slice(0, 23);
+          };
+          var params = new URLSearchParams();
+          params.set("time_range", "custom");
+          params.set("start_date", fmt(paddedStart));
+          params.set("end_date", fmt(paddedEnd));
+          params.set("selected", "{{ invocation_id }}");
+          window.location.href = "/invocations/timeline?" + params.toString();
+        })
+        .catch(function (err) {
+          console.error("Error fetching history:", err);
+          alert("Failed to load invocation history");
+        });
+    });
+
+  // --- Family tree interactivity on detail page ---
+  (function () {
+    var ftBody = document.getElementById("ft-detail-body");
+    if (!ftBody) return;
+
+    // Wait for HTMX to load the SVG, then set up event handlers
+    var observer = new MutationObserver(function () {
+      var ftSvg =
+        ftBody.querySelector("#ft-svg") || ftBody.querySelector("svg");
+      if (!ftSvg) return;
+      initDetailFtHover(ftSvg);
+    });
+    observer.observe(ftBody, { childList: true, subtree: true });
+
+    function initDetailFtHover(root) {
+      var group = root.querySelector("#ft-group");
+      if (!group) return;
+
+      root.querySelectorAll(".ft-node").forEach(function (node) {
+        // Hover: highlight direct relations
+        node.addEventListener("mouseenter", function () {
+          var id = node.getAttribute("data-inv-id");
+          if (!id) return;
+          group.classList.add("ft-hover");
+          node.classList.add("ft-related");
+          // Highlight connected edges and their endpoint nodes
+          group.querySelectorAll(".ft-edge").forEach(function (edge) {
+            if (
+              edge.getAttribute("data-parent-id") === id ||
+              edge.getAttribute("data-child-id") === id
+            ) {
+              edge.classList.add("ft-related");
+              var otherId =
+                edge.getAttribute("data-parent-id") === id
+                  ? edge.getAttribute("data-child-id")
+                  : edge.getAttribute("data-parent-id");
+              var other = group.querySelector(
+                '.ft-node[data-inv-id="' + otherId + '"]',
+              );
+              if (other) other.classList.add("ft-related");
+            }
+          });
+        });
+
+        node.addEventListener("mouseleave", function () {
+          group.classList.remove("ft-hover");
+          group.querySelectorAll(".ft-related").forEach(function (el) {
+            el.classList.remove("ft-related");
+          });
+        });
+
+        // Click: navigate to clicked invocation's detail page
+        node.addEventListener("click", function (e) {
+          e.preventDefault();
+          var id = node.getAttribute("data-inv-id");
+          if (id)
+            window.location.href = "/invocations/" + encodeURIComponent(id);
+        });
+      });
+    }
+  })();
+</script>
+{% endblock %}

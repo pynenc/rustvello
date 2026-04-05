@@ -1,0 +1,123 @@
+{% extends "base.html" %} {% block title %}Task: {{ task_id }} — Rustvello
+Monitor{% endblock %} {% block content %}
+<div class="pynmon-container">
+  <div class="col-12">
+    <div class="card pynmon-card">
+      <div
+        class="card-header pynmon-card-header d-flex justify-content-between align-items-center compact-header"
+      >
+        <span>
+          <span class="material-icons align-middle me-1" style="font-size: 20px"
+            >task_alt</span
+          >
+          {{ task_id }}
+        </span>
+        <a href="/tasks" class="btn btn-sm btn-outline-secondary">
+          <span class="material-icons align-middle" style="font-size: 16px"
+            >arrow_back</span
+          >
+          Back to Tasks
+        </a>
+      </div>
+      <div class="card-body pynmon-card-body">
+        <div class="row pynmon-row-compact">
+          <div class="col-md-6">
+            <div class="card pynmon-card">
+              <div class="card-header compact-header">Basic Information</div>
+              <div class="card-body">
+                <table class="table pynmon-table">
+                  <tbody>
+                    <tr>
+                      <th>Task ID:</th>
+                      <td><strong>{{ task_id }}</strong></td>
+                    </tr>
+                    <tr>
+                      <th>Application:</th>
+                      <td><span class="badge bg-info">{{ app_id }}</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="card pynmon-card">
+              <div class="card-header compact-header">Quick Actions</div>
+              <div class="card-body">
+                <div class="d-flex gap-2 flex-wrap">
+                  <a href="/invocations" class="btn btn-sm btn-outline-primary">
+                    <span
+                      class="material-icons align-middle me-1"
+                      style="font-size: 16px"
+                      >list_alt</span
+                    >
+                    All Invocations
+                  </a>
+                  <a
+                    href="/invocations/timeline"
+                    class="btn btn-sm btn-outline-secondary"
+                  >
+                    <span
+                      class="material-icons align-middle me-1"
+                      style="font-size: 16px"
+                      >timeline</span
+                    >
+                    Timeline
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row pynmon-row-compact">
+          <div class="col-12">
+            <div class="card pynmon-card">
+              <div class="card-header compact-header">
+                Invocations ({{ invocation_ids.len() }})
+              </div>
+              <div class="card-body">
+                {% if !invocation_ids.is_empty() %}
+                <div class="table-responsive">
+                  <table class="table table-hover pynmon-table">
+                    <thead>
+                      <tr>
+                        <th>Invocation ID</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for inv_id in invocation_ids %}
+                      <tr>
+                        <td>
+                          <a
+                            href="/invocations/{{ inv_id }}"
+                            class="text-decoration-none"
+                          >
+                            <code class="small text-primary">{{ inv_id }}</code>
+                          </a>
+                        </td>
+                        <td>
+                          <a
+                            href="/invocations/{{ inv_id }}"
+                            class="btn btn-sm btn-outline-primary"
+                            >Details</a
+                          >
+                        </td>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+                {% else %}
+                <p class="text-muted">No invocations for this task.</p>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

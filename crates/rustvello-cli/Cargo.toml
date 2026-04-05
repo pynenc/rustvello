@@ -7,18 +7,22 @@ rust-version = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
-description = "Muse Command Line Interface"
+description = "Rustvello distributed task system CLI"
 readme = "../../README.md"
 
 [dependencies]
-rustvello = { workspace = true }
-rustvello-client = { workspace = true }
+rustvello = { workspace = true, features = ["full"] }
 rustvello-core = { workspace = true }
 rustvello-proto = { workspace = true }
-rustvello-record = { workspace = true }
+rustvello-sqlite = { workspace = true }
 
-async-trait = { workspace = true }
-chrono = { workspace = true }
-clap = { version = "4.5.20", features = ["derive"] }
-serde_json = { workspace = true }
+clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["full"] }
+uuid = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"

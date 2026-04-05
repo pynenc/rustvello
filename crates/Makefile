@@ -13,14 +13,32 @@ check:  ## Run cargo check with all features
 
 .PHONY: clippy
 clippy:  ## Run clippy with all features
-	cargo clippy --all-targets --all-features -- -W clippy::dbg_macro
+	cargo clippy --all-targets --all-features -- -D warnings -W clippy::dbg_macro
 
 .PHONY: clippy-default
 clippy-default:  ## Run clippy with default features
-	cargo clippy --all-targets -- -W clippy::dbg_macro
+	cargo clippy --all-targets -- -D warnings -W clippy::dbg_macro
 
 .PHONY: pre-commit
 pre-commit: fmt clippy clippy-default  ## Run autoformatting and linting
+
+.PHONY: deny
+deny:  ## Run cargo-deny supply-chain checks
+	cargo deny check
+
+.PHONY: bench
+bench:  ## Run criterion benchmarks
+	cargo bench -p rustvello
+
+.PHONY: semver
+semver:  ## Check semver compatibility
+	cargo semver-checks check-release -p rustvello-proto
+	cargo semver-checks check-release -p rustvello-core
+	cargo semver-checks check-release -p rustvello
+
+.PHONY: changelog
+changelog:  ## Generate CHANGELOG with git-cliff
+	git cliff -o ../CHANGELOG.md
 
 .PHONY: test
 test:  ## Run tests
@@ -42,19 +60,29 @@ test-doc:  ## Run doc examples
 doctest:  ## Check that documentation builds
 	cargo doc --no-deps -p rustvello-proto
 	cargo doc --no-deps -p rustvello-core
-	cargo doc --no-deps -p rustvello-record
-	cargo doc --no-deps -p rustvello-client
 	cargo doc --no-deps -p rustvello
 	cargo doc --no-deps -p rustvello-cli
 
 .PHONY: publish
-publish:  ## Publish rustvello crates
-	cargo publish --allow-dirty -p rustvello-proto
-	cargo publish --allow-dirty -p rustvello-core
-	cargo publish --allow-dirty -p rustvello-record
-	cargo publish --allow-dirty -p rustvello-client
-	cargo publish --allow-dirty -p rustvello
-	cargo publish --allow-dirty -p rustvello-cli
+publish:  ## Publish rustvello crates (in dependency order)
+	cargo publish -p rustvello-proto
+	sleep 30
+	cargo publish -p rustvello-core
+	sleep 30
+	cargo publish -p rustvello-macros
+	cargo publish -p rustvello-mem
+	cargo publish -p rustvello-sqlite
+	cargo publish -p rustvello-redis
+	cargo publish -p rustvello-postgres
+	cargo publish -p rustvello-mongo
+	cargo publish -p rustvello-rabbitmq
+	cargo publish -p rustvello-prometheus
+	sleep 30
+	cargo publish -p rustvello
+	cargo publish -p rustvello-monitoring
+	sleep 30
+	cargo publish -p rustvello-cli
+	cargo publish -p rustvello-test-suite
 
 .PHONY: help
 help:  ## Display this help screen

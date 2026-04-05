@@ -1,44 +1,22 @@
 # IDE Configuration
 
-Using an integrated development environment (IDE) and configuring it properly will help you work on rustvello more effectively. This page contains some recommendations for configuring popular IDEs.
+Recommended IDE setup for working on rustvello.
 
 ## Visual Studio Code
 
-Make sure to configure VSCode to use the virtual environment created by the Makefile.
-
 ### Extensions
 
-The extensions below are recommended.
+- **[rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)**: Rust language support with code completion, inline errors, and refactoring.
+- **[Ruff](https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff)**: Python linting and formatting.
 
-#### Rust Analyzer
+### Settings
 
-If you work on the Rust code, you will need the [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer) extension. This extension provides code completion for Rust code.
-
-For it to work well for the rustvello codebase, add the following settings to your `.vscode/settings.json`:
+Add the following to `.vscode/settings.json`:
 
 ```json
 {
   "rust-analyzer.cargo.features": "all",
-  "rust-analyzer.cargo.targetDir": true
-}
-```
-
-#### Ruff
-
-The [Ruff](https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff) extension will help you conform to the formatting requirements of the Python code. Configure the extension to use the Ruff installed in your environment:
-
-```json
-{
-  "ruff.importStrategy": "fromEnvironment"
-}
-```
-
-### Settings
-
-Here are some recommended settings for your `.vscode/settings.json`:
-
-```json
-{
+  "rust-analyzer.cargo.targetDir": true,
   "python.pythonPath": ".venv/bin/python",
   "python.testing.pytestEnabled": true,
   "editor.formatOnSave": true,
@@ -48,16 +26,12 @@ Here are some recommended settings for your `.vscode/settings.json`:
       "source.fixAll": true
     }
   },
-  "ruff.importStrategy": "fromEnvironment",
-  "terminal.integrated.defaultProfile.osx": "bash",
-  "terminal.integrated.profiles.osx": {
-    "bash": {
-      "path": "bash",
-      "args": [
-        "-c",
-        "if command -v poetry >/dev/null 2>&1; then poetry shell; else exec bash; fi"
-      ]
-    }
-  }
+  "ruff.importStrategy": "fromEnvironment"
 }
 ```
+
+### Tips
+
+- Set `"rust-analyzer.cargo.features": "all"` so that rust-analyzer checks all feature-gated code (mem, sqlite, etc.).
+- Set `"rust-analyzer.cargo.targetDir": true` to avoid build conflicts between rust-analyzer and `cargo build`.
+- If working on the Python bindings (`py-rustvello`), run `make develop` first to build the native extension.
