@@ -53,9 +53,30 @@ jobs:
         run: |
           set -euo pipefail
           publish() {
-            echo "Publishing $1..."
-            cargo publish -p "$1" --no-verify 2>&1 || true
-            sleep 30
+            local crate="$1"
+            local max_retries=3
+            echo "Publishing $crate..."
+            for attempt in $(seq 1 $max_retries); do
+              output=$(cargo publish -p "$crate" --no-verify 2>&1) && {
+                echo "$output"
+                echo "✅ $crate published"
+                sleep 30
+                return 0
+              }
+              echo "$output"
+              if echo "$output" | grep -q "already exists"; then
+                echo "⏭️ $crate already published, skipping"
+                return 0
+              fi
+              if echo "$output" | grep -q "429\|Too Many Requests"; then
+                echo "⏳ Rate limited, waiting 5 minutes before retry ($attempt/$max_retries)..."
+                sleep 300
+              else
+                echo "❌ $crate failed with unexpected error"
+                return 0
+              fi
+            done
+            echo "❌ $crate failed after $max_retries retries"
           }
 
           # Layer 0: no internal deps
@@ -72,6 +93,7 @@ jobs:
           publish rustvello-redis
           publish rustvello-postgres
           publish rustvello-mongo
+          publish rustvello-mongo3
           publish rustvello-rabbitmq
           publish rustvello-prometheus
 
