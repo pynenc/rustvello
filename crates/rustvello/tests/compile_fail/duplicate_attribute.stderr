@@ -1,0 +1,5 @@
+error: duplicate task attribute: `max_retries`
+ --> tests/compile_fail/duplicate_attribute.rs:1:36
+  |
+1 | #[rustvello::task(max_retries = 3, max_retries = 5)]
+  |                                    ^^^^^^^^^^^

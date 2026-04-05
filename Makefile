@@ -1,95 +1,110 @@
 .PHONY: install
-install: ## Install the virtual environment and install the pre-commit hooks
-	@echo "🚀 Creating virtual environment using virtualenv"
-	@uv run python -m virtualenv .venv
+install: ## Install dependencies, build the Python extension, and set up pre-commit hooks
+	@echo "🚀 Installing dependencies"
 	@uv sync --group dev
+	@echo "🚀 Building and installing py-rustvello in develop mode"
+	@uv run maturin develop --release -m py-rustvello/Cargo.toml
+	@echo "🚀 Installing pre-commit hooks"
 	@uv run pre-commit install
 
-.PHONY: check-pre-commit
-check-pre-commit:
-	@echo "🚀 Linting code: Running pre-commit"
-	@uv run pre-commit run -a
-
-.PHONY: check-python
-check-python: ## Run code quality tools.
-	@echo "🚀 Checking lock file consistency with 'pyproject.toml'"
-	@uv lock --locked
-	@echo "🚀 Static type checking: Running mypy"
-	@uv run mypy
-
-.PHONY: check-rust
-check-rust: ## Run Rust specific checks
-	@echo "🚀 Checking Rust formatting"
-	@cargo fmt --all -- --check
-	@echo "🚀 Running Rust clippy checks"
-	@cargo clippy --all-targets --all-features -- -D warnings
-
 .PHONY: check
-check: check-python check-rust check-pre-commit
+check: ## Run all code quality checks (pre-commit)
+	@echo "🚀 Running all checks via pre-commit"
+	@uv run pre-commit run --all-files
 
 .PHONY: build
-build: clean-build ## Build wheel file
+build: clean-build ## Build the Python wheel and sdist
 	@echo "🚀 Creating wheel file"
 	@uvx maturin build --release -m py-rustvello/Cargo.toml --out dist --sdist
 
+.PHONY: build-rust
+build-rust: ## Build all Rust crates (excludes py-rustvello cdylib)
+	@echo "🚀 Building Rust workspace"
+	@cargo build --workspace --exclude py-rustvello
+
 .PHONY: develop
-develop: ## Build and install the package in develop mode
+develop: ## Build and install py-rustvello in develop mode
 	@echo "🚀 Building and installing package in develop mode"
 	@uv run maturin develop --release -m py-rustvello/Cargo.toml
 
 .PHONY: test-python
-test-python: develop ## Test the code with pytest
+test-python: develop ## Run Python tests with pytest
 	@echo "🚀 Testing Python: Running pytest"
-	@uv run pytest --cov --cov-config=pyproject.toml --cov-report=xml
+	@uv run pytest py-rustvello/ --cov --cov-config=pyproject.toml --cov-report=xml
 
 .PHONY: test-rust
-test-rust:
+test-rust: ## Run Rust tests
 	@echo "🚀 Testing Rust: Running cargo test"
-	@cargo test
+	@cargo test --workspace --exclude py-rustvello
 
 .PHONY: test
-test: test-rust test-python
+test: test-rust test-python ## Run all tests (Rust + Python)
 
-.PHONY: test-integration
-test-integration: ## Run integration tests with Poet client
-	@echo "🚀 Running Rust integration tests with rustvello_CLIENT_TYPE=Poet"
-	rustvello_CLIENT_TYPE=Poet cargo test -- --test-threads=1
-	@echo "🚀 Running Python integration tests with rustvello_CLIENT_TYPE=Poet"
-	rustvello_CLIENT_TYPE=Poet uv run pytest --cov --cov-config=pyproject.toml --cov-report=xml -m "integration"
+.PHONY: fuzz
+fuzz: ## Run fuzz targets for a short duration (CI-friendly, requires nightly)
+	@echo "🚀 Running fuzz targets (30s each)"
+	@cargo +nightly fuzz run fuzz_json_trigger -- -max_total_time=30
+	@cargo +nightly fuzz run fuzz_toml_config -- -max_total_time=30
 
 .PHONY: clean-build
 clean-build: ## Clean build artifacts
 	@echo "🚀 Removing build artifacts"
-	@uv run python -c "import shutil; import os; shutil.rmtree('dist', ignore_errors=True); shutil.rmtree('build', ignore_errors=True); shutil.rmtree('py-rustvello/target', ignore_errors=True);"
+	@rm -rf dist build
+	@cargo clean
 
-.PHONY: publish
-publish: build ## Publish a release to PyPI.
-	@echo "🚀 Publishing."
+.PHONY: publish-python
+publish-python: build ## Publish the Python package to PyPI
+	@echo "🚀 Publishing Python package to PyPI"
 	@uvx twine upload dist/*
 
-.PHONY: build-and-publish
-build-and-publish: build publish ## Build and publish.
+.PHONY: publish-rust
+publish-rust: ## Publish Rust crates to crates.io (in dependency order)
+	@echo "🚀 Publishing Rust crates to crates.io"
+	cargo publish -p rustvello-proto
+	sleep 30
+	cargo publish -p rustvello-core
+	sleep 30
+	cargo publish -p rustvello-macros
+	cargo publish -p rustvello-mem
+	cargo publish -p rustvello-sqlite
+	cargo publish -p rustvello-redis
+	cargo publish -p rustvello-postgres
+	cargo publish -p rustvello-mongo
+	cargo publish -p rustvello-rabbitmq
+	cargo publish -p rustvello-prometheus
+	sleep 30
+	cargo publish -p rustvello
+	cargo publish -p rustvello-monitoring
+	sleep 30
+	cargo publish -p rustvello-cli
+	cargo publish -p rustvello-test-suite
 
 .PHONY: docs-install
-docs-install: ## Install dependencies for building documentation
+docs-install: ## Install rustvello documentation dependencies (uv docs group)
 	@echo "🚀 Installing documentation dependencies"
 	@uv sync --group docs
 
+.PHONY: docs-render
+docs-render: docs-install ## Render rustvello documentation to docs/_build/html
+	@echo "🚀 Building rustvello documentation"
+	@rm -rf docs/_build
+	@uv run --group docs python -m sphinx -b html docs/ docs/_build/html
+	@echo "📖 Rustvello docs built — open docs/_build/html/index.html"
+
+.PHONY: docs
+docs: docs-render ## Build rustvello documentation
+
 .PHONY: docs-build
-docs-build: docs-install ## Build the documentation
-	@echo "🚀 Building documentation"
-	@uv run pip install -e ./py-rustvello
-	@uv run python -m sphinx -b html docs/ docs/_build/html || \
-		uv run sphinx-build -b html docs/ docs/_build/html
+docs-build: docs-render ## Build rustvello documentation (compat alias)
 
 .PHONY: docs-serve
-docs-serve: docs-build ## Serve the documentation locally
-	@echo "🚀 Serving documentation at http://localhost:8000"
-	@uv run python -m http.server --directory docs/_build/html 8000
+docs-serve: docs-render ## Serve rustvello documentation locally
+	@echo "🚀 Serving rustvello documentation at http://localhost:8080"
+	@uv run --group docs python -m http.server 8080 --directory docs/_build/html
 
 .PHONY: help
 help:
-	@uv run python -c "import re; \
-	[[print(f'\033[36m{m[0]:<20}\033[0m {m[1]}') for m in re.findall(r'^([a-zA-Z_-]+):.*?## (.*)$$', open(makefile).read(), re.M)] for makefile in ('$(MAKEFILE_LIST)').strip().split()]"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 .DEFAULT_GOAL := help

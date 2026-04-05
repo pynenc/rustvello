@@ -10,21 +10,37 @@ license = { workspace = true }
 description = "Python bindings to the Rust code using PyO3"
 readme = "../../README.md"
 
+[features]
+default = []
+sqlite = ["dep:rustvello-sqlite"]
+postgres = ["dep:rustvello-postgres"]
+redis = ["dep:rustvello-redis"]
+mongodb = ["dep:rustvello-mongo"]
+mongodb3 = ["dep:rustvello-mongo3"]
+rabbitmq = ["dep:rustvello-rabbitmq"]
+all-backends = ["sqlite", "postgres", "redis", "mongodb", "mongodb3", "rabbitmq"]
+
 [dependencies]
 rustvello = { workspace = true }
 rustvello-core = { workspace = true }
+rustvello-mem = { workspace = true }
 rustvello-proto = { workspace = true }
 
-chrono = {workspace = true}
-num-traits = "0.2.19"
-pyo3 = { workspace = true, features=["chrono"] }
-pyo3-async-runtimes = { version = "0.22", features = ["attributes", "tokio-runtime"] }
-# pyo3-asyncio = { workspace = true }
-thiserror = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
-uuid = { workspace = true, features = ["v4", "serde"] }
+rustvello-sqlite = { workspace = true, optional = true }
+rustvello-postgres = { workspace = true, optional = true }
+rustvello-redis = { workspace = true, optional = true }
+rustvello-mongo = { workspace = true, optional = true }
+rustvello-mongo3 = { workspace = true, optional = true }
+rustvello-rabbitmq = { workspace = true, optional = true }
 
-[features]
-pymethods = []
-all = ["pymethods"]
-default = ["pymethods"]
+pyo3 = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+pyo3 = { workspace = true, features = ["auto-initialize"] }
+
+[lints]
+workspace = true

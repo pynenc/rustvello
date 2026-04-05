@@ -1,0 +1,96 @@
+{% if !runners.is_empty() %}
+<div class="table-responsive">
+  <table class="table table-sm table-hover mb-0">
+    <thead>
+      <tr>
+        <th>Runner ID</th>
+        <th>Type</th>
+        <th>Parent</th>
+        <th>Host / PID</th>
+        <th>Started At</th>
+        <th>Last Heartbeat</th>
+        <th>Atomic Service</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for runner in runners %}
+      <tr>
+        <td>
+          <a
+            href="/runners/{{ runner.runner_id }}"
+            class="text-decoration-none"
+          >
+            <code class="small text-primary">{{ runner.short_id }}</code>
+          </a>
+        </td>
+        <td>
+          <span class="badge bg-light text-dark">{{ runner.runner_cls }}</span>
+          {% if runner.parent_runner_id.is_some() %}
+          <span
+            class="material-icons align-middle text-muted"
+            style="font-size: 14px"
+            title="Child worker"
+            >subdirectory_arrow_right</span
+          >
+          {% endif %}
+        </td>
+        <td>
+          {% if let Some(pid) = runner.parent_runner_id %}
+          <a href="/runners/{{ pid }}" class="text-decoration-none">
+            <code class="small">{{ pid }}</code>
+          </a>
+          {% else %}
+          <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          <small class="text-muted"
+            >{{ runner.hostname }}<span class="text-primary">:</span>{{
+            runner.pid }}</small
+          >
+        </td>
+        <td>
+          <small class="text-muted">{{ runner.started_at }}</small>
+        </td>
+        <td>
+          {% if runner.last_heartbeat_secs_ago < 60 %}
+          <span class="badge bg-success"
+            >{{ runner.last_heartbeat_secs_ago }}s ago</span
+          >
+          {% else %}
+          <span class="badge bg-warning text-dark"
+            >{{ runner.last_heartbeat_secs_ago }}s ago</span
+          >
+          {% endif %} {% if !runner.is_active %}
+          <span class="badge bg-danger ms-1">Stale</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if runner.is_atomic_eligible %}
+          <span class="badge bg-success">Eligible</span>
+          {% if runner.has_execution_history %}
+          <span class="badge bg-info">H</span>
+          {% endif %} {% else %}
+          <span class="badge bg-secondary">No</span>
+          {% endif %}
+        </td>
+        <td>
+          <a
+            href="/runners/{{ runner.runner_id }}"
+            class="btn btn-sm btn-outline-primary"
+            title="View details"
+          >
+            <span class="material-icons" style="font-size: 14px">info</span>
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="text-center py-4">
+  <p class="text-muted mb-0">No active runners</p>
+</div>
+{% endif %}

@@ -1,0 +1,39 @@
+[package]
+name = "rustvello-monitoring"
+description = "Web-based monitoring dashboard for Rustvello"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rustvello-core = { workspace = true }
+rustvello-proto = { workspace = true }
+async-trait = { workspace = true }
+axum = "0.8"
+askama = "0.14"
+tokio = { workspace = true }
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+regex = "1"
+
+[dev-dependencies]
+rustvello = { workspace = true, features = ["mem", "rayon"] }
+rustvello-core = { workspace = true }
+rustvello-mem = { workspace = true }
+rustvello-proto = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
+regex = "1"
+tokio = { workspace = true, features = ["test-util", "macros", "net", "signal"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[lints]
+workspace = true

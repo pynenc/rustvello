@@ -1,0 +1,103 @@
+# py-rustvello/pyproject.toml
+
+[project]
+name = "rustvello"
+# version = "0.0.1"
+dynamic = ["version"]
+description = "Python bindings for rustvello, the Rust core of pynenc"
+authors = [{ name = "Luis Diaz" }]
+readme = "README.md"
+keywords = ['python']
+requires-python = ">=3.9,<4.0"
+classifiers = [
+    "Intended Audience :: Developers",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://pynenc.github.io/rustvello/"
+Repository = "https://github.com/pynenc/rustvello"
+Documentation = "https://pynenc.github.io/rustvello/"
+
+# Entry point moved to pynenc_repo (NB_00)
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "coverage[toml]>=7.2.6,<8.0",
+    "ruff>=0.14.0",
+    "mypy>=1.7.0",
+    "pre-commit>=3.5.0",
+]
+
+[tool.uv]
+managed = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+build-backend = "maturin"
+requires = ["maturin>=1.3.2"]
+
+[tool.maturin]
+module-name = "rustvello"
+bindings = "pyo3"
+include = [
+    { path = "README.md", format = "sdist" },
+    { path = "rustvello/py.typed", format = "sdist" },
+    { path = "LICENSE", format = "sdist" },
+]
+
+features = ["pyo3/extension-module"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+lint.select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "C",  # flake8-comprehensions
+    "B",  # flake8-bugbear
+    "UP", # pyupgrade
+]
+lint.ignore = [
+    "E501",  # line too long (handled by formatter)
+    "C901",  # too complex
+    "UP037", # remove quotes from type annotation
+]
+lint.per-file-ignores = { "tests/**/*.py" = ["F403"] }
+
+[tool.mypy]
+files = ["rustvello"]
+warn_unused_configs = true
+ignore_missing_imports = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+exclude = "venv|env|\\.venv"
+show_error_codes = true
+pretty = true
+allow_redefinition = true
+no_implicit_optional = true
+strict_equality = true
+
+[tool.coverage.run]
+source = ["rustvello"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+]

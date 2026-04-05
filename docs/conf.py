@@ -1,40 +1,46 @@
 from __future__ import annotations
 
 import datetime
-import importlib.metadata
-
-# Remove the sys.path modification if the package is installed
-# sys.path.insert(0, os.path.abspath("../../py-rustvello/rustvello"))
-
-# Use the package name as defined in your pyproject.toml
-DISTRIBUTION_METADATA = importlib.metadata.metadata("rustvello")
+from typing import Any
 
 # -- Project information -----------------------------------------------------
-author = DISTRIBUTION_METADATA["Author"]
-project = DISTRIBUTION_METADATA["Name"]
-version = DISTRIBUTION_METADATA["Version"]
-current_year = datetime.datetime.now().year
-copyright = f"{current_year}, {author}"
+project = "rustvello"
+author = "Luis Diaz"
+version = "0.1.0"
 release = version
+current_year = datetime.datetime.now(datetime.timezone.utc).year
+copyright = f"{current_year}, {author}"
 
 # -- General configuration ---------------------------------------------------
 extensions = [
-    "autodoc2",
     "sphinx.ext.extlinks",
     "sphinx.ext.intersphinx",
-    "sphinx.ext.mathjax",
     "sphinx.ext.todo",
-    "sphinx.ext.viewcode",
     "myst_parser",
     "sphinx_copybutton",
     "sphinx_design",
     "sphinx_inline_tabs",
+    "sphinxcontrib.mermaid",
 ]
 
-# -- Autodoc settings ---------------------------------------------------
-autodoc2_output_dir = "api/python"
-autodoc2_render_plugin = "myst"
-autodoc2_packages = [{"path": "../py-rustvello/rustvello"}]
+# -- Options for extlinks ----------------------------------------------------
+extlinks = {
+    "crate": ("https://crates.io/crates/%s", "%s"),
+    "docsrs": ("https://docs.rs/%s", "%s"),
+    "pypi": ("https://pypi.org/project/%s/", "%s"),
+}
+
+templates_path = ["_templates"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+
+# -- Intersphinx configuration -----------------------------------------------
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+    "pynenc": ("https://docs.pynenc.org/en/stable", None),
+    "pynenc-redis": ("https://pynenc-redis.readthedocs.io/en/stable/", None),
+    "pynenc-mongodb": ("https://pynenc-mongodb.readthedocs.io/en/stable/", None),
+    "pynenc-rabbitmq": ("https://pynenc-rabbitmq.readthedocs.io/en/stable/", None),
+}
 
 # -- MyST settings ---------------------------------------------------
 myst_enable_extensions = [
@@ -53,25 +59,45 @@ myst_enable_extensions = [
     "attrs_inline",
     "attrs_block",
 ]
-myst_number_code_blocks = ["typescript"]
 myst_heading_anchors = 2
 myst_footnote_transition = True
 myst_dmath_double_inline = True
 myst_enable_checkboxes = True
 myst_substitutions = {
-    "role": "[role](#syntax/roles)",
-    "directive": "[directive](#syntax/directives)",
+    "version": version,
 }
 
 # -- Options for HTML output -------------------------------------------------
 html_theme = "furo"
 html_title = "rustvello"
 html_logo = "_static/logo.png"
-html_favicon = "_static/logo.png"
+html_favicon = "_static/favicon.ico"
 
 language = "en"
 html_static_path = ["_static"]
+html_css_files = ["custom.css"]
+html_js_files = ["logo-animations.js", "lightbox.js"]
 html_theme_options: dict[str, Any] = {
+    "light_css_variables": {
+        "color-brand-primary": "#c04020",
+        "color-brand-content": "#d05030",
+        "color-admonition-title--note": "#d05030",
+        "color-admonition-title-background--note": "#d050301a",
+        "color-background-primary": "#faf8f6",
+        "color-background-secondary": "#f2ece6",
+        "color-foreground-primary": "#2c1a14",
+        "color-foreground-secondary": "#6b5147",
+        "color-foreground-muted": "#a89288",
+        "color-background-border": "#e0d6d0",
+    },
+    "dark_css_variables": {
+        "color-brand-primary": "#e07050",
+        "color-brand-content": "#e08060",
+        "color-admonition-title--note": "#e07050",
+        "color-admonition-title-background--note": "#e070501a",
+        "color-background-primary": "#1e1210",
+        "color-background-secondary": "#2a1a16",
+    },
     "navigation_with_keys": True,
     "footer_icons": [
         {
@@ -88,5 +114,5 @@ html_theme_options: dict[str, Any] = {
     "source_repository": "https://github.com/pynenc/rustvello/",
     "source_branch": "main",
     "source_directory": "docs/",
-    "announcement": f"<b>{version}</b> is now out! See the Changelog for details",
+    "announcement": f"<b>{version}</b> is now available. See the <a href='changelog.html'>Changelog</a> for details.",
 }

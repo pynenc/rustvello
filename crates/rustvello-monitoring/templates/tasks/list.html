@@ -1,0 +1,44 @@
+{% extends "base.html" %} {% block title %}Tasks — Rustvello Monitor{% endblock
+%} {% block content %}
+<div class="pynmon-container">
+  <div class="row pynmon-row-compact">
+    <div class="col-12">
+      <div class="card pynmon-card">
+        <div
+          class="card-header pynmon-card-header d-flex justify-content-between align-items-center"
+        >
+          <span class="compact-header">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 20px"
+              >task_alt</span
+            >
+            Tasks ({{ tasks.len() }})
+          </span>
+          <button
+            class="btn btn-sm btn-outline-primary"
+            hx-get="/tasks/refresh"
+            hx-target="#tasks-content"
+            hx-swap="innerHTML"
+          >
+            <span class="material-icons align-middle" style="font-size: 16px"
+              >refresh</span
+            >
+            Refresh
+          </button>
+        </div>
+        <div class="card-body pynmon-card-body">
+          <div
+            id="tasks-content"
+            hx-get="/tasks/refresh"
+            hx-trigger="every 10s"
+            hx-swap="innerHTML"
+          >
+            {% include "tasks/partials/list_content.html" %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -37,7 +37,6 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           yaml-file: .github/labels.yml
-          dry-run: ${{ github.event_name == 'pull_request' }}
           exclude: |
             help*
             *issue
@@ -75,11 +74,6 @@ jobs:
     permissions:
       pull-requests: read
     steps:
-      - name: Check for SemVer Labels
-        uses: danielchabr/pr-labels-checker@v3.1
-        with:
-          hasSome: major,minor,patch
-          githubToken: ${{ secrets.GITHUB_TOKEN }}
       - name: Check for Conventional Commit Labels
         uses: danielchabr/pr-labels-checker@v3.1
         with:

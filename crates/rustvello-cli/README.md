@@ -1,25 +1,42 @@
-Some examples
+# rustvello-cli
 
-```sh
-cargo run -- get-finest-resolution
-cargo run -- get-node-state
-cargo run -- get-node-elem-ranges
+Command-line interface for the rustvello distributed task system.
 
-cargo run -- register-element-kind --code EK0 --name "Kind 0" --description "Desc 0"
-cargo run -- register-element-kind --code EK01 --name "Kind 01" --description "Desc 01" --parent-code EK0
-cargo run -- register-element-kind --code EK02 --name "Kind 02" --description "Desc 02" --parent-code EK0
+## Installation
 
-cargo run -- register-element --kind EK0 --name "Elem 0"
+```bash
+cargo install rustvello-cli
+```
 
-cargo run -- get-node-elem-ranges
+## Commands
 
-cargo run -- register-metric --code CPU --name "CPU %" --description "CPU usage on %"
-cargo run -- register-metric --code MEM --name "MEM %" --description "MEM usage on %"
+| Command                 | Description                                              |
+| ----------------------- | -------------------------------------------------------- |
+| `rustvello run`         | Start a task runner that processes queued invocations    |
+| `rustvello status <id>` | Show the status of an invocation                         |
+| `rustvello list`        | List invocations (optionally filtered by status or task) |
+| `rustvello purge`       | Purge all data (broker queue, invocations, results)      |
+| `rustvello info`        | Show system information (version, homepage)              |
 
-cargo run -- get-metric-order
+## Common Options
 
-cargo run -- send-metric --element-id 1 --metric-code "CPU" --value 5.5
+Most commands accept `--db_path <path>` to use a SQLite database. Without it, an in-memory database is used.
 
-cargo run -- get-metrics
+## Examples
 
+```bash
+# Start a runner
+rustvello run --app_id my_app --db_path tasks.db
+
+# List all pending invocations
+rustvello list --status PENDING --db_path tasks.db
+
+# Check status of a specific invocation
+rustvello status inv_abc123 --db_path tasks.db
+
+# Purge all data (with confirmation skip)
+rustvello purge --db_path tasks.db --yes
+
+# Show version and system info
+rustvello info
 ```

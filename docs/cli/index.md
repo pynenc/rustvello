@@ -1,66 +1,151 @@
-# rustvello Command-Line Interface (CLI)
+# Rustvello CLI
 
-The rustvello CLI provides utilities for interacting with the Muse system directly from the command line. It includes commands for recording and replaying events, among other functionalities.
+The `rustvello` binary provides command-line utilities for running workers, inspecting
+invocations, and managing application data.
 
 ## Installation
 
-To install the CLI tool, ensure that you have the `cli` feature enabled when building rustvello.
-
-```shell
-cargo install rustvello --features "cli"
+```bash
+cargo install rustvello-cli
 ```
 
-## Available Commands
+## Commands
 
-### `replay`
+### `run` — Start a Worker
 
-Replays events from a recording file to the Muse system.
+Start a `TaskRunner` that processes queued invocations:
 
-**Usage:**
-
-```shell
-rustvello-cli replay --input <file> [OPTIONS]
+```bash
+rustvello run [OPTIONS]
 ```
 
-**Options:**
+| Option                 | Description                       | Default       |
+| ---------------------- | --------------------------------- | ------------- |
+| `-a, --app-id <ID>`    | Application ID                    | `rustvello`   |
+| `-d, --db-path <PATH>` | SQLite database path              | _(in-memory)_ |
+| `-c, --config <FILE>`  | TOML configuration file           | —             |
+| `--memory`             | Force in-memory backends          | —             |
+| `--idle-sleep-ms <MS>` | Worker idle sleep in milliseconds | `100`         |
 
-- `-i, --input <file>`: Input file path containing the recorded events.
-- `-u, --poet-url <url>`: Muse system endpoint URL (default: `http://localhost:8000`).
+**Examples:**
+
+```bash
+# Development — in-memory backends
+rustvello run --memory
+
+# Single-host production — SQLite persistence
+rustvello run --app-id my-app --db-path ./tasks.db
+
+# From config file (Redis, Postgres, etc.)
+rustvello run --config config.toml
+```
+
+---
+
+### `status` — Check Invocation Status
+
+```bash
+rustvello status <INVOCATION_ID> [OPTIONS]
+```
+
+| Option                 | Description             |
+| ---------------------- | ----------------------- |
+| `-d, --db-path <PATH>` | SQLite database path    |
+| `-c, --config <FILE>`  | TOML configuration file |
 
 **Example:**
 
-```shell
-rustvello-cli replay --input events.bin --poet-url http://localhost:8000
+```bash
+rustvello status 550e8400-e29b-41d4-a716-446655440000 --db-path ./tasks.db
 ```
-
-This command replays events from `events.bin` to the Muse system at `http://localhost:8000`.
 
 ---
 
-### Common Arguments
+### `list` — List Invocations
 
-The CLI uses common arguments across commands for consistency.
+```bash
+rustvello list [OPTIONS]
+```
 
-**Common Arguments:**
-
-- `-u, --poet-url <url>`: Muse system endpoint URL (default: `http://localhost:8000`).
+| Option                  | Description                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------- |
+| `-s, --status <STATUS>` | Filter by status: `REGISTERED`, `PENDING`, `RUNNING`, `SUCCESS`, `FAILED`, `RETRY` |
+| `-t, --task <TASK_ID>`  | Filter by task ID (format: `module.name`)                                          |
+| `-d, --db-path <PATH>`  | SQLite database path                                                               |
 
 **Example:**
 
-```shell
-rustvello-cli <command> --poet-url http://localhost:8000
+```bash
+rustvello list --status RUNNING --db-path ./tasks.db
+rustvello list --task my_crate.process_order --db-path ./tasks.db
 ```
 
 ---
 
-## Future Enhancements
+### `purge` — Delete All Data
 
-Additional commands and options will be added to the CLI tool in future releases to extend its capabilities.
+```bash
+rustvello purge [OPTIONS]
+```
+
+| Option                 | Description              |
+| ---------------------- | ------------------------ |
+| `-d, --db-path <PATH>` | SQLite database path     |
+| `-y, --yes`            | Skip confirmation prompt |
+
+```{warning}
+`purge` deletes all broker queues, invocations, results, and heartbeat records.
+This action is irreversible.
+```
 
 ---
 
-For more detailed information on the available commands and options, use the `--help` flag:
+### `info` — System Information
 
-```shell
-rustvello-cli --help
+```bash
+rustvello info
 ```
+
+Prints version, compiled feature flags, and runtime information.
+
+---
+
+### `config` — Show Effective Configuration
+
+```bash
+rustvello config [OPTIONS]
+```
+
+| Option                | Description             |
+| --------------------- | ----------------------- |
+| `-c, --config <FILE>` | TOML configuration file |
+| `-a, --app-id <ID>`   | Application ID          |
+
+Prints the resolved `AppConfig` as TOML, merging all sources (file, env, defaults).
+Useful for debugging configuration priority issues.
+
+---
+
+## Environment Variables
+
+All CLI options have corresponding `RUSTVELLO__*` environment variable equivalents.
+Set them in your shell or a `.env` file:
+
+```bash
+export RUSTVELLO__APP_ID=my-app
+export RUSTVELLO__DB_PATH=./tasks.db
+
+rustvello run   # picks up env vars automatically
+```
+
+See {doc}`../configuration/index` for the full environment variable reference.
+
+| `-y, --yes` | Skip confirmation prompt |
+
+### `info` — Show System Information
+
+```bash
+rustvello-cli info
+```
+
+Displays version and build information.

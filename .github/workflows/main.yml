@@ -9,6 +9,7 @@ on:
 
 jobs:
   quality:
+    name: Code quality (lint, format, clippy)
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
@@ -26,7 +27,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install uv
         run: |
@@ -39,23 +40,19 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install dependencies and pre-commit hooks
-        run: |
-          uv run make install
+        run: make install
 
       - name: Run code quality checks
-        run: |
-          uv run make check
+        run: make check
 
   tests-and-type-check:
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.12", "3.13"]
         rust-version: ["stable"]
-        exclude:
-          - os: windows-latest
-            python-version: "3.13"
       fail-fast: false
     steps:
       - name: Check out the repository
@@ -75,27 +72,17 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install dependencies
-        run: |
-          uv run make install
-
-      - name: Build and install the package with maturin
-        run: |
-          uv run make develop
+        run: make install
 
       - name: Run tests
-        run: |
-          uv run make test
+        run: make test
 
-      - name: Run typing checks with mypy
-        if: ${{ matrix.python-version >= '3.10' }}
-        run: |
-          uv run mypy
-
-      - name: Upload coverage reports to Codecov (Python 3.11 on Ubuntu only)
+      - name: Upload coverage reports to Codecov (Python 3.12 on Ubuntu only)
         uses: codecov/codecov-action@v4
-        if: ${{ matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest' }}
+        if: ${{ matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest' }}
 
   check-docs:
+    name: Documentation build
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
@@ -104,7 +91,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install uv
         run: |
@@ -115,5 +102,39 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build documentation
-        run: |
-          uv run make docs-build
+        run: make docs-build
+
+  publish-dry-run:
+    name: Verify crates compile (all features)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check workspace compiles with all features
+        run: cargo check --workspace --all-features --all-targets
+
+      - name: Verify root crate can be packaged
+        run: cargo package -p rustvello-proto --no-verify
+
+  fuzz:
+    name: Fuzz testing (30s per target)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Fuzz JSON trigger parsing
+        run: cargo +nightly fuzz run fuzz_json_trigger -- -max_total_time=30
+
+      - name: Fuzz TOML config parsing
+        run: cargo +nightly fuzz run fuzz_toml_config -- -max_total_time=30

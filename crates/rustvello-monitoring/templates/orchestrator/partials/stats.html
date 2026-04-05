@@ -1,0 +1,68 @@
+<div class="metric-card">
+  <h6 class="section-title">Invocation Status</h6>
+  <div class="d-flex flex-wrap gap-2 mb-3">
+    {% for entry in status_counts %}
+    <div class="badge-item d-flex align-items-center">
+      <span class="status-badge" style="background-color: {{ entry.2 }}"
+        >{{ entry.0 }}</span
+      >
+      <span class="fw-semibold ms-2" style="font-size: 14px"
+        >{{ entry.1 }}</span
+      >
+    </div>
+    {% endfor %}
+  </div>
+  <div class="border-top pt-2">
+    <small class="text-muted"
+      >Total: <span class="fw-bold">{{ total_invocations }}</span></small
+    >
+  </div>
+</div>
+
+{% if blocking_invocations.is_empty() %}
+<div class="info-card mt-3 text-center">
+  <div class="text-success">
+    <span class="material-icons" style="font-size: 24px">check_circle</span>
+  </div>
+  <small class="text-muted">No blocking invocations</small>
+</div>
+{% else %}
+<div class="metric-card mt-3">
+  <h6 class="section-title">Blocking Invocations</h6>
+  <div class="table-responsive">
+    <table class="table table-sm table-borderless mb-0">
+      <thead>
+        <tr>
+          <th style="font-size: 12px; color: var(--text-secondary)">ID</th>
+          <th style="font-size: 12px; color: var(--text-secondary)">Task</th>
+          <th style="font-size: 12px; color: var(--text-secondary)">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inv in blocking_invocations %}
+        <tr>
+          <td>
+            <a
+              href="/invocations/{{ inv.invocation_id }}"
+              class="text-decoration-none"
+            >
+              <code class="clickable-code" style="font-size: 11px"
+                >{{ inv.short_id }}</code
+              >
+            </a>
+          </td>
+          <td style="font-size: 12px">{{ inv.task_id }}</td>
+          <td>
+            <span
+              class="status-badge"
+              style="background-color: {{ inv.status_color }}; font-size: 10px"
+              >{{ inv.status }}</span
+            >
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}

@@ -1,189 +1,242 @@
 # Configuration
 
-The `Config` class (in Python) and the `Config` struct (in Rust) are central to initializing and customizing the behavior of the Muse client. They encapsulate all the necessary settings required to interact with the Muse system effectively.
+Rustvello supports four configuration sources, applied from highest to lowest priority:
 
-## Overview
+1. **Programmatic** — builder method calls (always wins)
+2. **Environment variables** — `RUSTVELLO__*` prefix
+3. **TOML config file** — loaded via `.from_file("config.toml")`
+4. **Defaults** — compile-time defaults in `AppConfig` / `TaskConfig`
 
-The configuration allows you to:
-
-- Specify endpoints for connecting to the Muse system.
-- Choose the client type (e.g., `Poet` or `Mock`).
-- Define element kinds and metric definitions for registration and reporting.
-- Set default timestamp resolutions.
-- Enable or disable event recording and specify recording paths.
-- Configure retries and intervals for various operations, including initialization, cluster monitoring, and recording flush intervals.
-
-## Configuration Fields
-
-- **Endpoints**: List of endpoint URLs for the Muse client.
-- **Client Type**: Determines the type of client (`Poet` or `Mock`).
-- **Recording Enabled**: Enables or disables event recording.
-- **Recording Path**: File path for recording events (required if recording is enabled).
-- **Recording Flush Interval**: Interval for flushing recorded events to storage (optional).
-- **Default Resolution**: Default timestamp resolution for metrics.
-- **Element Kinds**: List of element kinds to register.
-- **Metric Definitions**: List of metric definitions available for reporting.
-- **Cluster Monitor Interval**: Interval for cluster monitoring tasks (optional).
-- **Initialization Interval**: Interval for performing initialization tasks (optional).
-- **Max Registration Retries**: Maximum number of retries for element registration.
-
-## Validation Rules
-
-The configuration settings undergo validation to ensure that:
-
-- **Endpoints**: Must not be empty if using the `Poet` client type.
-- **Element Kinds**: Cannot be empty; at least one must be provided.
-- **Metric Definitions**: Cannot be empty; at least one must be provided.
-- **Recording Path**: Must be specified if recording is enabled.
-
-## Example Usage
-
-Below are examples of how to define the configuration in both Python and Rust.
-
-::::{tab-set}
-
-::: {tab-item} Python
-
-```python
-import asyncio
-from datetime import timedelta
-from rustvello import Muse, Config, ClientType, TimestampResolution
-from rustvello.proto import ElementKindRegistration, MetricDefinition
-
-# Define the configuration
-config = Config(
-    endpoints=["http://localhost:8080"],
-    client_type=ClientType.Poet,
-    default_resolution=TimestampResolution.Milliseconds,
-    element_kinds=[
-        ElementKindRegistration("kind_code", "description")
-    ],
-    metric_definitions=[
-        MetricDefinition("metric_code", "description")
-    ],
-    max_reg_elem_retries=3,
-    max_endpoint_retries=None,
-    recording_enabled=True,
-    recording_path="recording.json",
-    recording_flush_interval=timedelta(seconds=1),
-    initialization_interval=timedelta(milliseconds=500),
-    cluster_monitor_interval=timedelta(seconds=30),
-)
-
-# Initialize the Muse client
-async def main():
-    muse = Muse(config)
-    await muse.initialize(timeout=5.0)
-    # ... use the muse client
-
-asyncio.run(main())
-```
-
+:::{admonition} See also: Pynenc Docs
+:class: seealso
+If you are configuring Rustvello as the backend for Pynenc, see the top-level [Pynenc Configuration Docs](https://pynenc.github.io/configuration/index.html).
 :::
 
-::: {tab-item} Rust
+---
+
+## Mode Selection
+
+When rustvello is used through pynenc, the orchestrator class controls whether
+orchestration uses Python-coordinated calls (**mixed mode**) or Rust composites
+(**native orchestrator**):
+
+| Config Field       | Example Value                  | Mode   |
+| ------------------ | ------------------------------ | ------ |
+| `orchestrator_cls` | `RustMemOrchestrator`          | Mixed  |
+| `orchestrator_cls` | `RustMemNativeOrchestrator`    | Native |
+| `orchestrator_cls` | `RustSqliteNativeOrchestrator` | Native |
+| `orchestrator_cls` | `RustMongo3NativeOrchestrator` | Native |
+
+The `*NativeOrchestrator` classes enable single-call composite orchestration for
+status/result/retry hot paths. See {doc}`../architecture` for details.
+
+```{note}
+Runner-loop selection is related but separate: `Pynenc.is_all_rust_native`
+checks whether all configured backend class names start with `Rust`
+(`orchestrator_cls`, `state_backend_cls`, `broker_cls`, `trigger_cls`,
+`client_data_store_cls`).
+```
+
+### Available Class Names
+
+| Backend    | Mixed Mode                 | Native Mode                      |
+| ---------- | -------------------------- | -------------------------------- |
+| In-memory  | `RustMemOrchestrator`      | `RustMemNativeOrchestrator`      |
+| SQLite     | `RustSqliteOrchestrator`   | `RustSqliteNativeOrchestrator`   |
+| Redis      | `RustRedisOrchestrator`    | `RustRedisNativeOrchestrator`    |
+| PostgreSQL | `RustPostgresOrchestrator` | `RustPostgresNativeOrchestrator` |
+| MongoDB    | `RustMongoOrchestrator`    | `RustMongoNativeOrchestrator`    |
+
+Set via env var:
+
+```bash
+PYNENC__ORCHESTRATOR_CLS=RustSqliteNativeOrchestrator
+PYNENC__BROKER_CLS=RustSqliteBroker
+PYNENC__STATE_BACKEND_CLS=RustSqliteStateBackend
+PYNENC__TRIGGER_CLS=RustSqliteTrigger
+PYNENC__CLIENT_DATA_STORE_CLS=RustSqliteClientDataStore
+```
+
+---
+
+## AppConfig
+
+Application-level settings that apply to the entire `RustvelloApp`.
+
+| Field                             | Type        | Default       | Description                                                                             |
+| --------------------------------- | ----------- | ------------- | --------------------------------------------------------------------------------------- |
+| `app_id`                          | `String`    | `"rustvello"` | Unique identifier for the application                                                   |
+| `dev_mode_force_sync`             | `bool`      | `false`       | Execute tasks synchronously in-process (for testing)                                    |
+| `max_pending_seconds`             | `f64`       | `300.0`       | Max seconds an invocation can stay `Pending` before recovery re-queues it               |
+| `heartbeat_interval_seconds`      | `f64`       | `30.0`        | How often a runner publishes its heartbeat                                              |
+| `runner_dead_after_seconds`       | `u64`       | `300`         | Heartbeat age threshold after which a runner is considered dead                         |
+| `recovery_check_interval_seconds` | `f64`       | `60.0`        | How often the management loop scans for stale invocations                               |
+| `num_workers`                     | `usize`     | CPU count     | Number of concurrent async workers per runner                                           |
+| `idle_sleep_ms`                   | `u64`       | `100`         | Milliseconds a worker sleeps when the broker queue is empty                             |
+| `logging_level`                   | `String`    | `"info"`      | Log level for both Rust and Python runtimes (`trace`, `debug`, `info`, `warn`, `error`) |
+| `log_format`                      | `LogFormat` | `Text`        | Log output format: `Text` (human-readable) or `Json` (NDJSON)                           |
+
+See {doc}`../monitoring/logging` for details on the unified logging format.
+
+---
+
+## TaskConfig
+
+Per-task settings. Apply globally via `[task_defaults]` or per-task via `[tasks.<name>]`
+in a TOML file, or via env vars.
+
+| Field                        | Type                     | Default            | Description                                                        |
+| ---------------------------- | ------------------------ | ------------------ | ------------------------------------------------------------------ |
+| `max_retries`                | `u32`                    | `0`                | Maximum retry attempts on failure                                  |
+| `concurrency_control`        | `ConcurrencyControlType` | `Unlimited`        | Execution-time concurrency mode                                    |
+| `running_concurrency`        | `Option<u32>`            | `None` (unlimited) | Max simultaneous running instances                                 |
+| `registration_concurrency`   | `ConcurrencyControlType` | `Unlimited`        | Registration-time dedup mode                                       |
+| `key_arguments`              | `Vec<String>`            | `[]`               | Arg names used as the concurrency key for `Keys` mode              |
+| `cache_results`              | `bool`                   | `false`            | Cache and return previous result for identical args                |
+| `disable_cache_args`         | `Vec<String>`            | `[]`               | Args excluded from cache key computation                           |
+| `retry_for_errors`           | `Vec<String>`            | `[]`               | Error type names that trigger a retry                              |
+| `on_diff_non_key_args_raise` | `bool`                   | `false`            | Raise if a duplicate is found with different non-key args          |
+| `force_new_workflow`         | `bool`                   | `false`            | Always start a new workflow scope for this task                    |
+| `reroute_on_cc`              | `bool`                   | `false`            | Reroute to the existing invocation when hitting concurrency limits |
+| `parallel_batch_size`        | `usize`                  | `100`              | Batch size used by `parallelize()`                                 |
+| `blocking`                   | `bool`                   | `false`            | Run on a blocking (OS) thread rather than Tokio                    |
+
+---
+
+## Concurrency Control
+
+`ConcurrencyControlType` controls how concurrent invocations are managed:
+
+| Variant     | Behaviour                                           |
+| ----------- | --------------------------------------------------- |
+| `Unlimited` | All invocations run concurrently — no restrictions  |
+| `Task`      | At most one invocation of this task runs at a time  |
+| `Argument`  | At most one invocation per unique full argument set |
+| `None`      | No concurrent invocations allowed                   |
+
+Set with the macro attribute:
 
 ```rust
-use rustvello::prelude::*;
-use rustvello::config::{ClientType, Config};
-use rustvello_proto::prelude::*;
-use std::time::Duration;
+#[rustvello::task(concurrency = "task")]
+fn exclusive_task() -> String { ... }
 
-#[tokio::main]
-async fn main() -> MuseResult<()> {
-    // Define the configuration
-    let config = Config::new(
-        vec!["http://localhost:8080".to_string()],
-        ClientType::Poet,
-        true,
-        Some("recording.json".to_string()),
-        Some(Duration::from_secs(1)),
-        TimestampResolution::Milliseconds,
-        vec![ElementKindRegistration::new("kind_code", "description")],
-        vec![MetricDefinition::new("metric_code", "description")],
-        Some(Duration::from_millis(500)),  // Initialization interval
-        Some(Duration::from_secs(30)),    // Cluster monitor interval
-        3,                                // Max retries for element registration
-    )?;
-
-    // Initialize the Muse client
-    let mut muse = Muse::new(&config)?;
-    muse.initialize(Some(Duration::from_secs(5))).await?;
-    // ... use the muse client
-
-    Ok(())
-}
+#[rustvello::task(concurrency = "argument")]
+fn per_user_task(user_id: u64, data: String) -> String { ... }
 ```
 
-:::
+Or in TOML:
 
-::::
+```toml
+[task_defaults]
+concurrency_control = "task"
 
-## Detailed Explanation
+[tasks.per_user_task]
+concurrency_control = "argument"
+```
 
-### Endpoints
+---
 
-A list of URLs where the Muse client can connect to. At least one endpoint must be provided when using the `Poet` client type.
+## Environment Variables
 
-### Client Type
+All `AppConfig` fields are overridable via `RUSTVELLO__` prefix + field name in
+SCREAMING_SNAKE_CASE:
 
-Determines the type of client to instantiate:
+```bash
+RUSTVELLO__APP_ID=my-app
+RUSTVELLO__MAX_PENDING_SECONDS=600
+RUSTVELLO__HEARTBEAT_INTERVAL_SECONDS=15
+RUSTVELLO__REDIS_URL=redis://localhost:6379
+RUSTVELLO__DB_PATH=./tasks.db
+```
 
-- `Poet`: Communicates with the actual Muse system.
-- `Mock`: Uses a mock client for testing purposes without making real network calls.
+Per-task overrides use the pattern `RUSTVELLO__TASK__<TASK_NAME>__<FIELD>`:
 
-### Recording Options
+```bash
+# Override max_retries for the "send_email" task
+RUSTVELLO__TASK__SEND_EMAIL__MAX_RETRIES=5
+```
 
-- **Recording Enabled**: When set to `True` (Python) or `true` (Rust), the client will record events for later analysis.
-- **Recording Path**: Specifies where the recorded events should be saved. This must be provided if recording is enabled.
+Enable env loading in the builder:
 
-### Default Resolution
+```rust
+let app = Rustvello::builder()
+    .app_id("my-app")  // programmatic — cannot be overridden by env
+    .from_env()         // load remaining fields from RUSTVELLO__* vars
+    .build().await?;
+```
 
-Specifies the default timestamp resolution for metrics (e.g., milliseconds, seconds).
+---
 
-### Element Kinds
+## TOML Config File
 
-A list of `ElementKindRegistration` instances that define the kinds of elements you plan to register with the Muse system.
+```toml
+# config.toml
+app_id = "my-app"
+max_pending_seconds = 600
+heartbeat_interval_seconds = 15
+num_workers = 4
 
-### Metric Definitions
+# Global task defaults
+[task_defaults]
+max_retries = 1
 
-A list of `MetricDefinition` instances that define the metrics you plan to report.
+# Per-task overrides
+[tasks.process_order]
+max_retries = 3
+concurrency_control = "arguments"
 
-### Max Registration Retries
+[tasks.send_welcome_email]
+concurrency_control = "keys"
+key_arguments = ["user_id"]
+cache_results = true
+```
 
-Specifies how many times the client should retry registering an element in case of failure.
+Load with the builder:
 
-### New Timing Fields
+```rust
+let app = Rustvello::builder()
+    .from_file("config.toml")?
+    .from_env()   // env vars still win over file for anything in both
+    .build().await?;
+```
 
-#### Recording Flush Interval
+---
 
-- Configures the frequency of writing recorded events to storage.
-- Optional field. Defaults to one second if not specified.
+## Backend Connection Settings
 
-#### Initialization Interval
+Backend-specific URLs and paths are set via builder methods or environment variables:
 
-- Defines the interval for performing initialization tasks, such as health checks and registrations.
-- Optional field. Defaults to one second if not specified.
+````{tab} SQLite
+```rust
+// Programmatic
+Rustvello::builder().db_path("./tasks.db").build().await?;
+```
+```bash
+# Environment
+RUSTVELLO__DB_PATH=./tasks.db rustvello run
+```
+````
 
-#### Cluster Monitor Interval
+````{tab} Redis
+```rust
+// Programmatic
+Rustvello::builder().redis_url("redis://localhost:6379").build().await?;
+```
+```bash
+# Environment
+RUSTVELLO__REDIS_URL=redis://prod-redis:6379 rustvello run
+```
+````
 
-- Specifies the interval at which cluster monitoring tasks are performed.
-- Optional field. Defaults to one minute if not specified.
+---
 
-## Validation Behavior (Rust Implementation)
+## CLI Config Inspection
 
-The Rust implementation includes a `validate` method that ensures the configuration is correct before the client is initialized.
+View the effective configuration (merged from all sources) with:
 
-Validation checks include:
+```bash
+rustvello config --config ./config.toml --app-id my-app
+```
 
-- **Client Type and Endpoints**: If the client type is `Poet`, there must be at least one endpoint specified.
-- **Element Kinds and Metric Definitions**: Both must contain at least one entry.
-- **Recording Path**: If recording is enabled, a valid recording path must be provided.
-
-If any of these validations fail, the client initialization will return a `MuseError::Configuration` error.
-
-## Common Errors
-
-- **Missing Endpoints**: Ensure that you provide at least one endpoint when using the `Poet` client.
-- **Empty Element Kinds or Metric Definitions**: Provide at least one element kind and one metric definition.
-- **Recording Enabled Without Path**: If you enable recording, you must specify a valid path for the recording file.
+This prints the resolved `AppConfig` as TOML to stdout, showing exactly which values
+came from each source.

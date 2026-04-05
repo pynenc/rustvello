@@ -1,0 +1,115 @@
+{% extends "base.html" %} {% block title %}Atomic Service Timeline — Rustvello
+Monitor{% endblock %} {% block content %}
+<div class="container-fluid">
+  <!-- Page Header -->
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h2 class="h4 mb-0 text-primary">Atomic Service Timeline</h2>
+      <small class="text-muted"
+        >Execution history of atomic service across runners</small
+      >
+    </div>
+    <a href="/runners" class="btn btn-sm btn-outline-secondary">
+      <span class="material-icons align-middle" style="font-size: 14px"
+        >arrow_back</span
+      >
+      Back to Runners
+    </a>
+  </div>
+
+  <!-- Configuration Info -->
+  <div class="metric-card mb-4">
+    <h6 class="section-title">Service Configuration</h6>
+    <div class="metric-grid">
+      <div class="metric-item">
+        <span class="metric-label">Service Interval</span>
+        <span class="badge bg-info"
+          >{{ service_interval_minutes }} minutes</span
+        >
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Spread Margin</span>
+        <span class="badge bg-info">{{ spread_margin_minutes }} minutes</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Check Interval</span>
+        <span class="badge bg-info">{{ check_interval_minutes }} minutes</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Executions Recorded</span>
+        <span class="badge bg-primary">{{ total_executions }}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Execution Stats -->
+  {% if total_executions > 0 %}
+  <div class="row g-3 mb-4">
+    <div class="col-md-4">
+      <div class="metric-card">
+        <h6 class="section-title">Total Executions</h6>
+        <p class="h3 mb-0 text-primary">{{ total_executions }}</p>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="metric-card">
+        <h6 class="section-title">Avg Duration</h6>
+        <p class="h3 mb-0 text-info">{{ avg_duration_secs }}s</p>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="metric-card">
+        <h6 class="section-title">Max Duration</h6>
+        <p class="h3 mb-0 text-warning">{{ max_duration_secs }}s</p>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Execution Timeline Table -->
+  <div class="card">
+    <div class="card-header">
+      <h6 class="mb-0">Execution Timeline</h6>
+    </div>
+    <div class="card-body p-0">
+      {% if !rows.is_empty() %}
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Runner ID</th>
+              <th>Start (UTC)</th>
+              <th>End (UTC)</th>
+              <th>Duration</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+            <tr>
+              <td>
+                <a
+                  href="/runners/{{ row.runner_id }}"
+                  class="text-decoration-none"
+                >
+                  <code class="small text-primary">{{ row.short_id }}</code>
+                </a>
+              </td>
+              <td><small class="text-muted">{{ row.start }}</small></td>
+              <td><small class="text-muted">{{ row.end }}</small></td>
+              <td>
+                <span class="badge bg-info">{{ row.duration_secs }}s</span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="text-center py-4">
+        <p class="text-muted mb-0">No atomic service executions recorded yet</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

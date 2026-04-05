@@ -10,7 +10,6 @@ repos:
     rev: v0.42.0
     hooks:
       - id: markdownlint-fix
-        exclude: ^docs/api/python/
 
   - repo: https://github.com/crate-ci/typos
     rev: v1.26.0
@@ -33,20 +32,15 @@ repos:
     hooks:
       - id: ruff
         name: "ruff lint"
-        args: ["--exit-non-zero-on-fix", "--unsafe-fixes"]
+        args: ["--exit-non-zero-on-fix"]
       - id: ruff-format
-        name: "ruff black"
-
-  - repo: https://github.com/PyCQA/isort
-    rev: 5.12.0
-    hooks:
-      - id: isort
+        name: "ruff format"
 
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: "v3.0.3"
     hooks:
       - id: prettier
-        exclude: ^docs/api/python/|^\.git/COMMIT_EDITMSG$
+        exclude: ^(\.git/COMMIT_EDITMSG|crates/rustvello-monitoring/templates/.*)$
 
   # ! Will not work without installing the commit-msg hook:
   # pre-commit install --hook-type commit-msg
@@ -68,7 +62,13 @@ repos:
         pass_filenames: false
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --all-targets --all-features -- -D warnings
+        entry: cargo clippy --workspace --all-targets -- -D warnings
         language: system
         types: [rust]
+        pass_filenames: false
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types: [python]
         pass_filenames: false

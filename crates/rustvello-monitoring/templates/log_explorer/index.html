@@ -1,0 +1,649 @@
+{% extends "base.html" %} {% block title %}Log Explorer — {{ app_id }}{%
+endblock %} {% block extra_css %}
+<link rel="stylesheet" href="/static/css/log_explorer.css" />
+{% endblock %} {% block content %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="h4 mb-0 text-primary">
+      <span class="material-icons align-middle me-2" style="font-size: 28px"
+        >manage_search</span
+      >
+      Log Explorer
+    </h2>
+  </div>
+
+  {# ── Paste form ─────────────────────────────────────────────────── #}
+  <div class="row mb-3">
+    <div class="col-12">
+      <div class="card pynmon-card">
+        <div class="card-header pynmon-card-header compact-header">
+          <span class="material-icons align-middle me-1" style="font-size: 18px"
+            >content_paste</span
+          >
+          Log Explorer — Analyse Rustvello Log Lines
+        </div>
+        <div class="card-body pynmon-card-body">
+          <form method="POST" action="/log-explorer/analyze" id="log-form">
+            <div class="mb-3">
+              <label for="log_text" class="form-label metadata-text"
+                >Paste one or more log lines</label
+              >
+              <textarea
+                class="form-control font-monospace"
+                id="log_text"
+                name="log_text"
+                rows="6"
+                style="font-size: 11.5px; line-height: 1.5"
+                placeholder="2026-03-21T15:39:09.107782Z  INFO runner{runner_id=5719fe43-33fb-4979-a024-7b092f0fff6f app_id=test-hierarchical pid=70112}:invocation{invocation_id=69bec730-...  task_id=test.child_task}: rustvello::runner: Invocation completed successfully
+2026-03-05 00:13:51.125+01:00 INFO  rustvello.app [TR(a86ab1f8)] task:core_tasks.recover invocation:cc6c0e34-… REGISTERED"
+              >
+{{ log_text }}</textarea
+              >
+              <div class="form-text" style="font-size: 11px">
+                Paste any rustvello log block. Supports both tracing span format
+                (<code>runner{...}:invocation{...}:</code>) and compact bracket
+                format (<code>[R(id)UUID:task]</code>). Entity references like
+                <code>invocation:UUID</code>, <code>task:key</code>,
+                <code>runner:ID</code> become clickable links.
+              </div>
+            </div>
+            <div class="d-flex gap-2">
+              <button
+                type="submit"
+                class="btn btn-sm btn-primary pynmon-action-btn"
+              >
+                <span
+                  class="material-icons"
+                  style="font-size: 14px; vertical-align: middle"
+                  >search</span
+                >
+                Analyse
+              </button>
+              {% if has_input %}
+              <a
+                href="/log-explorer"
+                class="btn btn-sm btn-outline-secondary pynmon-action-btn"
+                id="clear-btn"
+                >Clear</a
+              >
+              {% endif %}
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Analysis results ──────────────────────────────────────────── #} {% if
+  let Some(analysis) = analysis.as_ref() %} {% if !analysis.has_valid %}
+  <div class="alert alert-warning" style="font-size: 13px">
+    Could not extract context from the pasted text. Make sure each line starts
+    with a timestamp and log level, and contains tracing span context
+    (<code>runner{runner_id=...}:invocation{...}:</code>) or structured entity
+    references like <code>invocation:UUID</code>.
+  </div>
+  {% else %} {# ── Per-line log display ────────────────────────────────────────
+  #}
+  <div class="row mb-3">
+    <div class="col-12">
+      <div class="card" style="background: #fff; border: 1px solid #dee2e6">
+        <div class="card-body py-3 px-3">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6
+              class="text-muted fw-semibold text-uppercase mb-0"
+              style="font-size: 11px; letter-spacing: 0.05em"
+            >
+              Parsed Log Lines
+              <span class="badge bg-secondary ms-1" style="font-size: 10px"
+                >{{ analysis.lines.len() }}</span
+              >
+            </h6>
+          </div>
+
+          {% for la in &analysis.lines %} {# ── Line card
+          ─────────────────────────────────────────── #}
+          <div class="card pynmon-card log-line-card {{ la.level_class }}">
+            <div class="log-line-columns">
+              {# ── Left column: metadata & bracket refs ── #}
+              <div class="log-col-left">
+                <span class="line-meta">
+                  {% if let Some(ts) = la.parsed.timestamp.as_ref() %}
+                  <span class="meta-ts">{{ ts }}</span>
+                  {% endif %} {% if let Some(level) = la.parsed.level.as_ref()
+                  %}
+                  <span class="meta-level meta-level-{{ level.to_lowercase() }}"
+                    >{{ level }}</span
+                  >
+                  {% endif %} {% if let Some(module) = la.parsed.module.as_ref()
+                  %}
+                  <span class="meta-module" title="{{ module }}"
+                    >{{ module }}</span
+                  >
+                  {% endif %}
+                </span>
+                {% if la.parsed.is_valid %}
+                <span class="line-refs">
+                  {# Bracket runners #} {% for runner in &la.parsed.runners %}
+                  <a
+                    href="/runners/{{ runner.partial_id }}"
+                    class="ref-chip chip-runner"
+                    data-runner-id="{{ runner.partial_id }}"
+                    title="Runner {{ runner.partial_id }}"
+                  >
+                    <span class="material-icons">memory</span>
+                    {{ runner.cls_abbr }}({{ runner.partial_id }})
+                  </a>
+                  {% endfor %} {# Worker from span context #} {% if let
+                  Some(wid) = la.parsed.worker_id.as_ref() %}
+                  <a
+                    href="/runners/{{ wid }}"
+                    class="ref-chip chip-worker"
+                    data-runner-id="{{ wid }}"
+                    title="Worker {{ wid }}"
+                  >
+                    <span class="material-icons">engineering</span>
+                    {% if let Some(short) = la.parsed.short_worker_id() %} W({{
+                    short }}) {% endif %}
+                  </a>
+                  {% endif %} {# Bracket invocation #} {% if let Some(inv_id) =
+                  la.parsed.invocation_id.as_ref() %}
+                  <span class="inv-chip-group">
+                    <a
+                      href="/invocations/{{ inv_id }}"
+                      class="ref-chip chip-invocation"
+                      data-invocation-id="{{ inv_id }}"
+                      title="Invocation: {{ inv_id }}"
+                    >
+                      <span class="material-icons">info</span>
+                      {{ inv_id }}
+                    </a>
+                    <a
+                      href="/invocations/timeline?time_range=auto&selected={{ inv_id }}"
+                      class="ref-chip chip-invocation chip-timeline"
+                      data-invocation-id="{{ inv_id }}"
+                      title="Timeline zoom"
+                    >
+                      <span class="material-icons">timeline</span>
+                    </a>
+                  </span>
+                  {% endif %} {# Bracket task #} {% if let Some(task) =
+                  la.parsed.task_key.as_ref() %}
+                  <a
+                    href="/tasks/{{ task }}"
+                    class="ref-chip chip-task"
+                    data-task-key="{{ task }}"
+                    title="Task page"
+                  >
+                    <span class="material-icons">task</span>
+                    {{ task }}
+                  </a>
+                  {% endif %}
+                </span>
+                {% endif %}
+              </div>
+
+              {# ── Right column: message + entity badges ── #}
+              <div class="log-col-right">
+                {% if !la.message_html.is_empty() %}
+                <div class="log-msg-text">{{ la.message_html|safe }}</div>
+                {% endif %} {% if !la.extra_entity_refs.is_empty() %}
+                <div class="line-refs msg-refs">
+                  {% for eref in &la.extra_entity_refs %} {% if eref.kind ==
+                  "invocation" || eref.kind == "parent-invocation" || eref.kind
+                  == "child-invocation" || eref.kind == "new-invocation" %}
+                  <span class="inv-chip-group">
+                    <a
+                      href="/invocations/{{ eref.value }}"
+                      class="ref-chip chip-invocation"
+                      data-invocation-id="{{ eref.value }}"
+                      title="{{ eref.kind }}: {{ eref.value }}"
+                    >
+                      <span class="material-icons">info</span>
+                      {{ eref.value }}
+                    </a>
+                    <a
+                      href="/invocations/timeline?time_range=auto&selected={{ eref.value }}"
+                      class="ref-chip chip-invocation chip-timeline"
+                      data-invocation-id="{{ eref.value }}"
+                      title="Timeline zoom"
+                    >
+                      <span class="material-icons">timeline</span>
+                    </a>
+                  </span>
+                  {% else if eref.kind == "runner" || eref.kind == "worker" %}
+                  <a
+                    href="/runners/{{ eref.value }}"
+                    class="ref-chip chip-runner"
+                    data-runner-id="{{ eref.value }}"
+                    title="{{ eref.kind }}: {{ eref.value }}"
+                  >
+                    <span class="material-icons">memory</span>
+                    {{ eref.value }}
+                  </a>
+                  {% else if eref.kind == "task" %}
+                  <a
+                    href="/tasks/{{ eref.value }}"
+                    class="ref-chip chip-task"
+                    data-task-key="{{ eref.value }}"
+                    title="Task: {{ eref.value }}"
+                  >
+                    <span class="material-icons">task</span>
+                    {{ eref.value }}
+                  </a>
+                  {% else if eref.kind == "workflow" || eref.kind ==
+                  "sub-workflow" || eref.kind == "parent-workflow" %}
+                  <a
+                    href="/workflows/runs"
+                    class="ref-chip chip-workflow"
+                    title="{{ eref.kind }}: {{ eref.value }}"
+                  >
+                    <span class="material-icons">account_tree</span>
+                    {{ eref.kind }}: {{ eref.value }}
+                  </a>
+                  {% else %}
+                  <span
+                    class="ref-chip"
+                    title="{{ eref.kind }}: {{ eref.value }}"
+                  >
+                    {{ eref.kind }}: {{ eref.value }}
+                  </span>
+                  {% endif %} {% endfor %}
+                </div>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── SVG mini-timeline ──────────────────────────────────────────── #} {% if
+  !analysis.svg_content.is_empty() %}
+  <div class="row mb-3">
+    <div class="col-12">
+      <h6
+        class="text-muted fw-semibold text-uppercase mb-2"
+        style="font-size: 11px; letter-spacing: 0.05em"
+      >
+        Invocation Timeline
+        <a
+          href="/invocations/timeline?{{ analysis.timeline_qs }}"
+          class="ms-2 log-svg-timeline-link"
+          style="font-size: 10px; text-transform: none; letter-spacing: 0"
+          title="Open full timeline"
+        >
+          open full &rarr;
+        </a>
+      </h6>
+      <div
+        class="log-svg-container"
+        id="log-svg-container"
+        style="
+          overflow-x: auto;
+          border: 1px solid #dee2e6;
+          border-radius: 6px;
+          background: #fff;
+        "
+      >
+        {{ analysis.svg_content|safe }}
+      </div>
+      {# ── Invocation detail panel (click on SVG element) ── #}
+      <div id="log-inv-detail" class="log-inv-detail">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="fw-semibold" style="font-size: 12px"
+            >Invocation Detail</span
+          >
+          <button
+            type="button"
+            class="btn-close detail-close"
+            style="font-size: 10px"
+          ></button>
+        </div>
+        <div style="font-size: 11px">
+          <div>
+            <strong>ID:</strong>
+            <span class="detail-inv-id font-monospace"></span>
+          </div>
+          <div>
+            <strong>Status:</strong> <span class="detail-status"></span>
+          </div>
+          <div><strong>Task:</strong> <span class="detail-task"></span></div>
+          <div class="mt-2">
+            <a href="#" class="detail-link me-2" style="font-size: 11px"
+              >View detail &rarr;</a
+            >
+            <a href="#" class="detail-timeline-link" style="font-size: 11px"
+              >Timeline &rarr;</a
+            >
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %} {# ── References panel
+  ──────────────────────────────────────────── #} {% if
+  !analysis.all_entity_refs.is_empty() %}
+  <div class="row mb-3">
+    <div class="col-12">
+      <h6
+        class="text-muted fw-semibold text-uppercase mb-2"
+        style="font-size: 11px; letter-spacing: 0.05em"
+      >
+        References
+        <span class="badge bg-secondary ms-1" style="font-size: 10px"
+          >{{ analysis.all_entity_refs.len() }}</span
+        >
+      </h6>
+      <div class="card pynmon-card all-refs-panel">
+        <div class="card-body py-2 px-3">
+          {# Invocations #} {% if analysis.inv_ref_count > 0 %}
+          <div class="refs-section mb-2">
+            <div class="refs-section-title">
+              <span class="material-icons">info</span>
+              Invocations ({{ analysis.inv_ref_count }})
+            </div>
+            <div class="refs-card-grid">
+              {% for eref in &analysis.all_entity_refs %} {% if eref.kind ==
+              "invocation" || eref.kind == "parent-invocation" || eref.kind ==
+              "child-invocation" || eref.kind == "new-invocation" %}
+              <div
+                class="ref-entity-card ref-card-inv"
+                data-invocation-id="{{ eref.value }}"
+              >
+                <div class="ref-card-header">
+                  <a
+                    href="/invocations/{{ eref.value }}"
+                    class="ref-card-id-link"
+                    title="{{ eref.value }}"
+                  >
+                    {{ eref.value }}
+                  </a>
+                </div>
+              </div>
+              {% endif %} {% endfor %}
+            </div>
+          </div>
+          {% endif %} {# Runners #} {% if analysis.runner_ref_count > 0 %}
+          <div class="refs-section mb-2">
+            <div class="refs-section-title">
+              <span class="material-icons">memory</span>
+              Runners ({{ analysis.runner_ref_count }})
+            </div>
+            <div class="refs-card-grid">
+              {% for eref in &analysis.all_entity_refs %} {% if eref.kind ==
+              "runner" || eref.kind == "worker" %}
+              <div
+                class="ref-entity-card ref-card-runner"
+                data-runner-id="{{ eref.value }}"
+              >
+                <div class="ref-card-header">
+                  <a
+                    href="/runners/{{ eref.value }}"
+                    class="ref-card-id-link"
+                    title="{{ eref.value }}"
+                  >
+                    {{ eref.value }}
+                  </a>
+                </div>
+              </div>
+              {% endif %} {% endfor %}
+            </div>
+          </div>
+          {% endif %} {# Tasks #} {% if analysis.task_ref_count > 0 %}
+          <div class="refs-section mb-2">
+            <div class="refs-section-title">
+              <span class="material-icons">task</span>
+              Tasks ({{ analysis.task_ref_count }})
+            </div>
+            <div class="refs-card-grid">
+              {% for eref in &analysis.all_entity_refs %} {% if eref.kind ==
+              "task" %}
+              <div
+                class="ref-entity-card"
+                style="background: #fef3e0; border-color: #f0d9a8"
+                data-task-key="{{ eref.value }}"
+              >
+                <div class="ref-card-header">
+                  <a
+                    href="/tasks/{{ eref.value }}"
+                    class="ref-card-id-link"
+                    style="color: #8a5a00"
+                    title="{{ eref.value }}"
+                  >
+                    {{ eref.value }}
+                  </a>
+                </div>
+              </div>
+              {% endif %} {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %} {% endif %}{# has_valid #} {% endif %}{# analysis #}
+</div>
+
+{# ── Session persistence ─────────────────────────────────────────── #}
+<script>
+  (function () {
+    const STORAGE_KEY = "rustvello_log_explorer_last";
+    const textarea = document.getElementById("log_text");
+    const form = document.getElementById("log-form");
+    const clearBtn = document.getElementById("clear-btn");
+
+    if (textarea && !textarea.value.trim()) {
+      const saved = sessionStorage.getItem(STORAGE_KEY);
+      if (saved) textarea.value = saved;
+    }
+    if (form) {
+      form.addEventListener("submit", function () {
+        if (textarea) sessionStorage.setItem(STORAGE_KEY, textarea.value);
+      });
+    }
+    if (clearBtn) {
+      clearBtn.addEventListener("click", function () {
+        sessionStorage.removeItem(STORAGE_KEY);
+      });
+    }
+  })();
+</script>
+
+{# ── Cross-highlighting scripts ──────────────────────────────────── #} {% if
+let Some(analysis) = analysis.as_ref() %} {% if analysis.has_valid %}
+<script>
+  window.__invTaskMap = {
+    {% for (inv_id, task_key) in &analysis.inv_task_map %}
+    "{{ inv_id }}": "{{ task_key }}",
+    {% endfor %}
+  };
+</script>
+<script>
+  (function () {
+    var svgContainer = document.getElementById("log-svg-container");
+    var detailPanel = document.getElementById("log-inv-detail");
+    if (!svgContainer) return;
+
+    // ── SVG click → show invocation detail ────────────────────────────
+    svgContainer.addEventListener("click", function (e) {
+      var el = e.target.closest("[data-invocation-id]");
+      if (!el) return;
+      var invId = el.dataset.invocationId;
+      if (invId) showInvocationDetail(invId);
+    });
+
+    // ── SVG hover → highlight matching elements ──────────────────────
+    svgContainer.addEventListener("mouseover", function (e) {
+      var el = e.target.closest("[data-invocation-id]");
+      if (el) highlightInvocation(el.dataset.invocationId, true);
+      var rl = e.target.closest(".runner-label[data-runner-id]");
+      if (rl) highlightRunner(rl.getAttribute("data-runner-id"), true);
+      var tl = e.target.closest("[data-task-key]");
+      if (tl) highlightTask(tl.getAttribute("data-task-key"), true);
+    });
+    svgContainer.addEventListener("mouseout", function (e) {
+      var el = e.target.closest("[data-invocation-id]");
+      if (el) highlightInvocation(el.dataset.invocationId, false);
+      var rl = e.target.closest(".runner-label[data-runner-id]");
+      if (rl) highlightRunner(rl.getAttribute("data-runner-id"), false);
+      var tl = e.target.closest("[data-task-key]");
+      if (tl) highlightTask(tl.getAttribute("data-task-key"), false);
+    });
+
+    // ── Cross-highlight: ref chips (outside SVG) ↔ SVG ───────────────
+    document.querySelectorAll("[data-invocation-id]").forEach(function (chip) {
+      if (svgContainer.contains(chip)) return;
+      chip.addEventListener("mouseenter", function () {
+        highlightInvocation(chip.dataset.invocationId, true);
+      });
+      chip.addEventListener("mouseleave", function () {
+        highlightInvocation(chip.dataset.invocationId, false);
+      });
+    });
+
+    document.querySelectorAll("[data-runner-id]").forEach(function (chip) {
+      if (svgContainer.contains(chip)) return;
+      chip.addEventListener("mouseenter", function () {
+        highlightRunner(chip.dataset.runnerId, true);
+      });
+      chip.addEventListener("mouseleave", function () {
+        highlightRunner(chip.dataset.runnerId, false);
+      });
+    });
+
+    document.querySelectorAll("[data-task-key]").forEach(function (chip) {
+      if (svgContainer.contains(chip)) return;
+      chip.addEventListener("mouseenter", function () {
+        highlightTask(chip.dataset.taskKey, true);
+      });
+      chip.addEventListener("mouseleave", function () {
+        highlightTask(chip.dataset.taskKey, false);
+      });
+    });
+
+    // ── Highlight helpers ─────────────────────────────────────────────
+    function highlightInvocation(invId, on) {
+      if (!invId) return;
+      // Highlight SVG elements
+      svgContainer
+        .querySelectorAll('[data-invocation-id="' + invId + '"]')
+        .forEach(function (el) {
+          on
+            ? el.classList.add("invocation-highlight")
+            : el.classList.remove("invocation-highlight");
+        });
+      // Highlight all chips/cards with this invocation outside SVG
+      document
+        .querySelectorAll('[data-invocation-id="' + invId + '"]')
+        .forEach(function (el) {
+          if (svgContainer.contains(el)) return;
+          on
+            ? el.classList.add("cross-highlight")
+            : el.classList.remove("cross-highlight");
+        });
+    }
+
+    function highlightRunner(runnerId, on) {
+      if (!runnerId) return;
+      // Highlight SVG lane backgrounds and labels
+      svgContainer
+        .querySelectorAll('[data-runner-id="' + runnerId + '"]')
+        .forEach(function (el) {
+          on
+            ? el.classList.add("runner-highlight")
+            : el.classList.remove("runner-highlight");
+        });
+      // Highlight all chips with this runner_id outside SVG
+      document
+        .querySelectorAll('[data-runner-id="' + runnerId + '"]')
+        .forEach(function (el) {
+          if (svgContainer.contains(el)) return;
+          on
+            ? el.classList.add("cross-highlight")
+            : el.classList.remove("cross-highlight");
+        });
+    }
+
+    function highlightTask(taskKey, on) {
+      if (!taskKey) return;
+      var taskMap = window.__invTaskMap || {};
+      // Highlight SVG elements whose invocation maps to this task
+      svgContainer
+        .querySelectorAll("[data-invocation-id]")
+        .forEach(function (el) {
+          var elInvId =
+            el.dataset.invocationId || el.getAttribute("data-invocation-id");
+          if (taskMap[elInvId] === taskKey) {
+            on
+              ? el.classList.add("invocation-highlight")
+              : el.classList.remove("invocation-highlight");
+          }
+        });
+      // Highlight SVG elements with matching task-key directly
+      svgContainer
+        .querySelectorAll('[data-task-key="' + taskKey + '"]')
+        .forEach(function (el) {
+          on
+            ? el.classList.add("invocation-highlight")
+            : el.classList.remove("invocation-highlight");
+        });
+      // Highlight all chips/links with this task-key outside SVG
+      document
+        .querySelectorAll('[data-task-key="' + taskKey + '"]')
+        .forEach(function (el) {
+          if (svgContainer.contains(el)) return;
+          on
+            ? el.classList.add("cross-highlight")
+            : el.classList.remove("cross-highlight");
+        });
+    }
+
+    // ── Invocation detail panel ───────────────────────────────────────
+    function showInvocationDetail(invId) {
+      if (!detailPanel) return;
+      detailPanel.classList.add("visible");
+      detailPanel.querySelector(".detail-inv-id").textContent = invId;
+
+      var detailLink = detailPanel.querySelector(".detail-link");
+      detailLink.href = "/invocations/" + invId;
+
+      var timelineLink = detailPanel.querySelector(".detail-timeline-link");
+      timelineLink.href =
+        "/invocations/timeline?time_range=auto&selected=" + invId;
+
+      // Fetch basic info via API
+      var statusEl = detailPanel.querySelector(".detail-status");
+      var taskEl = detailPanel.querySelector(".detail-task");
+      statusEl.textContent = "loading\u2026";
+      taskEl.textContent = "";
+
+      fetch("/invocations/" + invId + "/api")
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .then(function (data) {
+          if (!data) {
+            statusEl.textContent = "not found";
+            return;
+          }
+          statusEl.textContent = data.status || "unknown";
+          taskEl.textContent = data.task_id_key || "";
+        })
+        .catch(function () {
+          statusEl.textContent = "error";
+        });
+    }
+
+    if (detailPanel) {
+      detailPanel
+        .querySelector(".detail-close")
+        .addEventListener("click", function () {
+          detailPanel.classList.remove("visible");
+        });
+    }
+  })();
+</script>
+{% endif %} {% endif %} {% endblock %}

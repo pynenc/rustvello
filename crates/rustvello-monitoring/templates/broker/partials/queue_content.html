@@ -1,0 +1,51 @@
+<div class="small text-muted mb-2">
+  Showing {{ displayed_count }} of {{ total_count }} pending invocations
+</div>
+
+{% if invocations.is_empty() %}
+<div class="alert alert-info small mb-0">
+  <span class="material-icons align-middle me-1" style="font-size: 16px"
+    >info</span
+  >
+  No pending invocations in queue.
+</div>
+{% else %}
+<div class="table-responsive">
+  <table class="table table-hover table-sm mb-0">
+    <thead>
+      <tr>
+        <th>Invocation ID</th>
+        <th>Task</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for inv in invocations %}
+      <tr>
+        <td>
+          <a
+            href="/invocations/{{ inv.invocation_id }}"
+            class="text-decoration-none"
+          >
+            <code class="clickable-code">{{ inv.short_id }}</code>
+          </a>
+        </td>
+        <td>
+          <a href="/tasks/{{ inv.task_id }}" class="text-decoration-none">
+            {{ inv.task_func }}
+          </a>
+        </td>
+        <td>
+          <a
+            href="/invocations/{{ inv.invocation_id }}"
+            class="btn btn-sm btn-outline-primary"
+          >
+            Details
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}

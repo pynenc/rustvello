@@ -1,0 +1,71 @@
+%% InvocationStatus Finite State Machine
+%% Source of truth: crates/rustvello-proto/src/status.rs — build_config()
+%%
+%% Colour legend
+%%   Green  (#22863a) — available_for_run  (Registered, Rerouted, Retry)
+%%   Purple (#6f42c1) — execution          (Running, Paused, Resumed)
+%%   Orange (#e36209) — recovery / kill    (PendingRecovery, RunningRecovery, Killed)
+%%   Blue   (#0366d6) — queued             (Pending, ConcurrencyControlled)
+%%   Red    (#cb2431) — terminal failure   (Failed, ConcurrencyControlledFinal)
+%%   Green  (#28a745) — terminal success   (Success)
+
+graph TD
+    Start(( )) -->|init| Registered
+
+    Registered -->|schedule| Pending
+    Registered -->|concurrency check| CC[ConcurrencyControlled]
+    Registered -->|limit reached| CCFinal[ConcurrencyControlledFinal]
+
+    CC -->|re-queue| Rerouted
+    Rerouted -->|schedule| Pending
+    Rerouted -->|still controlled| CC
+
+    Pending -->|run| Running
+    Pending -->|crash / OOM| Killed
+    Pending -->|cycle control| Failed
+    Pending -->|re-route| Rerouted
+    Pending -->|timeout| PR[PendingRecovery]
+
+    PR -->|re-queue| Rerouted
+
+    Running -->|complete| Success
+    Running -->|error| Failed
+    Running -->|crash / OOM| Killed
+    Running -->|retry| Retry
+    Running -->|suspend| Paused
+    Running -->|timeout| RR[RunningRecovery]
+
+    RR -->|re-queue| Rerouted
+
+    Paused -->|continue| Resumed
+    Paused -->|crash / OOM| Killed
+
+    Resumed -->|complete| Success
+    Resumed -->|error| Failed
+    Resumed -->|crash / OOM| Killed
+    Resumed -->|retry| Retry
+    Resumed -->|suspend| Paused
+
+    Killed -->|re-queue| Rerouted
+
+    Retry -->|schedule| Pending
+
+    Success --> End(( ))
+    Failed --> End
+    CCFinal --> End
+
+    classDef available fill:#22863a,color:#fff,stroke:#1a6e2e,stroke-width:2px
+    classDef execution fill:#6f42c1,color:#fff,stroke:#5a32a3,stroke-width:2px
+    classDef recovery fill:#e36209,color:#fff,stroke:#c55404,stroke-width:2px
+    classDef queue fill:#0366d6,color:#fff,stroke:#025ab5,stroke-width:2px
+    classDef termFail fill:#cb2431,color:#fff,stroke:#a91d28,stroke-width:2px
+    classDef termSuccess fill:#28a745,color:#fff,stroke:#1e7e34,stroke-width:2px
+    classDef point fill:#586069,color:#fff,stroke:#586069
+
+    class Registered,Rerouted,Retry available
+    class Running,Paused,Resumed execution
+    class PR,RR,Killed recovery
+    class Pending,CC queue
+    class Failed,CCFinal termFail
+    class Success termSuccess
+    class Start,End point

@@ -1,7 +1,47 @@
 # Changelog
 
-For detailed information on each version, please visit the [rustvello GitHub Releases page](https://github.com/pynenc/rustvello/releases).
+For detailed information on each version, please visit the [GitHub Releases page](https://github.com/pynenc/rustvello/releases).
 
-## Versions Under 0.0.7
+## 0.1.0 — 2026-04-05
 
-- Initial development, not functional yet
+Initial public release.
+
+### Crates
+
+- **rustvello-proto** — Data transfer objects and wire types
+- **rustvello-core** — Trait definitions for broker, orchestrator, state backend, runner
+- **rustvello-macros** — Derive macros for task registration
+- **rustvello-mem** — In-memory backend (testing / single-process)
+- **rustvello-sqlite** — SQLite-backed backend
+- **rustvello-postgres** — PostgreSQL-backed backend
+- **rustvello-redis** — Redis-backed backend
+- **rustvello-mongo** — MongoDB-backed backend (driver v3)
+- **rustvello-mongo3** — MongoDB-backed backend (driver v2 — legacy)
+- **rustvello-rabbitmq** — RabbitMQ broker
+- **rustvello-prometheus** — Prometheus metrics exporter
+- **rustvello** — Main crate: runners, middleware, scheduling
+- **rustvello-monitoring** — Web dashboard
+- **rustvello-cli** — Command-line interface
+- **rustvello-python** — PyO3 FFI bindings
+- **py-rustvello** — Python wheel (maturin / PyPI)
+
+### Highlights
+
+- All PyO3 wrappers (`PyMem*`, `PySqlite*`, `PyPostgres*`, `PyRedis*`,
+  `PyMongo*`, `PyMongo3*`) expose identical method signatures.
+- Native orchestrator mode is the default.
+- Per-backend extras in pynenc: `pynenc[mem]`, `pynenc[sqlite]`,
+  `pynenc[postgres]`, `pynenc[redis]`, `pynenc[mongo]`, `pynenc[rabbitmq]`,
+  `pynenc[all-backends]`.
+- 4× test parametrization across `py-mem`, `py-sqlite`, `rust-mem`, and
+  `rust-native` variants.
+- Error equivalence tests (41 parametrized hierarchy tests).
+- Integration test containers for PostgreSQL, Redis, MongoDB, and RabbitMQ.
+- Broker per-task and language APIs exposed via PyO3 for all backends.
+- Four runner implementations: `RayonRunner`, `PerInvocationTokioRunner`,
+  `PersistentTokioRunner`, `ProcessRunner`.
+- Trigger system: status, result, exception, event, and cron conditions.
+- Atomic service with crash-recovery loop.
+- Cross-language architecture support (Python ↔ Rust workers).
+- Monitoring dashboard with SVG timelines, family tree visualization, log explorer.
+- Zero clippy warnings, zero unsafe code.

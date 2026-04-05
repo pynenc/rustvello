@@ -1,0 +1,5 @@
+error: invalid concurrency value: `invalid_value`. Expected one of: "unlimited", "task", "argument", "none"
+ --> tests/compile_fail/invalid_concurrency.rs:1:33
+  |
+1 | #[rustvello::task(concurrency = "invalid_value")]
+  |                                 ^^^^^^^^^^^^^^^

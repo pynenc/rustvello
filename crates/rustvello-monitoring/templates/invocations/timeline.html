@@ -1,0 +1,953 @@
+{% extends "base.html" %}
+{% block title %}Timeline — Rustvello Monitor{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/timeline.css">
+<style>
+  #invocation-details-panel .detail-label { font-weight: 600; color: #495057; min-width: 110px; display: inline-block; }
+  #invocation-details-panel .detail-value { word-break: break-all; }
+  .timeline-filter-sidebar .form-label { font-size: 12px; margin-bottom: 2px; font-weight: 600; }
+  .timeline-filter-sidebar .form-select,
+  .timeline-filter-sidebar .form-control { font-size: 12px; padding: 4px 8px; }
+  .invocation-highlight { filter: brightness(1.3) drop-shadow(0 0 4px rgba(0,0,0,0.4)); }
+  .runner-highlight { filter: brightness(1.15); }
+  .ft-hover .ft-node:not(.ft-related) { opacity: 0.3; }
+  .ft-hover .ft-edge:not(.ft-related) { opacity: 0.15; }
+  .timeline-runner-info { font-size: 11px; }
+  .overlap-highlight { r: 7; stroke: #333; stroke-width: 2.5; filter: drop-shadow(0 0 6px rgba(0,0,0,0.5)); }
+  #overlap-tooltip {
+    position: fixed; display: none; z-index: 2000; pointer-events: none;
+    background: #fff; border: 1px solid #dee2e6; border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15); padding: 6px 10px;
+    font-size: 11px; line-height: 1.6; max-width: 320px;
+  }
+  #overlap-tooltip .ot-row { display: flex; align-items: center; gap: 6px; }
+  #overlap-tooltip .ot-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; border: 1px solid rgba(0,0,0,0.15); }
+  #overlap-tooltip .ot-status { font-weight: 600; }
+  #overlap-tooltip .ot-inv { font-size: 10px; color: #6c757d; font-family: monospace; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="h4 mb-0 text-primary">
+      <span class="material-icons align-middle me-2" style="font-size: 28px">timeline</span>
+      Invocation Timeline
+    </h2>
+    <a href="/invocations" class="btn btn-sm btn-outline-secondary">
+      <span class="material-icons align-middle" style="font-size: 16px">list_alt</span>
+      Back to List
+    </a>
+  </div>
+
+  <div class="row">
+    <!-- Filter Sidebar -->
+    <div class="col-md-2 timeline-filter-sidebar">
+      <div class="card pynmon-card">
+        <div class="card-header pynmon-card-header compact-header">Filters</div>
+        <div class="card-body pynmon-card-body">
+          <form method="get" action="/invocations/timeline" id="timeline-filter-form">
+            <div class="mb-2">
+              <label class="form-label" for="time_range">Time Range</label>
+              <select name="time_range" id="time_range" class="form-select">
+                <option value="1m" {% if current_filters.time_range == "1m" %}selected{% endif %}>1m</option>
+                <option value="5m" {% if current_filters.time_range == "5m" %}selected{% endif %}>5m</option>
+                <option value="15m" {% if current_filters.time_range == "15m" %}selected{% endif %}>15m</option>
+                <option value="1h" {% if current_filters.time_range == "1h" %}selected{% endif %}>1h</option>
+                <option value="3h" {% if current_filters.time_range == "3h" %}selected{% endif %}>3h</option>
+                <option value="12h" {% if current_filters.time_range == "12h" %}selected{% endif %}>12h</option>
+                <option value="1d" {% if current_filters.time_range == "1d" %}selected{% endif %}>1d</option>
+                <option value="3d" {% if current_filters.time_range == "3d" %}selected{% endif %}>3d</option>
+                <option value="1w" {% if current_filters.time_range == "1w" %}selected{% endif %}>1w</option>
+                <option value="custom" {% if current_filters.time_range == "custom" %}selected{% endif %}>custom</option>
+              </select>
+            </div>
+            <div class="mb-2" id="custom-date-fields" style="{% if current_filters.time_range != "custom" %}display:none{% endif %}">
+              <label class="form-label" for="start_date">Start</label>
+              <input type="datetime-local" name="start_date" id="start_date" class="form-control" step="0.001" value="{{ current_filters.start_date }}">
+              <label class="form-label mt-1" for="end_date">End</label>
+              <input type="datetime-local" name="end_date" id="end_date" class="form-control" step="0.001" value="{{ current_filters.end_date }}">
+            </div>
+            <div class="mb-2">
+              <label class="form-label" for="filter_task_id">Task ID</label>
+              <select name="task_id" id="filter_task_id" class="form-select">
+                <option value="">All Tasks</option>
+                {% for tid in all_task_ids %}
+                <option value="{{ tid }}" {% if *tid == current_filters.task_id %}selected{% endif %}>{{ tid }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="mb-2">
+              <label class="form-label" for="filter_limit">Limit</label>
+              <select name="limit" id="filter_limit" class="form-select">
+                <option value="100" {% if current_filters.limit == "100" %}selected{% endif %}>100</option>
+                <option value="500" {% if current_filters.limit == "500" %}selected{% endif %}>500</option>
+                <option value="1000" {% if current_filters.limit == "1000" %}selected{% endif %}>1000</option>
+                <option value="5000" {% if current_filters.limit == "5000" %}selected{% endif %}>5000</option>
+                <option value="20000" {% if current_filters.limit == "20000" %}selected{% endif %}>20000</option>
+                <option value="50000" {% if current_filters.limit == "50000" %}selected{% endif %}>50000</option>
+                <option value="" {% if current_filters.limit == "" %}selected{% endif %}>No limit</option>
+              </select>
+            </div>
+            <div class="mb-2">
+              <label class="form-label" for="filter_workflow_type">Workflow Type</label>
+              <select name="workflow_type" id="filter_workflow_type" class="form-select">
+                <option value="">All</option>
+                {% for wt in all_workflow_types %}
+                <option value="{{ wt }}" {% if *wt == current_filters.workflow_type %}selected{% endif %}>{{ wt }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="mb-2">
+              <label class="form-label" for="filter_workflow_id">Workflow ID</label>
+              <input type="text" name="workflow_id" id="filter_workflow_id" class="form-control" value="{{ current_filters.workflow_id }}" placeholder="Workflow ID">
+            </div>
+            <button type="submit" class="btn btn-sm btn-primary w-100 mt-1">
+              <span class="material-icons align-middle" style="font-size: 14px">filter_list</span>
+              Apply
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Time Info -->
+      <div class="card pynmon-card mt-2">
+        <div class="card-body pynmon-card-body" style="font-size: 11px">
+          <strong>Range:</strong><br>
+          {{ start_datetime }}<br>
+          &mdash; {{ end_datetime }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="col-md-10">
+      <div class="card pynmon-card">
+        <div class="card-header pynmon-card-header compact-header d-flex justify-content-between align-items-center">
+          <span>Timeline</span>
+          <span class="text-muted" style="font-size: 11px" id="hover-info"></span>
+        </div>
+        <div class="card-body pynmon-card-body p-2">
+          <div id="timeline-container" class="timeline-svg-container" style="overflow-x: auto; overflow-y: auto; width: 100%">
+            {{ svg_content|safe }}
+          </div>
+        </div>
+      </div>
+
+      <!-- Invocation Details Panel -->
+      <div id="invocation-details-panel" class="card pynmon-card mt-3 d-none">
+        <div class="card-header pynmon-card-header compact-header d-flex justify-content-between align-items-center">
+          <span>
+            <span class="material-icons align-middle me-1" style="font-size: 18px">info</span>
+            Invocation Details
+          </span>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-info" id="panel-zoom-btn" title="Zoom to this invocation's time range">
+              <span class="material-icons align-middle" style="font-size: 14px">zoom_in</span>
+              Zoom to Invocation
+            </button>
+            <button class="btn btn-sm btn-outline-success" id="panel-tree-btn" title="Show family tree">
+              <span class="material-icons align-middle" style="font-size: 14px">account_tree</span>
+              Family Tree
+            </button>
+            <a href="#" id="panel-view-detail" class="btn btn-sm btn-outline-primary" target="_blank">
+              <span class="material-icons align-middle" style="font-size: 14px">open_in_new</span>
+              View Full Details
+            </a>
+            <button class="btn btn-sm btn-outline-secondary" id="panel-close-btn">
+              <span class="material-icons align-middle" style="font-size: 14px">close</span>
+            </button>
+          </div>
+        </div>
+        <div class="card-body pynmon-card-body" id="panel-body">
+          <p class="text-muted">Click an invocation in the timeline to see details.</p>
+        </div>
+      </div>
+
+      <!-- Family Tree Panel (inline, below details) -->
+      <div id="family-tree-panel" class="card pynmon-card mt-3" style="display:none;overflow:hidden;">
+        <div id="ft-header" class="card-header pynmon-card-header compact-header d-flex justify-content-between align-items-center" style="cursor:default;user-select:none;">
+          <span style="font-size:13px;font-weight:600;color:#495057;white-space:nowrap;">
+            <span class="material-icons align-middle me-1" style="font-size:16px">account_tree</span>
+            Family Tree
+          </span>
+          <span style="display:inline-flex;align-items:center;gap:4px;">
+            <button id="ft-zoom-out" class="btn btn-sm btn-outline-secondary" style="padding:0 5px;line-height:1.3;font-size:13px" title="Zoom out">&minus;</button>
+            <span id="ft-zoom-label" style="font-size:11px;color:#6c757d;min-width:36px;text-align:center">100%</span>
+            <button id="ft-zoom-in" class="btn btn-sm btn-outline-secondary" style="padding:0 5px;line-height:1.3;font-size:13px" title="Zoom in">&plus;</button>
+            <button id="ft-float-btn" class="btn btn-sm btn-outline-secondary" style="padding:0 6px;line-height:1.4;font-size:14px" title="Toggle floating window">
+              <span class="material-icons align-middle" style="font-size:14px">open_in_new</span>
+            </button>
+            <button id="ft-collapse-btn" class="btn btn-sm btn-outline-secondary" style="padding:0 6px;line-height:1.4;font-size:14px" title="Collapse / Expand">&#x2015;</button>
+            <button id="ft-close-btn" class="btn btn-sm btn-outline-secondary" style="padding:0 6px;line-height:1.4;font-size:14px" title="Close">&times;</button>
+          </span>
+        </div>
+        <div id="ft-body" class="card-body pynmon-card-body" style="overflow:auto;padding:0;max-height:60vh;">
+          <span class="text-muted" style="font-size:12px;padding:8px;display:inline-block">Loading family tree&hellip;</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="overlap-tooltip"></div>
+
+<script>
+(function() {
+  // --- Current invocation tracked for zoom + URL persistence ---
+  var currentInvId = null;
+  var currentHistory = null;
+
+  // --- Filter form: show/hide custom date fields ---
+  var timeRangeSelect = document.getElementById('time_range');
+  var customFields = document.getElementById('custom-date-fields');
+  if (timeRangeSelect) {
+    timeRangeSelect.addEventListener('change', function() {
+      customFields.style.display = this.value === 'custom' ? '' : 'none';
+    });
+  }
+
+  // --- Status class mapping ---
+  function getStatusClass(status) {
+    var map = {
+      'Registered': 'bg-secondary',
+      'Pending': 'bg-warning text-dark', 'PendingRecovery': 'bg-warning text-dark',
+      'Running': 'bg-info', 'RunningRecovery': 'bg-info',
+      'Success': 'bg-success', 'Failed': 'bg-danger', 'Killed': 'bg-danger',
+      'Paused': 'bg-primary', 'Resumed': 'bg-info',
+      'Retry': 'bg-secondary', 'Rerouted': 'bg-info',
+      'ConcurrencyControlled': 'bg-warning', 'ConcurrencyControlledFinal': 'bg-warning'
+    };
+    return map[status] || 'bg-secondary';
+  }
+
+  function formatUTCDate(isoStr) {
+    if (!isoStr) return '—';
+    try {
+      var d = new Date(isoStr);
+      var ms = d.getUTCMilliseconds().toString().padStart(3, '0');
+      return d.toISOString().replace('T', ' ').substring(0, 19) + '.' + ms + ' UTC';
+    } catch(e) { return isoStr; }
+  }
+
+  function calculateDuration(history) {
+    if (!history || history.length < 2) return 'N/A';
+    var ms = new Date(history[history.length - 1].timestamp) - new Date(history[0].timestamp);
+    if (ms < 1000) return ms + 'ms';
+    if (ms < 60000) return (ms / 1000).toFixed(2) + 's';
+    if (ms < 3600000) return Math.floor(ms / 60000) + 'm ' + Math.floor((ms % 60000) / 1000) + 's';
+    return Math.floor(ms / 3600000) + 'h ' + Math.floor((ms % 3600000) / 60000) + 'm';
+  }
+
+  // --- Cross-highlight helpers ---
+  function highlightInvocation(invId, on) {
+    if (on === undefined) on = true;
+    // Timeline SVG
+    var container = document.getElementById('timeline-container');
+    if (container) {
+      container.querySelectorAll('[data-invocation-id="' + invId + '"]').forEach(function(el) {
+        if (on) el.classList.add('invocation-highlight');
+        else el.classList.remove('invocation-highlight');
+      });
+    }
+    // Family tree
+    var ftBody = document.getElementById('ft-body');
+    if (ftBody) {
+      ftBody.querySelectorAll('.ft-node[data-inv-id="' + invId + '"] rect').forEach(function(el) {
+        if (on) el.classList.add('invocation-highlight');
+        else el.classList.remove('invocation-highlight');
+      });
+      ftBody.querySelectorAll('.ft-node[data-inv-id="' + invId + '"] text').forEach(function(el) {
+        if (on) el.classList.add('invocation-highlight');
+        else el.classList.remove('invocation-highlight');
+      });
+    }
+  }
+  function unhighlightInvocation(invId) { highlightInvocation(invId, false); }
+
+  function highlightRunner(runnerId, on) {
+    if (on === undefined) on = true;
+    var container = document.getElementById('timeline-container');
+    if (!container) return;
+    container.querySelectorAll('[data-runner-id="' + runnerId + '"]').forEach(function(el) {
+      if (on) el.classList.add('runner-highlight');
+      else el.classList.remove('runner-highlight');
+    });
+  }
+  function unhighlightRunner(runnerId) { highlightRunner(runnerId, false); }
+
+  // Make these available globally for family tree panel
+  window.highlightInvocation = highlightInvocation;
+  window.unhighlightInvocation = unhighlightInvocation;
+  window.currentInvocationId = null;
+
+  // --- Overlap detection helpers ---
+  var overlapTooltip = document.getElementById('overlap-tooltip');
+  var overlapHighlighted = [];
+  var OVERLAP_RADIUS = 8; // px threshold to consider dots as overlapping
+
+  function findNearbyCircles(target) {
+    if (target.tagName !== 'circle') return [target];
+    var svg = target.ownerSVGElement;
+    if (!svg) return [target];
+    var cx = parseFloat(target.getAttribute('cx'));
+    var cy = parseFloat(target.getAttribute('cy'));
+    var circles = svg.querySelectorAll('circle[data-invocation-id]');
+    var nearby = [];
+    for (var i = 0; i < circles.length; i++) {
+      var c = circles[i];
+      var dx = parseFloat(c.getAttribute('cx')) - cx;
+      var dy = parseFloat(c.getAttribute('cy')) - cy;
+      if (Math.sqrt(dx * dx + dy * dy) <= OVERLAP_RADIUS) nearby.push(c);
+    }
+    return nearby;
+  }
+
+  function showOverlapTooltip(circles, mouseX, mouseY) {
+    if (!overlapTooltip || circles.length < 2) {
+      hideOverlapTooltip();
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < circles.length; i++) {
+      var c = circles[i];
+      var status = c.getAttribute('data-status') || '?';
+      var color = c.getAttribute('fill') || '#6c757d';
+      var invId = c.getAttribute('data-invocation-id') || '';
+      var taskKey = c.getAttribute('data-task-key') || '';
+      html += '<div class="ot-row">';
+      html += '<span class="ot-dot" style="background:' + color + '"></span>';
+      html += '<span class="ot-status">' + status + '</span>';
+      if (invId) html += '<span class="ot-inv">' + invId.substring(0, 8) + '</span>';
+      if (taskKey) html += '<span style="font-size:10px;color:#495057">' + taskKey + '</span>';
+      html += '</div>';
+    }
+    overlapTooltip.innerHTML = html;
+    overlapTooltip.style.display = 'block';
+    // Position near cursor, offset to avoid being under mouse
+    var tipW = overlapTooltip.offsetWidth;
+    var tipH = overlapTooltip.offsetHeight;
+    var left = mouseX + 14;
+    var top = mouseY - tipH / 2;
+    // Keep within viewport
+    if (left + tipW > window.innerWidth - 8) left = mouseX - tipW - 14;
+    if (top < 4) top = 4;
+    if (top + tipH > window.innerHeight - 4) top = window.innerHeight - tipH - 4;
+    overlapTooltip.style.left = left + 'px';
+    overlapTooltip.style.top = top + 'px';
+  }
+
+  function hideOverlapTooltip() {
+    if (overlapTooltip) overlapTooltip.style.display = 'none';
+  }
+
+  function clearOverlapHighlights() {
+    for (var i = 0; i < overlapHighlighted.length; i++) {
+      overlapHighlighted[i].classList.remove('overlap-highlight');
+    }
+    overlapHighlighted = [];
+  }
+
+  // --- SVG interaction: hover + click ---
+  var container = document.getElementById('timeline-container');
+  var hoverInfo = document.getElementById('hover-info');
+
+  if (container) {
+    container.addEventListener('mouseover', function(e) {
+      var el = e.target.closest('[data-invocation-id]');
+      if (el) {
+        var invId = el.getAttribute('data-invocation-id');
+        highlightInvocation(invId);
+        if (hoverInfo) hoverInfo.textContent = 'Invocation: ' + invId.substring(0, 12) + '...';
+
+        // Overlap detection for circle elements
+        if (el.tagName === 'circle') {
+          clearOverlapHighlights();
+          var nearby = findNearbyCircles(el);
+          if (nearby.length > 1) {
+            for (var i = 0; i < nearby.length; i++) {
+              nearby[i].classList.add('overlap-highlight');
+              var nInvId = nearby[i].getAttribute('data-invocation-id');
+              if (nInvId !== invId) highlightInvocation(nInvId);
+            }
+            overlapHighlighted = nearby;
+            showOverlapTooltip(nearby, e.clientX, e.clientY);
+          }
+        }
+      }
+      var runnerEl = e.target.closest('.runner-label[data-runner-id]');
+      if (runnerEl) highlightRunner(runnerEl.getAttribute('data-runner-id'));
+    });
+    container.addEventListener('mouseout', function(e) {
+      var el = e.target.closest('[data-invocation-id]');
+      if (el) {
+        var invId = el.getAttribute('data-invocation-id');
+        // Don't un-highlight the currently selected invocation
+        if (invId !== currentInvId) unhighlightInvocation(invId);
+        // Clear overlap highlights for non-selected invocations
+        for (var i = 0; i < overlapHighlighted.length; i++) {
+          var nInvId = overlapHighlighted[i].getAttribute('data-invocation-id');
+          if (nInvId !== currentInvId && nInvId !== invId) unhighlightInvocation(nInvId);
+        }
+        clearOverlapHighlights();
+        hideOverlapTooltip();
+      }
+      var runnerEl = e.target.closest('.runner-label[data-runner-id]');
+      if (runnerEl) unhighlightRunner(runnerEl.getAttribute('data-runner-id'));
+      if (hoverInfo && !e.target.closest('[data-invocation-id]')) hoverInfo.textContent = '';
+    });
+    container.addEventListener('click', function(e) {
+      var el = e.target.closest('rect[data-invocation-id], circle[data-invocation-id]');
+      if (el) loadInvocationDetails(el.getAttribute('data-invocation-id'));
+    });
+  }
+
+  // --- Runner context hover in detail panel → highlight SVG lane ---
+  document.addEventListener('mouseover', function(e) {
+    var ri = e.target.closest('.timeline-runner-info[data-runner-id]');
+    if (ri) highlightRunner(ri.getAttribute('data-runner-id'));
+  });
+  document.addEventListener('mouseout', function(e) {
+    var ri = e.target.closest('.timeline-runner-info[data-runner-id]');
+    if (ri) unhighlightRunner(ri.getAttribute('data-runner-id'));
+  });
+
+  // --- Details panel ---
+  var panel = document.getElementById('invocation-details-panel');
+  var panelBody = document.getElementById('panel-body');
+  var panelLink = document.getElementById('panel-view-detail');
+  var panelCloseBtn = document.getElementById('panel-close-btn');
+  var panelZoomBtn = document.getElementById('panel-zoom-btn');
+  var panelTreeBtn = document.getElementById('panel-tree-btn');
+
+  if (panelCloseBtn) {
+    panelCloseBtn.addEventListener('click', function() {
+      if (currentInvId) unhighlightInvocation(currentInvId);
+      panel.classList.add('d-none');
+      currentInvId = null;
+      currentHistory = null;
+      window.currentInvocationId = null;
+    });
+  }
+
+  // --- Zoom to Invocation ---
+  if (panelZoomBtn) {
+    panelZoomBtn.addEventListener('click', function() {
+      if (!currentHistory || currentHistory.length === 0) return;
+      var times = currentHistory.map(function(h) { return new Date(h.timestamp).getTime(); });
+      var minT = Math.min.apply(null, times);
+      var maxT = Math.max.apply(null, times);
+      var span = maxT - minT;
+      if (span < 1) span = 1;
+      var padding = Math.max(span * 0.5, 100);
+      var startDt = new Date(minT - padding);
+      var endDt = new Date(maxT + padding);
+      function toLocalInput(d) {
+        return d.getUTCFullYear() + '-' +
+          String(d.getUTCMonth()+1).padStart(2,'0') + '-' +
+          String(d.getUTCDate()).padStart(2,'0') + 'T' +
+          String(d.getUTCHours()).padStart(2,'0') + ':' +
+          String(d.getUTCMinutes()).padStart(2,'0') + ':' +
+          String(d.getUTCSeconds()).padStart(2,'0') + '.' +
+          String(d.getUTCMilliseconds()).padStart(3,'0');
+      }
+      var params = new URLSearchParams(window.location.search);
+      params.set('time_range', 'custom');
+      params.set('start_date', toLocalInput(startDt));
+      params.set('end_date', toLocalInput(endDt));
+      if (currentInvId) params.set('selected', currentInvId);
+      window.location.href = '/invocations/timeline?' + params.toString();
+    });
+  }
+
+  // --- Family Tree Panel: inline + float toggle + zoom ---
+  (function() {
+    var ftPanel = document.getElementById('family-tree-panel');
+    var ftHeader = document.getElementById('ft-header');
+    var ftBody = document.getElementById('ft-body');
+    var ftCloseBtn = document.getElementById('ft-close-btn');
+    var ftCollapseBtn = document.getElementById('ft-collapse-btn');
+    var ftFloatBtn = document.getElementById('ft-float-btn');
+    var ftZoomIn = document.getElementById('ft-zoom-in');
+    var ftZoomOut = document.getElementById('ft-zoom-out');
+    var ftZoomLbl = document.getElementById('ft-zoom-label');
+    if (!ftPanel || !ftHeader) return;
+
+    var zoomLevel = 100;
+    var naturalW = 0, naturalH = 0;
+    var ZOOM_STEP = 15, ZOOM_MIN = 25, ZOOM_MAX = 200;
+    var ftCollapsed = false;
+    var isFloating = false;
+    var dragging = false, dx = 0, dy = 0;
+    var resizing = false, resizeDir = '', startX = 0, startY = 0, startRect = {};
+
+    function applyZoom() {
+      var svg = ftBody.querySelector('svg');
+      if (!svg) return;
+      if (!naturalW) {
+        var vb = svg.getAttribute('viewBox');
+        if (vb) {
+          var p = vb.split(/[\s,]+/).map(Number);
+          naturalW = p[2]; naturalH = p[3];
+        } else {
+          naturalW = parseFloat(svg.getAttribute('width')) || 300;
+          naturalH = parseFloat(svg.getAttribute('height')) || 200;
+        }
+      }
+      var scale = zoomLevel / 100;
+      svg.setAttribute('width', Math.round(naturalW * scale));
+      svg.setAttribute('height', Math.round(naturalH * scale));
+      svg.style.transform = '';
+      ftZoomLbl.textContent = zoomLevel + '%';
+    }
+
+    function changeZoom(delta) {
+      zoomLevel = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomLevel + delta));
+      applyZoom();
+    }
+
+    if (ftZoomIn) ftZoomIn.addEventListener('click', function() { changeZoom(ZOOM_STEP); });
+    if (ftZoomOut) ftZoomOut.addEventListener('click', function() { changeZoom(-ZOOM_STEP); });
+
+    // Double-click to zoom toward cursor
+    ftBody.addEventListener('dblclick', function(e) {
+      e.preventDefault();
+      var oldZoom = zoomLevel;
+      zoomLevel = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomLevel + ZOOM_STEP));
+      if (zoomLevel === oldZoom) return;
+      var br = ftBody.getBoundingClientRect();
+      var curX = e.clientX - br.left + ftBody.scrollLeft;
+      var curY = e.clientY - br.top + ftBody.scrollTop;
+      applyZoom();
+      var ratio = zoomLevel / oldZoom;
+      ftBody.scrollLeft = curX * ratio - (e.clientX - br.left);
+      ftBody.scrollTop = curY * ratio - (e.clientY - br.top);
+    });
+
+    // Ctrl/Meta + mouse wheel to zoom
+    ftBody.addEventListener('wheel', function(e) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      var oldZoom = zoomLevel;
+      var delta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+      zoomLevel = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomLevel + delta));
+      if (zoomLevel === oldZoom) return;
+      var br = ftBody.getBoundingClientRect();
+      var curX = e.clientX - br.left + ftBody.scrollLeft;
+      var curY = e.clientY - br.top + ftBody.scrollTop;
+      applyZoom();
+      var ratio = zoomLevel / oldZoom;
+      ftBody.scrollLeft = curX * ratio - (e.clientX - br.left);
+      ftBody.scrollTop = curY * ratio - (e.clientY - br.top);
+    }, { passive: false });
+
+    // Re-apply zoom when body content changes
+    var obs = new MutationObserver(function() {
+      naturalW = 0; naturalH = 0;
+      setTimeout(applyZoom, 30);
+    });
+    obs.observe(ftBody, { childList: true, subtree: true });
+
+    // Close
+    if (ftCloseBtn) ftCloseBtn.addEventListener('click', function() {
+      ftPanel.style.display = 'none';
+      if (isFloating) toggleFloat();
+    });
+
+    // Collapse / Expand
+    if (ftCollapseBtn) {
+      ftCollapseBtn.addEventListener('click', function() {
+        ftCollapsed = !ftCollapsed;
+        ftBody.style.display = ftCollapsed ? 'none' : '';
+        ftCollapseBtn.innerHTML = ftCollapsed ? '&#x25A1;' : '&#x2015;';
+      });
+    }
+
+    // --- Float / Dock toggle ---
+    function toggleFloat() {
+      isFloating = !isFloating;
+      if (isFloating) {
+        // Switch to floating
+        ftPanel.style.position = 'fixed';
+        ftPanel.style.bottom = '20px';
+        ftPanel.style.right = '20px';
+        ftPanel.style.left = 'auto';
+        ftPanel.style.top = 'auto';
+        ftPanel.style.width = '55vw';
+        ftPanel.style.zIndex = '1050';
+        ftPanel.style.boxShadow = '0 4px 24px rgba(0,0,0,0.18)';
+        ftPanel.style.minWidth = '400px';
+        ftPanel.style.maxHeight = '70vh';
+        ftPanel.classList.remove('card', 'pynmon-card', 'mt-3');
+        ftPanel.style.borderRadius = '8px';
+        ftPanel.style.background = '#fff';
+        ftPanel.style.border = '1px solid #dee2e6';
+        ftHeader.style.cursor = 'move';
+        ftFloatBtn.querySelector('.material-icons').textContent = 'picture_in_picture_alt';
+        ftFloatBtn.title = 'Dock inline';
+      } else {
+        // Switch to inline
+        ftPanel.style.position = '';
+        ftPanel.style.bottom = '';
+        ftPanel.style.right = '';
+        ftPanel.style.left = '';
+        ftPanel.style.top = '';
+        ftPanel.style.width = '';
+        ftPanel.style.zIndex = '';
+        ftPanel.style.boxShadow = '';
+        ftPanel.style.minWidth = '';
+        ftPanel.style.maxHeight = '';
+        ftPanel.style.borderRadius = '';
+        ftPanel.style.background = '';
+        ftPanel.style.border = '';
+        ftPanel.classList.add('card', 'pynmon-card', 'mt-3');
+        ftBody.style.maxHeight = '60vh';
+        ftHeader.style.cursor = 'default';
+        ftFloatBtn.querySelector('.material-icons').textContent = 'open_in_new';
+        ftFloatBtn.title = 'Toggle floating window';
+      }
+    }
+    if (ftFloatBtn) ftFloatBtn.addEventListener('click', toggleFloat);
+
+    // Drag (only when floating)
+    ftHeader.addEventListener('mousedown', function(e) {
+      if (!isFloating || e.target.closest('button')) return;
+      dragging = true;
+      var r = ftPanel.getBoundingClientRect();
+      dx = e.clientX - r.left;
+      dy = e.clientY - r.top;
+      ftPanel.style.left = r.left + 'px';
+      ftPanel.style.top = r.top + 'px';
+      ftPanel.style.right = 'auto';
+      ftPanel.style.bottom = 'auto';
+      ftPanel.style.transition = 'none';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function(e) {
+      if (!dragging) return;
+      ftPanel.style.left = (e.clientX - dx) + 'px';
+      ftPanel.style.top = (e.clientY - dy) + 'px';
+    });
+    document.addEventListener('mouseup', function() {
+      if (dragging) { dragging = false; document.body.style.userSelect = ''; }
+    });
+
+    // Touch drag (only when floating)
+    ftHeader.addEventListener('touchstart', function(e) {
+      if (!isFloating || e.target.closest('button')) return;
+      var t = e.touches[0];
+      dragging = true;
+      var r = ftPanel.getBoundingClientRect();
+      dx = t.clientX - r.left;
+      dy = t.clientY - r.top;
+      ftPanel.style.left = r.left + 'px';
+      ftPanel.style.top = r.top + 'px';
+      ftPanel.style.right = 'auto';
+      ftPanel.style.bottom = 'auto';
+    }, { passive: true });
+    document.addEventListener('touchmove', function(e) {
+      if (!dragging) return;
+      var t = e.touches[0];
+      ftPanel.style.left = (t.clientX - dx) + 'px';
+      ftPanel.style.top = (t.clientY - dy) + 'px';
+    }, { passive: true });
+    document.addEventListener('touchend', function() { dragging = false; });
+
+    // Family tree hover: cross-highlight
+    function initFtHover(root) {
+      var group = root.querySelector('#ft-group');
+      if (!group) return;
+      root.querySelectorAll('.ft-node').forEach(function(node) {
+        node.addEventListener('mouseenter', function() {
+          var id = node.getAttribute('data-inv-id');
+          if (!id) return;
+          group.classList.add('ft-hover');
+          node.classList.add('ft-related');
+          group.querySelectorAll('.ft-edge').forEach(function(edge) {
+            if (edge.getAttribute('data-parent-id') === id || edge.getAttribute('data-child-id') === id) {
+              edge.classList.add('ft-related');
+              var otherId = edge.getAttribute('data-parent-id') === id
+                ? edge.getAttribute('data-child-id')
+                : edge.getAttribute('data-parent-id');
+              var other = group.querySelector('.ft-node[data-inv-id="' + otherId + '"]');
+              if (other) other.classList.add('ft-related');
+            }
+          });
+          highlightInvocation(id);
+        });
+        node.addEventListener('mouseleave', function() {
+          group.classList.remove('ft-hover');
+          group.querySelectorAll('.ft-related').forEach(function(el) { el.classList.remove('ft-related'); });
+          var id = node.getAttribute('data-inv-id');
+          if (id && id !== currentInvId) unhighlightInvocation(id);
+        });
+      });
+    }
+
+    // --- Client-side focus toggling for family tree nodes ---
+    function setFtFocus(newInvId) {
+      var ftSvg = ftBody.querySelector('#ft-svg') || ftBody.querySelector('svg');
+      if (!ftSvg) return;
+      // Remove focus from old node
+      var oldFocus = ftSvg.querySelector('.ft-node.ft-focus');
+      if (oldFocus) {
+        oldFocus.classList.remove('ft-focus');
+        var tint = oldFocus.getAttribute('data-status-tint') || '#ffffff';
+        var bg = oldFocus.querySelector('.ft-bg');
+        if (bg) {
+          bg.setAttribute('fill', tint);
+          bg.setAttribute('stroke', '#dee2e6');
+          bg.setAttribute('stroke-width', '1');
+        }
+        oldFocus.querySelectorAll('.ft-txt-pri').forEach(function(t) { t.setAttribute('fill', '#212529'); });
+        oldFocus.querySelectorAll('.ft-txt-sec').forEach(function(t) { t.setAttribute('fill', '#495057'); });
+        oldFocus.querySelectorAll('.ft-txt-mut').forEach(function(t) { t.setAttribute('fill', '#6c757d'); });
+        var ring = oldFocus.querySelector('.ft-focus-ring');
+        if (ring) ring.setAttribute('display', 'none');
+      }
+      // Apply focus to new node
+      if (!newInvId) return;
+      var newNode = ftSvg.querySelector('.ft-node[data-inv-id="' + newInvId + '"]');
+      if (!newNode) return;
+      newNode.classList.add('ft-focus');
+      var color = newNode.getAttribute('data-status-color') || '#6c757d';
+      var bg = newNode.querySelector('.ft-bg');
+      if (bg) {
+        bg.setAttribute('fill', color);
+        bg.setAttribute('stroke', '#212529');
+        bg.setAttribute('stroke-width', '3');
+      }
+      newNode.querySelectorAll('.ft-txt-pri').forEach(function(t) { t.setAttribute('fill', '#ffffff'); });
+      newNode.querySelectorAll('.ft-txt-sec').forEach(function(t) { t.setAttribute('fill', 'rgba(255,255,255,0.85)'); });
+      newNode.querySelectorAll('.ft-txt-mut').forEach(function(t) { t.setAttribute('fill', 'rgba(255,255,255,0.7)'); });
+      var ring = newNode.querySelector('.ft-focus-ring');
+      if (ring) {
+        ring.setAttribute('stroke', color);
+        ring.removeAttribute('display');
+      }
+    }
+
+    // Family tree click: load details for clicked node + update focus
+    ftBody.addEventListener('click', function(e) {
+      var link = e.target.closest('a.ft-node, .ft-node[data-inv-id]');
+      if (!link) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      var invId = link.getAttribute('data-inv-id');
+      if (invId) {
+        setFtFocus(invId);
+        loadInvocationDetails(invId, { skipTree: true });
+      }
+    });
+
+    // Family tree hover: cross-highlight when hovering tree nodes
+    ftBody.addEventListener('mouseover', function(e) {
+      var node = e.target.closest('[data-inv-id]');
+      if (node) highlightInvocation(node.getAttribute('data-inv-id'));
+    });
+    ftBody.addEventListener('mouseout', function(e) {
+      var node = e.target.closest('[data-inv-id]');
+      if (!node) return;
+      var id = node.getAttribute('data-inv-id');
+      if (id !== currentInvId) unhighlightInvocation(id);
+    });
+
+    // Load family tree
+    window._ftLoadTree = function(focusId) {
+      ftPanel.style.display = 'block';
+      ftBody.innerHTML = '<span class="text-muted" style="font-size:12px;padding:8px;display:inline-block">Loading hierarchy&hellip;</span>';
+      fetch('/invocations/' + encodeURIComponent(focusId) + '/family-tree')
+        .then(function(r) { return r.ok ? r.text() : ''; })
+        .then(function(svg) {
+          ftBody.innerHTML = svg;
+          naturalW = 0; naturalH = 0;
+          applyZoom();
+          var ftSvg = ftBody.querySelector('#ft-svg') || ftBody.querySelector('svg');
+          if (ftSvg) initFtHover(ftSvg);
+        })
+        .catch(function(err) {
+          ftBody.innerHTML = '<p class="text-danger" style="font-size:12px;padding:8px">Failed: ' + err.message + '</p>';
+        });
+    };
+  })();
+
+  // --- Open family tree from details panel ---
+  if (panelTreeBtn) {
+    panelTreeBtn.addEventListener('click', function() {
+      if (!currentInvId) return;
+      if (typeof window._ftLoadTree === 'function') window._ftLoadTree(currentInvId);
+    });
+  }
+
+  // --- Load invocation details ---
+  function loadInvocationDetails(invId, opts) {
+    opts = opts || {};
+    // Un-highlight previously selected invocation
+    if (currentInvId) unhighlightInvocation(currentInvId);
+    currentInvId = invId;
+    window.currentInvocationId = invId;
+    panel.classList.remove('d-none');
+    panelBody.innerHTML = '<p class="text-muted">Loading...</p>';
+    panelLink.href = '/invocations/' + encodeURIComponent(invId);
+
+    // Highlight the selected invocation
+    highlightInvocation(invId);
+
+    // Load family tree (unless skipTree)
+    if (!opts.skipTree && typeof window._ftLoadTree === 'function') {
+      window._ftLoadTree(invId);
+    }
+
+    Promise.all([
+      fetch('/invocations/' + encodeURIComponent(invId) + '/api').then(function(r) { return r.json(); }),
+      fetch('/invocations/' + encodeURIComponent(invId) + '/history').then(function(r) { return r.json(); })
+    ]).then(function(results) {
+      var apiData = results[0];
+      var historyData = results[1];
+      currentHistory = historyData;
+      renderDetailsPanel(invId, apiData, historyData);
+    }).catch(function(err) {
+      panelBody.innerHTML = '<p class="text-danger">Failed to load details: ' + err.message + '</p>';
+    });
+  }
+  // Make globally available for family tree click handler
+  window.loadInvocationDetails = loadInvocationDetails;
+
+  function buildRunnerHtml(h) {
+    if (!h.runner_id) return '<span class="text-muted">—</span>';
+    var rid = h.runner_id || '';
+    var info = h.runner_info;
+    var html = '<div data-runner-id="' + rid + '" style="font-size:11px;line-height:1.6">';
+    if (info) {
+      html += '<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">';
+      html += '<a href="/runners/' + encodeURIComponent(rid) + '" class="text-decoration-none" title="View runner">';
+      html += '<span class="badge bg-secondary" style="font-size:9px">' + (info.runner_cls || 'Runner') + '</span>';
+      html += '</a>';
+      html += '<a href="/runners/' + encodeURIComponent(rid) + '" class="text-decoration-none" title="View worker"><code style="font-size:9px;background:#e9ecef;padding:1px 4px;border-radius:3px;color:#0d6efd;cursor:pointer">' + rid.substring(0, 8) + '</code></a>';
+      html += '<span style="font-size:10px;color:#495057">' + (info.hostname || '?') + '</span>';
+      html += '<code style="font-size:9px;background:#e9ecef;padding:1px 4px;border-radius:3px;color:#495057">pid:' + (info.pid || '?') + '</code>';
+      if (info.thread_id) {
+        html += '<code style="font-size:9px;background:#e9ecef;padding:1px 4px;border-radius:3px;color:#495057">t:' + info.thread_id + '</code>';
+      }
+      html += '</div>';
+      if (info.parent_runner_cls) {
+        html += '<div style="font-size:10px;color:#6c757d;margin-top:2px;padding-left:2px">';
+        html += '<span class="material-icons" style="font-size:12px;vertical-align:middle">subdirectory_arrow_right</span> ';
+        html += '<span class="badge bg-outline-secondary" style="font-size:8px;border:1px solid #adb5bd;color:#6c757d;background:transparent">' + info.parent_runner_cls + '</span>';
+        if (info.parent_runner_id) {
+          html += ' <a href="/runners/' + encodeURIComponent(info.parent_runner_id) + '" class="text-decoration-none" style="font-size:9px;color:#0d6efd">' + info.parent_runner_id.substring(0, 8) + '</a>';
+        }
+        html += '</div>';
+      }
+    } else {
+      html += '<a href="/runners/' + encodeURIComponent(rid) + '" class="text-decoration-none">';
+      html += '<code style="font-size:10px;background:#e9ecef;padding:2px 5px;border-radius:3px;color:#0d6efd">' + rid.substring(0, 8) + '</code>';
+      html += '</a>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderDetailsPanel(invId, api, history) {
+    var status = api.status || '—';
+    var statusClass = getStatusClass(status);
+    var taskId = api.task_id || '—';
+    var callId = api.call_id || '—';
+    var parentId = api.parent_invocation_id || null;
+    var retries = history.filter(function(h) { return h.status === 'Retry'; }).length;
+
+    var html = '<div class="row">';
+
+    // Summary column
+    html += '<div class="col-md-6">';
+    html += '<table class="table table-sm" style="font-size: 12px"><tbody>';
+    html += '<tr><td class="detail-label">Invocation ID</td><td class="detail-value"><code style="font-size:10px">' + invId + '</code></td></tr>';
+    html += '<tr><td class="detail-label">Status</td><td><span class="badge ' + statusClass + '">' + status + '</span></td></tr>';
+    // Task — clickable link with language badge
+    html += '<tr><td class="detail-label">Task</td><td>';
+    if (api.task_language) {
+      html += '<span class="badge bg-info" style="font-size:8px;margin-right:3px">' + api.task_language + '</span>';
+    }
+    html += '<a href="/tasks/' + encodeURIComponent(taskId) + '" class="text-decoration-none"><code style="font-size:11px">' + taskId + '</code></a></td></tr>';
+    html += '<tr><td class="detail-label">Call ID</td><td><code style="font-size:10px">' + callId + '</code></td></tr>';
+    html += '<tr><td class="detail-label">Retries</td><td>' + retries + '</td></tr>';
+    // Parent invocation — clickable with hover highlight
+    if (parentId) {
+      html += '<tr><td class="detail-label">Parent</td><td>';
+      html += '<a href="javascript:void(0)" class="parent-inv-link text-decoration-none" data-inv-id="' + parentId + '"';
+      html += ' onmouseenter="highlightInvocation(\'' + parentId + '\')"';
+      html += ' onmouseleave="unhighlightInvocation(\'' + parentId + '\')"';
+      html += '><code style="font-size:10px;color:#0d6efd">' + parentId + '</code></a>';
+      html += '</td></tr>';
+    }
+    // Duration
+    html += '<tr><td class="detail-label">Duration</td><td>' + calculateDuration(history) + '</td></tr>';
+    // Workflow — clickable links
+    if (api.workflow) {
+      var wf = api.workflow;
+      html += '<tr><td class="detail-label">Workflow</td><td>';
+      html += '<a href="/workflows/' + encodeURIComponent(wf.workflow_type) + '" class="text-decoration-none">';
+      html += '<span class="badge bg-primary" style="font-size:9px">' + wf.workflow_type + '</span></a> ';
+      if (wf.workflow_id) {
+        html += '<a href="/workflows/' + encodeURIComponent(wf.workflow_type) + '/' + encodeURIComponent(wf.workflow_id) + '" class="text-decoration-none">';
+        html += '<code style="font-size:9px;color:#0d6efd">' + wf.workflow_id + '</code></a>';
+      }
+      html += '</td></tr>';
+    }
+    html += '</tbody></table>';
+    html += '</div>';
+
+    // History column — vertical timeline (matches standalone detail page)
+    html += '<div class="col-md-6">';
+    html += '<h6 style="font-size:12px;font-weight:600">Status History</h6>';
+    html += '<div style="max-height:400px;overflow-y:auto">';
+    html += '<div class="timeline compact-timeline">';
+    history.forEach(function(h) {
+      var sc = getStatusClass(h.status);
+      html += '<div class="timeline-item compact-timeline-item">';
+      html += '<div class="timeline-marker ' + sc + '"></div>';
+      html += '<div class="timeline-content compact-timeline-content">';
+      html += '<div class="timeline-title compact-timeline-title"><span class="badge ' + sc + '" style="font-size:10px">' + h.status + '</span></div>';
+      html += '<div class="timeline-date metadata-text" style="font-size:10px">' + formatUTCDate(h.timestamp) + '</div>';
+      if (h.runner_id) {
+        html += '<div style="margin-top:4px;background:#f8f9fa;padding:6px 8px;border-radius:4px;border-left:3px solid #6c757d">';
+        html += buildRunnerHtml(h);
+        html += '</div>';
+      }
+      if (h.message) {
+        html += '<div class="timeline-text data-text" style="font-size:10px;margin-top:2px;color:#6c757d">' + h.message + '</div>';
+      }
+      html += '</div></div>';
+    });
+    html += '</div></div>';
+    html += '</div>';
+
+    html += '</div>';
+    panelBody.innerHTML = html;
+
+    // Bind parent link click
+    var parentLink = panelBody.querySelector('.parent-inv-link');
+    if (parentLink) {
+      parentLink.addEventListener('click', function(e) {
+        e.preventDefault();
+        var pid = this.getAttribute('data-inv-id');
+        if (pid) loadInvocationDetails(pid);
+      });
+    }
+
+    // Removed: panel.scrollIntoView — avoid page jumping on click
+  }
+
+  // --- Auto-select invocation from URL ---
+  var selectedInvocation = '{{ selected_invocation }}';
+  if (selectedInvocation) {
+    highlightInvocation(selectedInvocation);
+    loadInvocationDetails(selectedInvocation);
+    setTimeout(function() {
+      var el = document.querySelector('[data-invocation-id="' + selectedInvocation + '"]');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    }, 300);
+  }
+})();
+</script>
+{% endblock %}

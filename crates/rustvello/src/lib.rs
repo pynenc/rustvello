@@ -1,81 +1,97 @@
-//! # rustvello: *The Common rustvello Library for Rust*
+//! Rustvello — A distributed task library for Rust.
 //!
-//! rustvello is a Rust library providing functionality to interact with the IH system,
-//! including element registration, metric reporting, and recording/replaying for testing.
-//! It's designed to be efficient, scalable, and easy to integrate into your applications.
+//! Rustvello provides a framework for defining, routing, and executing
+//! distributed tasks, inspired by the [pynenc](https://pynenc.org) Python library.
 //!
-//! ## **Quickstart**
-//!
-//! Here's a simple example demonstrating how to use rustvello:
+//! # Quick Start
 //!
 //! ```rust,no_run
 //! use rustvello::prelude::*;
-//! use std::collections::HashMap;
 //!
 //! #[tokio::main]
-//! async fn main() -> MuseResult<()> {
-//!     let config = Config::new(
-//!         vec!["http://localhost:8080".to_string()],
-//!         ClientType::Poet,
-//!         false,
-//!         None,
-//!         None,
-//!         TimestampResolution::Milliseconds,
-//!         vec![ElementKindRegistration::new("kind_code", Some("parent_code"), "kind_name", "description")],
-//!         vec![MetricDefinition::new("metric_code", "metric_name", "description")],
-//!         Some(std::time::Duration::from_secs(60)),
-//!         Some(std::time::Duration::from_secs(60)),
-//!         3,
-//!         None,
-//!     )?;
-//!
-//!     let mut muse = Muse::new(&config)?;
-//!     muse.initialize(Some(std::time::Duration::from_secs(5))).await?;
-//!
-//!     let local_elem_id = muse
-//!         .register_element(
-//!             "kind_code",
-//!             "Element Name".to_string(),
-//!             HashMap::new(),
-//!             None,
-//!         )
-//!         .await?;
-//!
-//!     muse.send_metric(local_elem_id, "metric_code", MetricValue::from(42.0))
-//!         .await?;
-//!
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Create app with the builder (in-memory backends by default)
+//!     let mut app = Rustvello::builder()
+//!         .app_id("my-app")
+//!         .build().await?;
 //!     Ok(())
 //! }
 //! ```
-//!
-//! ## **Features**
-//!
-//! - **Element Registration:** Easily register elements with specific kinds and metadata.
-//! - **Metric Reporting:** Send metrics associated with elements to the Muse system.
-//! - **Event Recording:** Record events for later analysis or replaying.
-//! - **Client Configuration:** Support for different client types (`Poet`, `Mock`).
-//!
-//! ## **Modules**
-//!
-//! - [`config`]: Contains configuration structures and enums.
-//! - [`muse`]: Main module containing the `Muse` struct.
-//! - [`tasks`]: Internal tasks handling background operations.
-//!
-//! ## **License**
-//!
-//! This project is licensed under the MIT License.
-//!
-//! [`config`]: crate::config
-//! [`muse`]: crate::muse
-//! [`tasks`]: crate::tasks
 
-mod muse;
-pub mod prelude;
-mod tasks;
-pub mod timing;
+pub mod app;
+pub mod builder;
+pub mod logging;
+pub mod orchestration;
+pub mod runner;
+pub mod task_config;
+pub mod trigger_builder;
 
-pub use rustvello_core::MuseError;
-pub use muse::Muse;
+// Re-export core traits and types
+pub use rustvello_core as core;
+pub use rustvello_proto as proto;
 
-/// Polars crate version
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+// Re-export the task proc macro so users can write `#[rustvello::task]`
+pub use rustvello_macros::task;
+
+/// Internal re-exports used by the `#[rustvello::task]` proc macro.
+/// Not part of the public API.
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::app::TaskEntry;
+    pub use inventory;
+    pub use rustvello_core;
+    pub use rustvello_proto;
+    pub use serde;
+}
+
+#[cfg(feature = "mem")]
+#[cfg_attr(docsrs, doc(cfg(feature = "mem")))]
+pub use rustvello_mem as mem;
+
+#[cfg(feature = "sqlite")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sqlite")))]
+pub use rustvello_sqlite as sqlite;
+
+#[cfg(feature = "prometheus")]
+#[cfg_attr(docsrs, doc(cfg(feature = "prometheus")))]
+pub use rustvello_prometheus as prometheus;
+
+#[cfg(feature = "postgres")]
+#[cfg_attr(docsrs, doc(cfg(feature = "postgres")))]
+pub use rustvello_postgres as postgres;
+
+#[cfg(feature = "redis")]
+#[cfg_attr(docsrs, doc(cfg(feature = "redis")))]
+pub use rustvello_redis as redis;
+
+#[cfg(feature = "mongodb")]
+#[cfg_attr(docsrs, doc(cfg(feature = "mongodb")))]
+pub use rustvello_mongo as mongodb;
+
+#[cfg(feature = "mongodb3")]
+#[cfg_attr(docsrs, doc(cfg(feature = "mongodb3")))]
+pub use rustvello_mongo3 as mongodb3;
+
+#[cfg(feature = "rabbitmq")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rabbitmq")))]
+pub use rustvello_rabbitmq as rabbitmq;
+
+#[allow(unused_imports)]
+pub mod prelude {
+    pub use crate::app::{RustvelloApp, TaskEntry};
+    pub use crate::builder::Rustvello;
+    #[cfg(feature = "rayon")]
+    pub use crate::runner::RayonRunner;
+    pub use crate::runner::{
+        PerInvocationTokioRunner, PersistentTokioRunner, SpawnBlockingRunner, TaskRunner,
+    };
+    pub use crate::trigger_builder::TriggerBuilder;
+    pub use rustvello_core::prelude::*;
+    // Re-export proto types for convenient * imports by consumers
+    pub use rustvello_proto::call::*;
+    pub use rustvello_proto::config::*;
+    pub use rustvello_proto::identifiers::*;
+    pub use rustvello_proto::invocation::*;
+    pub use rustvello_proto::status::*;
+    pub use rustvello_proto::trigger::*;
+}

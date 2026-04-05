@@ -1,0 +1,35 @@
+[package]
+name = "rustvello-postgres"
+description = "PostgreSQL backend implementations for Rustvello"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rustvello-core = { workspace = true }
+rustvello-proto = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+deadpool-postgres = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-postgres = { workspace = true }
+postgres-native-tls = { workspace = true, optional = true }
+native-tls = { workspace = true, optional = true }
+
+[features]
+tls = ["postgres-native-tls", "native-tls"]
+
+[dev-dependencies]
+rustvello-test-suite = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+tokio = { workspace = true, features = ["test-util", "macros"] }
+
+[lints]
+workspace = true

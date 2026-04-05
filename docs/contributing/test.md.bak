@@ -1,0 +1,121 @@
+# Testing
+
+## Rust Tests
+
+Run all Rust tests (excluding Python bindings):
+
+```bash
+cargo test --workspace --exclude rustvello-python
+```
+
+Or via the Makefile:
+
+```bash
+make test-rust
+```
+
+To run tests for a specific crate:
+
+```bash
+cargo test -p rustvello-core
+cargo test -p rustvello-monitoring
+cargo test -p rustvello-sqlite
+cargo test -p rustvello-prometheus
+```
+
+### Writing Rust Tests
+
+- **Unit tests**: `#[cfg(test)] mod tests { ... }` in the same source file.
+- **Integration tests**: `crates/<name>/tests/` directory.
+- **Backend compliance tests**: Use `rustvello-test-suite` — one macro call generates
+  the full suite for a new backend implementation.
+
+### Feature-gated Tests
+
+Some tests require non-default features. Enable them explicitly:
+
+```bash
+# Tests that use the rayon runner
+cargo test -p rustvello --features rayon
+
+# Full feature set
+cargo test -p rustvello --features full
+```
+
+### Monitoring Tests
+
+The `rustvello-monitoring` crate has two test layers:
+
+```bash
+# Unit tests (parser, SVG rendering, route handlers)
+cargo test -p rustvello-monitoring --lib
+
+# Integration tests (full server with HTTP client)
+cargo test -p rustvello-monitoring --test monitoring_dashboard
+```
+
+Integration tests start a real Axum server bound to a random port, populate it
+with synthetic invocation data, and assert on HTML/JSON responses. Use
+`KEEP_ALIVE=1` to keep the server running for browser inspection:
+
+```bash
+KEEP_ALIVE=1 cargo test -p rustvello-monitoring --test monitoring_dashboard -- --nocapture
+```
+
+### Prometheus Tests
+
+The `rustvello-prometheus` crate uses `metrics::with_local_recorder` for test
+isolation so tests never share global state:
+
+```bash
+cargo test -p rustvello-prometheus
+```
+
+---
+
+## Python Tests
+
+Before running Python tests, build the native extension:
+
+```bash
+make develop
+# Or: cd py-rustvello && maturin develop
+```
+
+Run all Python tests:
+
+```bash
+make test-python
+# Or: uv run pytest
+```
+
+---
+
+## Tox (multi-environment)
+
+```bash
+tox
+```
+
+---
+
+## All Tests
+
+```bash
+make test
+```
+
+---
+
+## Test Quick Reference
+
+| Command | What it runs |
+| ------- | ------------ |
+| `cargo test --workspace --exclude rustvello-python` | All Rust tests |
+| `cargo test -p rustvello-monitoring` | Monitoring unit + integration |
+| `cargo test -p rustvello-prometheus` | Prometheus sink tests |
+| `cargo test -p rustvello-sqlite` | SQLite backend suite (24 tests) |
+| `cargo clippy --workspace -- -D warnings` | Zero-warning lint check |
+| `cargo fmt --check` | Format check |
+| `cargo deny check` | Supply-chain audit (licenses, bans, sources) |
+| `make test-python` | Python binding tests |

@@ -1,0 +1,422 @@
+{% extends "base.html" %} {% block title %}Runner: {{ runner_id }} — Rustvello
+Monitor{% endblock %} {% block content %}
+<div class="container-fluid">
+  <!-- Page Header -->
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h2 class="h4 mb-0 text-primary">Runner Details</h2>
+      <small class="text-muted">{{ runner_id }}</small>
+    </div>
+    <a href="/runners" class="btn btn-sm btn-outline-secondary">
+      <span class="material-icons align-middle" style="font-size: 16px"
+        >arrow_back</span
+      >
+      Back to Runners
+    </a>
+  </div>
+
+  <!-- Runner Context + Parent Context -->
+  <div class="row mb-4">
+    <div
+      class="{% if parent_runner_id.is_some() %}col-md-6{% else %}col-12{% endif %}"
+    >
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0">Runner Context</h6>
+        </div>
+        <div class="card-body">
+          <table class="table table-sm mb-0">
+            <tbody>
+              <tr>
+                <td class="text-muted" style="width: 150px">Runner Class</td>
+                <td><span class="badge bg-primary">{{ runner_cls }}</span></td>
+              </tr>
+              <tr>
+                <td class="text-muted">Runner ID</td>
+                <td><code class="small">{{ runner_id }}</code></td>
+              </tr>
+              <tr>
+                <td class="text-muted">Hostname</td>
+                <td><code class="small">{{ hostname }}</code></td>
+              </tr>
+              <tr>
+                <td class="text-muted">Process ID</td>
+                <td><code class="small">{{ pid }}</code></td>
+              </tr>
+              <tr>
+                <td class="text-muted">Thread ID</td>
+                <td><code class="small">{{ thread_id }}</code></td>
+              </tr>
+              <tr>
+                <td class="text-muted">Started At</td>
+                <td><small class="text-muted">{{ started_at }}</small></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    {% if let Some(pcls) = parent_runner_cls %}
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0">Parent Context</h6>
+        </div>
+        <div class="card-body">
+          <table class="table table-sm mb-0">
+            <tbody>
+              <tr>
+                <td class="text-muted" style="width: 150px">
+                  Parent Runner Class
+                </td>
+                <td><span class="badge bg-secondary">{{ pcls }}</span></td>
+              </tr>
+              {% if let Some(prid) = parent_runner_id %}
+              <tr>
+                <td class="text-muted">Parent Runner ID</td>
+                <td>
+                  <a href="/runners/{{ prid }}" class="text-decoration-none"
+                    ><code class="small">{{ prid }}</code></a
+                  >
+                </td>
+              </tr>
+              {% endif %} {% if let Some(ph) = parent_hostname %}
+              <tr>
+                <td class="text-muted">Parent Hostname</td>
+                <td><code class="small">{{ ph }}</code></td>
+              </tr>
+              {% endif %} {% if let Some(pp) = parent_pid %}
+              <tr>
+                <td class="text-muted">Parent PID</td>
+                <td><code class="small">{{ pp }}</code></td>
+              </tr>
+              {% endif %} {% if let Some(pt) = parent_thread_id %}
+              <tr>
+                <td class="text-muted">Parent Thread ID</td>
+                <td><code class="small">{{ pt }}</code></td>
+              </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Heartbeat & Atomic Service Status -->
+  <div class="row mb-4">
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0">Heartbeat Status</h6>
+        </div>
+        <div class="card-body">
+          <table class="table table-sm mb-0">
+            <tbody>
+              <tr>
+                <td class="text-muted" style="width: 200px">Status</td>
+                <td>
+                  {% if is_active %}
+                  <span class="badge bg-success">Active</span>
+                  {% else %}
+                  <span class="badge bg-danger">Stale</span>
+                  {% endif %}
+                </td>
+              </tr>
+              <tr>
+                <td class="text-muted">Started At</td>
+                <td><small>{{ started_at }}</small></td>
+              </tr>
+              <tr>
+                <td class="text-muted">Time Since Last Heartbeat</td>
+                <td>
+                  {% if last_heartbeat_secs_ago < 60 %}
+                  <span class="badge bg-success"
+                    >{{ last_heartbeat_secs_ago }}s ago</span
+                  >
+                  {% else %}
+                  <span class="badge bg-warning text-dark"
+                    >{{ last_heartbeat_secs_ago }}s ago</span
+                  >
+                  {% endif %}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0">Atomic Service Status</h6>
+        </div>
+        <div class="card-body">
+          <table class="table table-sm mb-0">
+            <tbody>
+              <tr>
+                <td class="text-muted" style="width: 200px">Eligible to Run</td>
+                <td>
+                  {% if is_atomic_eligible %}
+                  <span class="badge bg-success">Yes</span>
+                  {% else %}
+                  <span class="badge bg-secondary">No</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% if has_execution_history %}
+              <tr>
+                <td class="text-muted">Last Service Start</td>
+                <td><small>{{ last_service_start }}</small></td>
+              </tr>
+              <tr>
+                <td class="text-muted">Last Execution Duration</td>
+                <td>
+                  <span class="badge bg-info"
+                    >{{ last_service_duration_secs }}</span
+                  >
+                </td>
+              </tr>
+              {% else %}
+              <tr>
+                <td colspan="2">
+                  <div class="alert alert-info mb-0 py-1 px-2">
+                    <small>No atomic service execution history available</small>
+                  </div>
+                </td>
+              </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Workers (child runners) -->
+  {% if !workers.is_empty() %}
+  <div class="row mb-4">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0">Workers ({{ workers.len() }})</h6>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>Worker ID</th>
+                  <th>Type</th>
+                  <th>Host / PID</th>
+                  <th>Status</th>
+                  <th>Last Heartbeat</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for w in workers %}
+                <tr>
+                  <td>
+                    <a
+                      href="/runners/{{ w.runner_id }}"
+                      class="text-decoration-none"
+                    >
+                      <code class="small text-primary">{{ w.short_id }}</code>
+                    </a>
+                  </td>
+                  <td>
+                    <span class="badge bg-light text-dark"
+                      >{{ w.runner_cls }}</span
+                    >
+                  </td>
+                  <td>
+                    <small class="text-muted"
+                      >{{ w.hostname }}:{{ w.pid }}</small
+                    >
+                  </td>
+                  <td>
+                    {% if w.is_active %}
+                    <span class="badge bg-success">Active</span>
+                    {% else %}
+                    <span class="badge bg-danger">Stale</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if w.last_heartbeat_secs_ago < 60 %}
+                    <span class="badge bg-success"
+                      >{{ w.last_heartbeat_secs_ago }}s ago</span
+                    >
+                    {% else %}
+                    <span class="badge bg-warning text-dark"
+                      >{{ w.last_heartbeat_secs_ago }}s ago</span
+                    >
+                    {% endif %}
+                  </td>
+                  <td>
+                    <a
+                      href="/runners/{{ w.runner_id }}"
+                      class="btn btn-sm btn-outline-primary"
+                      title="View worker details"
+                    >
+                      <span class="material-icons" style="font-size: 14px"
+                        >info</span
+                      >
+                    </a>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Statistics -->
+  <div class="row mb-4">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0">Statistics</h6>
+        </div>
+        <div class="card-body">
+          <table class="table table-sm mb-0">
+            <tbody>
+              <tr>
+                <td class="text-muted" style="width: 200px">
+                  Invocations Processed
+                </td>
+                <td>
+                  <span class="badge bg-primary">{{ invocation_count }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Invocations processed by this runner -->
+  <div class="row">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0">Invocations Processed</h6>
+        </div>
+        <div class="card-body p-0">
+          {% if !invocations.is_empty() %}
+          <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>Invocation ID</th>
+                  <th>Task</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for inv in invocations %}
+                <tr>
+                  <td>
+                    <a
+                      href="/invocations/{{ inv.invocation_id }}"
+                      class="text-decoration-none"
+                    >
+                      <code class="small text-primary">{{ inv.short_id }}</code>
+                    </a>
+                  </td>
+                  <td>
+                    <a
+                      href="/tasks/{{ inv.task_id }}"
+                      class="text-decoration-none"
+                      >{{ inv.task_id }}</a
+                    >
+                  </td>
+                  <td>
+                    <span class="badge {{ inv.status_class }}"
+                      >{{ inv.status }}</span
+                    >
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <div class="text-center py-4">
+            <p class="text-muted mb-0">No invocations found for this runner</p>
+          </div>
+          {% endif %}
+        </div>
+        {% if total_pages > 1 %}
+        <div
+          class="card-footer d-flex justify-content-between align-items-center"
+        >
+          <small class="text-muted">
+            Showing {{ invocations.len() }} of {{ invocation_count }}
+            invocations (page {{ current_page }}/{{ total_pages }})
+          </small>
+          <nav>
+            <ul class="pagination pagination-sm mb-0">
+              {% if current_page > 1 %}
+              <li class="page-item">
+                <a
+                  class="page-link"
+                  href="/runners/{{ runner_id }}?page={{ current_page - 1 }}&limit={{ page_limit }}"
+                  >Previous</a
+                >
+              </li>
+              {% endif %} {% if current_page < total_pages %}
+              <li class="page-item">
+                <a
+                  class="page-link"
+                  href="/runners/{{ runner_id }}?page={{ current_page + 1 }}&limit={{ page_limit }}"
+                  >Next</a
+                >
+              </li>
+              {% endif %}
+            </ul>
+          </nav>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Links -->
+  <div class="row mt-3">
+    <div class="col-12">
+      <div class="info-card">
+        <h6 class="section-title">Quick Actions</h6>
+        <div class="d-flex gap-2 flex-wrap">
+          <a href="/invocations" class="btn btn-sm btn-outline-primary">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 16px"
+              >list_alt</span
+            >
+            View All Invocations
+          </a>
+          <a
+            href="/invocations/timeline"
+            class="btn btn-sm btn-outline-secondary"
+          >
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 16px"
+              >timeline</span
+            >
+            View Timeline
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

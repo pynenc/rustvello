@@ -1,0 +1,168 @@
+{% extends "base.html" %} {% block title %}Broker — Rustvello Monitor{% endblock
+%} {% block content %}
+<div class="container-fluid">
+  <!-- Page Header -->
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="h4 mb-0 text-primary">
+      <span
+        class="material-icons"
+        style="vertical-align: middle; margin-right: 0.25rem"
+        >queue</span
+      >
+      Broker Monitor
+    </h2>
+    <button
+      class="btn btn-sm btn-outline-primary"
+      hx-get="/broker/refresh"
+      hx-target="#broker-info-content"
+      hx-swap="innerHTML"
+    >
+      <span
+        class="material-icons"
+        style="font-size: 16px; vertical-align: middle"
+        >refresh</span
+      >
+      Refresh
+    </button>
+  </div>
+
+  <!-- Content -->
+  <div
+    id="broker-info-content"
+    hx-get="/broker/refresh"
+    hx-trigger="every 5s"
+    hx-swap="innerHTML"
+  >
+    {% include "broker/partials/info.html" %}
+  </div>
+
+  <!-- Queue Preview Section -->
+  <div class="row mt-4">
+    <div class="col-12">
+      <div class="card">
+        <div
+          class="card-header d-flex justify-content-between align-items-center"
+        >
+          <span>
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 18px"
+              >visibility</span
+            >
+            Queue Preview
+          </span>
+          <div class="d-inline-flex align-items-center gap-2">
+            <label for="queue-limit" class="form-label mb-0 small text-nowrap"
+              >Show:</label
+            >
+            <select
+              id="queue-limit"
+              class="form-select form-select-sm"
+              style="width: 65px; min-height: 31px"
+            >
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="5" selected>5</option>
+              <option value="10">10</option>
+              <option value="20">20</option>
+            </select>
+            <button
+              class="btn btn-sm btn-outline-primary text-nowrap"
+              id="load-queue-btn"
+              hx-get="/broker/queue?limit=5"
+              hx-target="#queue-content"
+              hx-swap="innerHTML"
+            >
+              <span
+                class="material-icons align-middle me-1"
+                style="font-size: 16px"
+                >search</span
+              >
+              Peek
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="alert alert-warning small mb-3">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 16px"
+              >warning</span
+            >
+            <strong>Performance Warning:</strong> Previewing queue messages
+            involves retrieving and re-queueing them, which can cause overhead
+            on busy brokers.
+          </div>
+          <div id="queue-content">
+            <p class="text-muted text-center mb-0">
+              Click <strong>Peek</strong> to preview queue contents.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- About Section -->
+  <div class="row mt-4">
+    <div class="col-12">
+      <div class="info-card">
+        <h6 class="section-title">About the Broker</h6>
+        <p class="text-muted mb-2">
+          The broker is responsible for message queuing and routing invocations
+          to workers. It maintains a queue of pending invocations waiting to be
+          processed.
+        </p>
+        <p class="text-muted mb-0">
+          For more details on specific invocations, visit the
+          <a href="/invocations" class="text-decoration-none">Invocations</a>
+          page.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Actions -->
+  <div class="row mt-4">
+    <div class="col-12">
+      <div class="info-card text-center">
+        <h6 class="section-title">Quick Actions</h6>
+        <div class="d-flex justify-content-center gap-2 flex-wrap">
+          <a
+            href="/invocations?status=Pending"
+            class="btn btn-outline-primary btn-sm"
+          >
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 14px"
+              >list</span
+            >
+            View Pending Invocations
+          </a>
+          <a href="/invocations/timeline" class="btn btn-outline-info btn-sm">
+            <span
+              class="material-icons align-middle me-1"
+              style="font-size: 14px"
+              >timeline</span
+            >
+            View Timeline
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    var sel = document.getElementById("queue-limit");
+    var btn = document.getElementById("load-queue-btn");
+    if (sel && btn) {
+      sel.addEventListener("change", function () {
+        btn.setAttribute("hx-get", "/broker/queue?limit=" + sel.value);
+        htmx.process(btn);
+      });
+    }
+  });
+</script>
+{% endblock %}

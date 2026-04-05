@@ -1,0 +1,87 @@
+<div class="row g-3">
+  <div class="col-md-4">
+    <table class="table table-sm mb-0" style="font-size: 12px">
+      <tbody>
+        <tr>
+          <td class="text-muted" style="width: 120px">Runner ID</td>
+          <td>
+            <code style="font-size: 10px; word-break: break-all"
+              >{{ runner_id }}</code
+            >
+          </td>
+        </tr>
+        <tr>
+          <td class="text-muted">Runner Class</td>
+          <td><span class="badge bg-secondary">{{ runner_cls }}</span></td>
+        </tr>
+        <tr>
+          <td class="text-muted">Hostname</td>
+          <td><code class="small">{{ hostname }}</code></td>
+        </tr>
+        <tr>
+          <td class="text-muted">PID</td>
+          <td><code class="small">{{ pid }}</code></td>
+        </tr>
+        <tr>
+          <td class="text-muted">Started At</td>
+          <td><small>{{ started_at }}</small></td>
+        </tr>
+        {% if let Some(pcls) = parent_runner_cls %}
+        <tr>
+          <td class="text-muted">Parent Runner</td>
+          <td>
+            <span class="badge bg-info" style="font-size: 9px">{{ pcls }}</span>
+            {% if let Some(prid) = parent_runner_id %}
+            <code style="font-size: 9px">{{ prid }}</code>
+            {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+        <tr>
+          <td class="text-muted">Invocations</td>
+          <td><span class="badge bg-primary">{{ invocation_count }}</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="col-md-8">
+    {% if !invocations.is_empty() %}
+    <div style="max-height: 200px; overflow-y: auto">
+      <table class="table table-sm table-hover mb-0" style="font-size: 11px">
+        <thead>
+          <tr>
+            <th>Invocation</th>
+            <th>Task</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for inv in invocations %}
+          <tr>
+            <td>
+              <a
+                href="/invocations/{{ inv.invocation_id }}"
+                class="text-decoration-none"
+                ><code class="small text-primary">{{ inv.short_id }}</code></a
+              >
+            </td>
+            <td>
+              <a href="/tasks/{{ inv.task_id }}" class="text-decoration-none"
+                >{{ inv.task_id }}</a
+              >
+            </td>
+            <td>
+              <span class="badge {{ inv.status_class }}">{{ inv.status }}</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-muted mb-0" style="font-size: 12px">
+      No invocations processed by this runner
+    </p>
+    {% endif %}
+  </div>
+</div>

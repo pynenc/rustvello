@@ -1,30 +1,29 @@
 [package]
 name = "rustvello-core"
-version = { workspace = true }
-authors = { workspace = true }
-edition = { workspace = true }
-rust-version = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-license = { workspace = true }
-description = "Infinite Haiku Muse Core"
-readme = "../../README.md"
-
-[features]
-python = []
+description = "Core traits and types for the Rustvello distributed task library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
 
 [dependencies]
 rustvello-proto = { workspace = true }
-
-arc-swap = "1.7"
 async-trait = { workspace = true }
 chrono = { workspace = true }
-crossbeam-queue = "0.3"
-hashbrown = { workspace = true }
-imbl = "3.0"
-log = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+hostname = { workspace = true }
+lru = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-uuid = { workspace = true, features = ["v4", "serde"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+croner = { workspace = true }
+
+[lints]
+workspace = true

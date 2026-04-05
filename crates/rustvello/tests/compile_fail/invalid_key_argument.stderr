@@ -1,0 +1,5 @@
+error: key_arguments entry `nonexistent` does not match any function parameter. Valid parameters: x
+ --> tests/compile_fail/invalid_key_argument.rs:2:4
+  |
+2 | fn my_task(x: i32) -> i32 {
+  |    ^^^^^^^

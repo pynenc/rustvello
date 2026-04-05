@@ -1,0 +1,145 @@
+{% extends "base.html" %} {% block title %}Runners — Rustvello Monitor{%
+endblock %} {% block content %}
+<div class="container-fluid">
+  <!-- Page Header -->
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h2 class="h4 mb-0 text-primary">
+        <span class="material-icons align-middle me-2" style="font-size: 28px"
+          >directions_run</span
+        >
+        Active Runners
+      </h2>
+      <small class="text-muted"
+        >Live runner heartbeat tracking and atomic service status</small
+      >
+    </div>
+    <div class="d-flex gap-2">
+      <a href="/atomic-service" class="btn btn-sm btn-outline-secondary">
+        <span class="material-icons align-middle" style="font-size: 14px"
+          >schedule</span
+        >
+        Atomic Service
+      </a>
+      <button
+        class="btn btn-sm btn-outline-primary"
+        hx-get="/runners/refresh"
+        hx-target="#runners-table"
+        hx-swap="innerHTML"
+      >
+        <span class="material-icons align-middle" style="font-size: 16px"
+          >refresh</span
+        >
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <!-- Stats Overview -->
+  <div class="row g-3 mb-4">
+    <div class="col-md-3">
+      <div class="metric-card">
+        <h6 class="section-title">Total Runners</h6>
+        <p class="h3 mb-0 text-primary">{{ total_runners }}</p>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="metric-card">
+        <h6 class="section-title">Atomic Eligible</h6>
+        <p class="h3 mb-0 text-success">{{ atomic_eligible }}</p>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="metric-card">
+        <h6 class="section-title">With Execution History</h6>
+        <p class="h3 mb-0 text-info">{{ runners_with_history }}</p>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="metric-card">
+        <h6 class="section-title">Heartbeat Timeout</h6>
+        <p class="h4 mb-0">{{ heartbeat_timeout_minutes }}m</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Configuration Panels -->
+  <div class="row g-3 mb-4">
+    <!-- Runner Configuration -->
+    <div class="col-md-6">
+      <div class="metric-card h-100">
+        <h6 class="section-title">
+          <span class="material-icons align-middle" style="font-size: 16px"
+            >tune</span
+          >
+          Runner Configuration
+        </h6>
+        <p class="text-muted small mb-1">Runner Implementation</p>
+        <p class="fw-semibold mb-3">{{ runner_implementation }}</p>
+        <div class="metric-grid">
+          <div class="metric-item">
+            <span class="metric-label">Heartbeat Interval</span>
+            <span class="badge bg-info">{{ heartbeat_interval_seconds }}s</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Atomic Check Interval</span>
+            <span class="badge bg-info"
+              >{{ atomic_check_interval_minutes }}m</span
+            >
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recovery Service -->
+    <div class="col-md-6">
+      <div class="metric-card h-100">
+        <h6 class="section-title">
+          <span class="material-icons align-middle" style="font-size: 16px"
+            >schedule</span
+          >
+          Recovery Service
+        </h6>
+        <div class="metric-grid">
+          <div class="metric-item">
+            <span class="metric-label">Check Interval</span>
+            <span class="badge bg-info"
+              >{{ atomic_check_interval_minutes }}m</span
+            >
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Heartbeat Timeout</span>
+            <span class="badge bg-warning text-dark"
+              >{{ heartbeat_timeout_minutes }}m</span
+            >
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Active Runners Table -->
+  <div class="row">
+    <div class="col-12">
+      <div class="card">
+        <div
+          class="card-header d-flex justify-content-between align-items-center"
+        >
+          <h6 class="mb-0">Active Runners</h6>
+          <small class="text-muted">Auto-refreshes every 5s</small>
+        </div>
+        <div class="card-body p-0">
+          <div
+            id="runners-table"
+            hx-get="/runners/refresh"
+            hx-trigger="every 5s"
+            hx-swap="innerHTML"
+          >
+            {% include "runners/partials/runners_table.html" %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
