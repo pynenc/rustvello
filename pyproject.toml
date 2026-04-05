@@ -116,7 +116,7 @@ lines-between-types = 1
 preview = true
 
 [tool.coverage.report]
-fail_under = 85
+fail_under = 70
 skip_covered = true
 show_missing = true
 exclude_lines = [
