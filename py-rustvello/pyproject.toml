@@ -53,7 +53,7 @@ bindings = "pyo3"
 include = [
     { path = "README.md", format = "sdist" },
     { path = "rustvello/py.typed", format = "sdist" },
-    { path = "../LICENSE", format = "sdist" },
+    { path = "LICENSE", format = "sdist" },
 ]
 
 features = ["pyo3/extension-module"]
