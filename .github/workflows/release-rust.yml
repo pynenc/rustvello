@@ -64,7 +64,8 @@ jobs:
           # Layer 1: depends on proto
           publish rustvello-core
 
-          # Layer 2: depends on core
+          # Layer 2: depends on core (test-suite must come first — backends dev-depend on it)
+          publish rustvello-test-suite
           publish rustvello-macros
           publish rustvello-mem
           publish rustvello-sqlite
@@ -80,7 +81,6 @@ jobs:
 
           # Layer 4: depends on rustvello
           publish rustvello-cli
-          publish rustvello-test-suite
 
       - name: Summary
         run: |
