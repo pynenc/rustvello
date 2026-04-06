@@ -60,6 +60,12 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+      - id: cargo-check-lockfile
+        name: cargo check (lockfile/manifest)
+        entry: cargo check --workspace
+        language: system
+        files: '(Cargo\.toml|Cargo\.lock)$'
+        pass_filenames: false
       - id: cargo-clippy
         name: cargo clippy
         entry: cargo clippy --workspace --all-targets -- -D warnings
