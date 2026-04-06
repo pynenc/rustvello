@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     outputs:
-      is_release: ${{ steps.check-version.outputs.tag != '' && 'true' || 'false' }}
+      is_release: ${{ steps.check-version.outputs.tag != '' }}
       version: ${{ steps.compute-version.outputs.version }}
       tag: ${{ steps.check-version.outputs.tag }}
     steps:
@@ -233,7 +233,10 @@ jobs:
     name: Publish to PyPI
     needs: [check-version, create-sdist, build-wheels]
     if: >-
+      always() &&
       needs.check-version.result == 'success' &&
+      needs.create-sdist.result == 'success' &&
+      needs.build-wheels.result == 'success' &&
       (
         needs.check-version.outputs.is_release == 'true' ||
         (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
