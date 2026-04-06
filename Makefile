@@ -1,7 +1,7 @@
 .PHONY: install
 install: ## Install dependencies, build the Python extension, and set up pre-commit hooks
 	@echo "🚀 Installing dependencies"
-	@uv sync --group dev --no-build-package rustvello
+	@uv sync --group dev --no-install-package rustvello
 	@echo "🚀 Building and installing py-rustvello in develop mode"
 	@uv run maturin develop --release -m py-rustvello/Cargo.toml
 	@echo "🚀 Installing pre-commit hooks"

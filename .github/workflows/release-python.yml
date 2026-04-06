@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     outputs:
-      is_release: ${{ steps.check-version.outputs.tag != '' }}
+      is_release: ${{ steps.check-version.outputs.tag != '' && 'true' || 'false' }}
       version: ${{ steps.compute-version.outputs.version }}
       tag: ${{ steps.check-version.outputs.tag }}
     steps:
