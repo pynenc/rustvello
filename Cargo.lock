@@ -3475,7 +3475,7 @@ dependencies = [
 
 [[package]]
 name = "py-rustvello"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pyo3",
  "rustvello-python",
@@ -4070,7 +4070,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4104,7 +4104,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -4119,7 +4119,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4139,7 +4139,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4148,7 +4148,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-mem"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4163,7 +4163,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-mongo"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4182,7 +4182,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-mongo3"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4200,7 +4200,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-monitoring"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "askama",
  "async-trait",
@@ -4223,7 +4223,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-postgres"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4243,7 +4243,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-prometheus"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
@@ -4254,7 +4254,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "cistell-core",
@@ -4268,7 +4268,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-python"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "pyo3",
@@ -4289,7 +4289,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-rabbitmq"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "lapin",
@@ -4304,7 +4304,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-redis"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4322,7 +4322,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-sqlite"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4338,7 +4338,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-test-suite"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
