@@ -123,14 +123,7 @@ jobs:
         if: >-
           (needs.check-version.result == 'success' && needs.check-version.outputs.is_release != 'true') ||
           needs.pr-version.result == 'success'
-        run: |
-          VERSION="${{ needs.pr-version.outputs.version || needs.check-version.outputs.version }}"
-          CURRENT=$(grep '^version = ' Cargo.toml | head -1 | cut -d '"' -f 2)
-          echo "Patching workspace version $CURRENT → $VERSION"
-          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
-          # Also patch workspace dependency versions so pre-release resolves
-          sed -i.bak "s/version = \"$CURRENT\", path/version = \"=$VERSION\", path/g" Cargo.toml
-          rm -f Cargo.toml.bak
+        run: python scripts/patch_cargo_version.py "${{ needs.pr-version.outputs.version || needs.check-version.outputs.version }}"
 
       - name: Create source distribution
         uses: PyO3/maturin-action@v1
@@ -190,15 +183,7 @@ jobs:
         if: >-
           (needs.check-version.result == 'success' && needs.check-version.outputs.is_release != 'true') ||
           needs.pr-version.result == 'success'
-        shell: bash
-        run: |
-          VERSION="${{ needs.pr-version.outputs.version || needs.check-version.outputs.version }}"
-          CURRENT=$(grep '^version = ' Cargo.toml | head -1 | cut -d '"' -f 2)
-          echo "Patching workspace version $CURRENT → $VERSION"
-          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
-          # Also patch workspace dependency versions so pre-release resolves
-          sed -i.bak "s/version = \"$CURRENT\", path/version = \"=$VERSION\", path/g" Cargo.toml
-          rm -f Cargo.toml.bak
+        run: python scripts/patch_cargo_version.py "${{ needs.pr-version.outputs.version || needs.check-version.outputs.version }}"
 
       - name: Build wheel
         uses: PyO3/maturin-action@v1
