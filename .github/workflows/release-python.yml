@@ -54,14 +54,17 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Detect and tag new version
+      - name: Detect new version (tag is created by release-rust workflow)
         id: check-version
         if: github.event_name == 'push'
-        uses: salsify/action-detect-and-tag-new-version@v2.0.1
-        with:
-          tag-template: "v{VERSION}"
-          version-command: |
-            grep '^version = ' Cargo.toml | head -1 | cut -d '"' -f 2
+        run: |
+          CURRENT=$(grep '^version = ' Cargo.toml | head -1 | cut -d '"' -f 2)
+          PREV=$(git show HEAD^:Cargo.toml 2>/dev/null | grep '^version = ' | head -1 | cut -d '"' -f 2 || echo "")
+          if [[ "$CURRENT" != "$PREV" ]]; then
+            echo "tag=v$CURRENT" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Compute effective version
         id: compute-version
@@ -118,11 +121,7 @@ jobs:
 
       - name: Patch version for non-release builds
         if: >-
-          (
-            needs.check-version.result == 'success' &&
-            needs.check-version.outputs.is_release != 'true' &&
-            !(github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
-          ) ||
+          (needs.check-version.result == 'success' && needs.check-version.outputs.is_release != 'true') ||
           needs.pr-version.result == 'success'
         run: |
           VERSION="${{ needs.pr-version.outputs.version || needs.check-version.outputs.version }}"
@@ -189,11 +188,7 @@ jobs:
 
       - name: Patch version for non-release builds
         if: >-
-          (
-            needs.check-version.result == 'success' &&
-            needs.check-version.outputs.is_release != 'true' &&
-            !(github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
-          ) ||
+          (needs.check-version.result == 'success' && needs.check-version.outputs.is_release != 'true') ||
           needs.pr-version.result == 'success'
         shell: bash
         run: |
