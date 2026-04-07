@@ -5,6 +5,32 @@ use tokio_postgres::NoTls;
 
 use rustvello_core::error::{RustvelloError, RustvelloResult};
 
+/// Format a `tokio_postgres::Error` with full `DbError` details when available.
+///
+/// `tokio_postgres::Error::Display` only writes the kind string (e.g. `"db error"`)
+/// and does NOT include the server message. This helper extracts the `DbError`
+/// fields so we get actionable diagnostics.
+fn fmt_pg(e: &tokio_postgres::Error) -> String {
+    if let Some(db) = e.as_db_error() {
+        use std::fmt::Write;
+        let mut msg = format!(
+            "{}: {} (code: {})",
+            db.severity(),
+            db.message(),
+            db.code().code()
+        );
+        if let Some(detail) = db.detail() {
+            let _ = write!(msg, " detail={detail}");
+        }
+        if let Some(hint) = db.hint() {
+            let _ = write!(msg, " hint={hint}");
+        }
+        msg
+    } else {
+        e.to_string()
+    }
+}
+
 /// Shared PostgreSQL database connection pool with schema initialization.
 ///
 /// Data is isolated by `app_id`: each app gets its own PostgreSQL schema
@@ -144,7 +170,9 @@ impl Database {
         client
             .execute(&format!("SET search_path TO \"{escaped}\""), &[])
             .await
-            .map_err(|e| RustvelloError::state_backend(format!("SET search_path failed: {e}")))?;
+            .map_err(|e| {
+                RustvelloError::state_backend(format!("SET search_path failed: {}", fmt_pg(&e)))
+            })?;
         Ok(client)
     }
 
@@ -164,7 +192,9 @@ impl Database {
                 "CREATE SCHEMA IF NOT EXISTS \"{escaped}\"; SET search_path TO \"{escaped}\";"
             ))
             .await
-            .map_err(|e| RustvelloError::state_backend(format!("schema creation failed: {e}")))?;
+            .map_err(|e| {
+                RustvelloError::state_backend(format!("schema creation failed: {}", fmt_pg(&e)))
+            })?;
 
         client
             .batch_execute(
@@ -391,14 +421,16 @@ impl Database {
             ",
             )
             .await
-            .map_err(|e| RustvelloError::state_backend(format!("schema init failed: {e}")))?;
+            .map_err(|e| {
+                RustvelloError::state_backend(format!("schema init failed: {}", fmt_pg(&e)))
+            })?;
 
         Ok(())
     }
 }
 
 pub(crate) fn pg_err(e: tokio_postgres::Error) -> RustvelloError {
-    RustvelloError::state_backend(format!("Postgres error: {e}"))
+    RustvelloError::state_backend(format!("Postgres error: {}", fmt_pg(&e)))
 }
 
 pub(crate) fn parse_status(s: &str) -> RustvelloResult<rustvello_proto::status::InvocationStatus> {
