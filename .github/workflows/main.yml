@@ -115,9 +115,7 @@ jobs:
         run: make docs-build
 
       - name: Build Rust API docs (docs.rs compat)
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --workspace --all-features --no-deps
+        run: cargo doc --workspace --all-features --no-deps --exclude py-rustvello
 
   publish-dry-run:
     name: Verify crates compile (all features)

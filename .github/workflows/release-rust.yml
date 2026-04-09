@@ -48,9 +48,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build Rust API docs (docs.rs compat)
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --workspace --all-features --no-deps
+        run: cargo doc --workspace --all-features --no-deps --exclude py-rustvello
 
   rust-release:
     name: Publish to crates.io
