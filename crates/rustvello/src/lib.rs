@@ -2,6 +2,7 @@
 //!
 //! Rustvello provides a framework for defining, routing, and executing
 //! distributed tasks, inspired by the [pynenc](https://pynenc.org) Python library.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 //!
 //! # Quick Start
 //!

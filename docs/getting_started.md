@@ -1,9 +1,8 @@
 # Getting Started
 
 :::{note}
-**Using pynenc?** You don't need to interact with rustvello directly.
-Install [`pynenc-rustvello`](https://pynenc-rustvello.readthedocs.io/)
-and use the pynenc builder API — the plugin handles everything.
+**Using pynenc?** Install [`pynenc-rustvello`](https://pynenc-rustvello.readthedocs.io/)
+to use Rust-powered backends inside your pynenc app. The plugin handles everything.
 :::
 
 :::{note}

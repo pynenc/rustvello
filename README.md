@@ -3,11 +3,11 @@
 </p>
 <h1 align="center">Rustvello</h1>
 <p align="center">
-    <em>The Rust core of <a href="https://github.com/pynenc/pynenc">pynenc</a> — a distributed task orchestration system</em>
+    <em>A distributed task orchestration engine built in Rust, with Python bindings</em>
 </p>
 <p align="center">
-    <a href="https://github.com/pynenc/rustvello/actions">
-        <img src="https://img.shields.io/github/actions/workflow/status/pynenc/rustvello/ci.yml?branch=main" alt="CI">
+    <a href="https://github.com/pynenc/rustvello/actions/workflows/main.yml">
+        <img src="https://img.shields.io/github/actions/workflow/status/pynenc/rustvello/main.yml?branch=main" alt="CI">
     </a>
     <a href="https://crates.io/crates/rustvello">
         <img src="https://img.shields.io/crates/v/rustvello.svg" alt="crates.io">
@@ -15,8 +15,8 @@
     <a href="https://pypi.org/project/rustvello/">
         <img src="https://img.shields.io/pypi/v/rustvello.svg?color=%2334D058" alt="PyPI">
     </a>
-    <a href="https://docs.rs/rustvello/latest/rustvello/">
-        <img src="https://docs.rs/rustvello/badge.svg" alt="docs.rs">
+    <a href="https://rustvello.readthedocs.io">
+        <img src="https://img.shields.io/readthedocs/rustvello" alt="docs">
     </a>
     <a href="https://github.com/pynenc/rustvello/blob/main/LICENSE">
         <img src="https://img.shields.io/github/license/pynenc/rustvello" alt="License">
@@ -34,7 +34,7 @@
 
 ---
 
-Rustvello is the Rust implementation that powers [pynenc](https://github.com/pynenc/pynenc), a task management system for complex distributed orchestration. It provides the core task engine — broker, orchestrator, state backend, trigger system, client data store, and runner — implemented in Rust for performance and safety, with Python bindings via PyO3.
+Rustvello is a distributed task orchestration engine — broker, orchestrator, state backend, trigger system, client data store, and runner — implemented in Rust for performance and safety. It works standalone from both Rust and Python (via PyO3 bindings), and also integrates with [pynenc](https://github.com/pynenc/pynenc) as an optional high-performance backend plugin.
 
 ## Repository Structure
 
@@ -58,7 +58,7 @@ This is a **multi-crate Rust workspace** with Python bindings:
 | [`rustvello-monitoring`](crates/rustvello-monitoring/) | Web-based monitoring dashboard (Axum + Askama + HTMX)                                                               |
 | [`rustvello-test-suite`](crates/rustvello-test-suite/) | Shared backend compliance tests via macro-generated test suites                                                     |
 | [`rustvello-python`](crates/rustvello-python/)         | PyO3 bindings exposing Rust types to Python                                                                         |
-| [`py-rustvello`](py-rustvello/)                        | Python package (cdylib + pynenc bridge) providing the `rustvello` module                                            |
+| [`py-rustvello`](py-rustvello/)                        | Python package (cdylib + PyO3 bindings) providing the `rustvello` module                                            |
 
 For the full architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -75,7 +75,7 @@ For the full architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 - **Monitoring Dashboard**: Browser-based UI for inspecting invocations, runners, workflows, and timelines (Axum + Askama + HTMX)
 - **Cross-Language Support**: Language-tagged `TaskId`, `ForeignTask` trait, and broker language-aware routing for Python ↔ Rust interop
 - **Builder Pattern**: Fluent configuration with env var overrides (`RUSTVELLO__*`), TOML file support, and `.memory()`/`.sqlite()` presets
-- **Python Bindings**: Full PyO3 bridge so pynenc can use Rust backends as drop-in replacements
+- **Python Bindings**: Full PyO3 bridge for standalone Python usage and optional pynenc integration
 - **CLI Tool**: Run workers, inspect invocations, and purge data from the command line
 - **Shared Test Suite**: Macro-generated backend compliance tests ensuring all implementations satisfy the same contracts
 
@@ -150,7 +150,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Quick Start (Python with pynenc)
+## Quick Start (Python)
+
+```python
+from rustvello import App
+
+app = App(backend="sqlite", db_path="./tasks.db")
+
+@app.task(max_retries=2)
+def add(x: int, y: int) -> int:
+    return x + y
+
+# Submit and wait for result
+inv = add(1, 2)
+result = inv.result(timeout=30)  # 3
+```
+
+## Pynenc Integration
+
+Rustvello also serves as an optional high-performance backend for [pynenc](https://github.com/pynenc/pynenc).
+Install the plugin with `pip install pynenc-rustvello` to use Rust-powered backends inside pynenc apps:
 
 ```python
 from pynenc import Pynenc
@@ -161,13 +180,12 @@ app = Pynenc()
 def add(x: int, y: int) -> int:
     return x + y
 
-# Submit and get result
 result = add(1, 2).result  # 3
 ```
 
 ## Development
 
-Prerequisites: Rust 1.85+, Python 3.9+, [uv](https://docs.astral.sh/uv/), [maturin](https://www.maturin.rs/)
+Prerequisites: Rust 1.85+, Python 3.12+, [uv](https://docs.astral.sh/uv/), [maturin](https://www.maturin.rs/)
 
 ```bash
 # Install dependencies and pre-commit hooks

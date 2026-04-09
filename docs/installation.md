@@ -78,9 +78,9 @@ For finer-grained control, depend on individual crates directly:
 
 ## Python (`rustvello` wheel)
 
-The `rustvello` Python package ships pre-compiled wheels (Python 3.9+) and exposes
-the Rust backends to Python. Most Python users interact through
-[pynenc](https://docs.pynenc.org) (Python 3.12+).
+The `rustvello` Python package ships pre-compiled wheels (Python 3.12+) and exposes
+the Rust backends to Python. It can be used standalone or as a backend for
+[pynenc](https://docs.pynenc.org).
 
 Pynenc does **not** depend on rustvello automatically. The base install is pure Python:
 

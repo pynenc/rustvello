@@ -40,12 +40,12 @@ contributing/index
 
 # rustvello
 
-**The Rust engine behind [pynenc](https://docs.pynenc.org) distributed task orchestration.**
+**A distributed task orchestration engine built in Rust, with Python bindings.**
 
 Rustvello delivers the performance-critical core — broker, orchestrator, state backend,
 concurrency control, workflows, trigger scheduling, and a live monitoring dashboard —
-implemented in safe Rust. The [pynenc](https://docs.pynenc.org) Python framework mounts
-rustvello as its production backend through zero-overhead PyO3 bindings.
+implemented in safe Rust. It works standalone from both Rust and Python (via PyO3 bindings),
+and integrates with [pynenc](https://docs.pynenc.org) as an optional high-performance backend plugin.
 
 ```bash
 cargo add rustvello
@@ -239,10 +239,10 @@ Rustvello is available as both a **Rust crate** and a **Python package**:
 
 ## Pynenc Integration
 
-Rustvello is the Rust core of the [pynenc](https://docs.pynenc.org) ecosystem.
+Rustvello integrates with [pynenc](https://docs.pynenc.org) as an optional high-performance backend plugin.
 
 ```text
-pynenc (Python, user-facing API)
+pynenc (Python, full orchestration framework)
     └── pynenc-rustvello (plugin — stateless adapters)
             └── py-rustvello (PyO3 wheel, Python bindings)
                     └── rustvello (this repo — Rust core)

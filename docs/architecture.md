@@ -6,11 +6,12 @@ the invocation state machine, and the cross-language design.
 
 ---
 
-## Used from Pynenc
+## Pynenc Integration
 
-Rustvello serves as the execution engine for the Python distributed task orchestration framework **Pynenc**.
-While this page documents Rustvello's internal Rust design, Python users interact with these concepts
-via Pynenc. For the Python perspective, see the [Pynenc Architecture Docs](https://pynenc.github.io/architecture/index.html).
+Rustvello also integrates with [Pynenc](https://docs.pynenc.org) as an optional high-performance
+backend plugin. While this page documents Rustvello's internal Rust design, Python users who access
+Rustvello through Pynenc can refer to the [Pynenc Architecture Docs](https://pynenc.github.io/architecture/index.html)
+for the Python perspective.
 
 ## Crate Dependency Graph
 
@@ -392,7 +393,7 @@ cross-language queue routing.
 
 The maturin-built cdylib that produces the actual `rustvello` Python module. It depends on `rustvello-python` and enables the `extension-module` feature.
 
-## Pynenc Integration
+## Pynenc Framework
 
 The `pynenc/` directory in this repository contains the pure-Python [pynenc](https://github.com/pynenc/pynenc) framework. Pynenc provides:
 

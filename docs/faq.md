@@ -2,18 +2,19 @@
 
 ## How does rustvello relate to pynenc?
 
-Rustvello is the **Rust core engine** that [pynenc](https://docs.pynenc.org) uses as its
-production backend. The relationship is:
+Rustvello is an **independent distributed task orchestration engine** that also integrates
+with [pynenc](https://docs.pynenc.org) as an optional high-performance backend plugin.
+The relationship is:
 
 ```text
-pynenc          — Python framework (user-facing decorators, builder, runner management)
-  └── py-rustvello  — PyO3 wheel that exposes Rust backends to Python
-          └── rustvello — This repo: Rust broker, orchestrator, state backend, monitoring
+rustvello       — Standalone Rust engine (broker, orchestrator, state backend, monitoring)
+  └── py-rustvello    — PyO3 wheel for standalone Python usage
+          └── pynenc-rustvello — Optional plugin that connects rustvello backends to pynenc
+                  └── pynenc — Full Python orchestration framework
 ```
 
-Python users interact exclusively with pynenc's Python API. Rustvello is only directly
-relevant if you are writing Rust tasks, building a new language integration, or
-contributing to the core engine.
+Rustvello works standalone from both Rust and Python. The pynenc integration is additive —
+not required.
 
 ---
 

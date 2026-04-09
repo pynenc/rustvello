@@ -111,8 +111,13 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build documentation
+      - name: Build Sphinx documentation
         run: make docs-build
+
+      - name: Build Rust API docs (docs.rs compat)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --all-features --no-deps
 
   publish-dry-run:
     name: Verify crates compile (all features)
