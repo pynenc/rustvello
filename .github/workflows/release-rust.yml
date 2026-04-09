@@ -15,26 +15,25 @@ jobs:
     name: Check Version
     runs-on: ubuntu-latest
     outputs:
-      is_release: ${{ steps.check-version.outputs.tag != '' }}
-      version: ${{ steps.check-version.outputs.tag }}
+      is_release: ${{ steps.check-version.outputs.is_release }}
+      version: ${{ steps.check-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
 
-      - name: Check if there is a parent commit
-        id: check-parent-commit
-        run: |
-          echo "sha=$(git rev-parse --verify --quiet HEAD^)" >> "$GITHUB_OUTPUT"
-
-      - name: Detect and tag new version
+      - name: Check if version is published on crates.io
         id: check-version
-        if: steps.check-parent-commit.outputs.sha
-        uses: salsify/action-detect-and-tag-new-version@v2.0.1
-        with:
-          tag-template: "v{VERSION}"
-          version-command: |
-            grep '^version = ' Cargo.toml | head -1 | cut -d '"' -f 2
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | cut -d '"' -f 2)
+          echo "version=v$VERSION" >> "$GITHUB_OUTPUT"
+          # Check if this version already exists on crates.io
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://crates.io/api/v1/crates/rustvello/$VERSION")
+          if [[ "$HTTP_CODE" == "200" ]]; then
+            echo "Version $VERSION already published on crates.io — skipping"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version $VERSION not found on crates.io — will publish"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          fi
 
   verify-docs:
     name: Verify docs build

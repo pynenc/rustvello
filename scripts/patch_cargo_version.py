@@ -40,7 +40,7 @@ def patch(new_version: str) -> None:
     CARGO_TOML.write_text(text)
     print(
         f"Patched Cargo.toml: workspace version"
-        f" + {n} dependency version(s) → {new_version}"
+        f" + {n} dependency version(s) -> {new_version}"
     )
 
 

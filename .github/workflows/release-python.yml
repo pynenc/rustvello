@@ -34,36 +34,37 @@ env:
   RUSTUP_MAX_RETRIES: 10
 
 jobs:
-  # ── Detect if the version in Cargo.toml changed (push to main only) ──
+  # ── Check if the version is already published on PyPI ──
   check-version:
     name: Check Version
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     outputs:
-      is_release: ${{ steps.check-version.outputs.tag != '' }}
+      is_release: ${{ steps.check-version.outputs.is_release }}
       version: ${{ steps.compute-version.outputs.version }}
       tag: ${{ steps.check-version.outputs.tag }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Detect new version (tag is created by release-rust workflow)
+      - name: Check if version is published on PyPI
         id: check-version
-        if: github.event_name == 'push'
         run: |
           CURRENT=$(grep '^version = ' Cargo.toml | head -1 | cut -d '"' -f 2)
-          PREV=$(git show HEAD^:Cargo.toml 2>/dev/null | grep '^version = ' | head -1 | cut -d '"' -f 2 || echo "")
-          if [[ "$CURRENT" != "$PREV" ]]; then
-            echo "tag=v$CURRENT" >> "$GITHUB_OUTPUT"
-          else
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/rustvello/$CURRENT/json")
+          if [[ "$HTTP_CODE" == "200" ]]; then
+            echo "Version $CURRENT already published on PyPI — skipping"
             echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version $CURRENT not found on PyPI — will publish"
+            echo "tag=v$CURRENT" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Compute effective version
