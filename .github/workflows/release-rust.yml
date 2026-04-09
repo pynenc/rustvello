@@ -49,10 +49,24 @@ jobs:
       - name: Build Rust API docs (docs.rs compat)
         run: cargo doc --workspace --all-features --no-deps --exclude py-rustvello
 
+  verify-tests:
+    name: Verify tests pass
+    runs-on: ubuntu-latest
+    needs: check-version
+    if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test --workspace --exclude py-rustvello
+
   rust-release:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    needs: [check-version, verify-docs]
+    needs: [check-version, verify-docs, verify-tests]
     if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
