@@ -50,40 +50,40 @@ cistell-macros = "0.1.2"
 
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
 env_logger = "0.11"
 hostname = "0.4"
 inventory = "0.3"
 log = "0.4"
-lru = "0.12"
+lru = "0.18"
 proptest = "1"
-pyo3 = { version = "0.22", features = ["multiple-pymethods"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
+pyo3 = { version = "0.28", features = ["multiple-pymethods"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 thiserror = "2"
-toml = "0.7"
+toml = "1.1"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 croner = "3"
-lapin = "2"
+lapin = "3"
 futures-util = "0.3"
 mongodb = "3"
-redis = { version = "0.27", features = ["tokio-comp", "aio"] }
+redis = { version = "1.2", features = ["tokio-comp", "aio"] }
 metrics = "0.24"
-metrics-exporter-prometheus = "0.16"
+metrics-exporter-prometheus = "0.18"
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-chrono-0_4"] }
 deadpool-postgres = "0.14"
 postgres-native-tls = "0.5"
 native-tls = "0.2"
-rayon = "1.10"
-testcontainers = "0.23"
+rayon = "1.12"
+testcontainers = "0.24"
 trybuild = "1"
-testcontainers-modules = { version = "0.11", features = ["redis", "mongo", "postgres", "rabbitmq"] }
+testcontainers-modules = { version = "0.12", features = ["redis", "mongo", "postgres", "rabbitmq"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
