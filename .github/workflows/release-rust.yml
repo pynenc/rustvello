@@ -18,7 +18,7 @@ jobs:
       is_release: ${{ steps.check-version.outputs.is_release }}
       version: ${{ steps.check-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check if version is published on crates.io
         id: check-version
@@ -41,7 +41,7 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -55,7 +55,7 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -69,7 +69,7 @@ jobs:
     needs: [check-version, verify-docs, verify-tests]
     if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
