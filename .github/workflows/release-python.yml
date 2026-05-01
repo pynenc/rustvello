@@ -45,7 +45,7 @@ jobs:
       tag: ${{ steps.check-version.outputs.tag }}
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -89,7 +89,7 @@ jobs:
       pep440_version: ${{ steps.set-version.outputs.pep440_version }}
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set PR version
         id: set-version
@@ -108,7 +108,7 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -125,7 +125,7 @@ jobs:
     if: always() && (needs.check-version.result == 'success' || needs.pr-version.result == 'success')
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -188,7 +188,7 @@ jobs:
             manylinux: "off"
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v5
