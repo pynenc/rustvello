@@ -40,6 +40,11 @@ rustvello run --app-id my-app --db-path ./tasks.db
 rustvello run --config config.toml
 ```
 
+Tasks are discovered from `#[rustvello::task]` and `#[rustvello::workflow]`
+registrations linked into the binary through `inventory`. The CLI does not scan
+Rust or Python files for an application object. `--app-id` selects the logical
+application namespace; it is not an import path.
+
 ---
 
 ### `status` — Check Invocation Status
@@ -48,16 +53,19 @@ rustvello run --config config.toml
 rustvello status <INVOCATION_ID> [OPTIONS]
 ```
 
-| Option                 | Description             |
-| ---------------------- | ----------------------- |
-| `-d, --db-path <PATH>` | SQLite database path    |
-| `-c, --config <FILE>`  | TOML configuration file |
+| Option                 | Description          |
+| ---------------------- | -------------------- |
+| `-d, --db-path <PATH>` | SQLite database path |
 
 **Example:**
 
 ```bash
 rustvello status 550e8400-e29b-41d4-a716-446655440000 --db-path ./tasks.db
 ```
+
+This command inspects a persisted invocation. Rustvello intentionally keeps
+state-machine rendering in {doc}`../architecture` rather than adding Pynenc's
+unrelated `status render` subcommand under the same public command name.
 
 ---
 
@@ -128,8 +136,9 @@ Useful for debugging configuration priority issues.
 
 ## Environment Variables
 
-All CLI options have corresponding `RUSTVELLO__*` environment variable equivalents.
-Set them in your shell or a `.env` file:
+The `run` and `config` commands load `RUSTVELLO__*` application configuration
+through `RustvelloBuilder::from_env()`. Command-only flags such as `--db-path`
+and `--yes` remain CLI arguments:
 
 ```bash
 export RUSTVELLO__APP_ID=my-app
@@ -139,13 +148,3 @@ rustvello run   # picks up env vars automatically
 ```
 
 See {doc}`../configuration/index` for the full environment variable reference.
-
-| `-y, --yes` | Skip confirmation prompt |
-
-### `info` — Show System Information
-
-```bash
-rustvello-cli info
-```
-
-Displays version and build information.

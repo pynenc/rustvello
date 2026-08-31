@@ -3,6 +3,7 @@
 //! Extracted from `app.rs` to keep the application shell focused on
 //! lifecycle management and task registration.
 
+use rustvello_proto::call::SerializedArguments;
 use rustvello_proto::config::TaskConfig;
 use rustvello_proto::status::ConcurrencyControlType;
 
@@ -21,9 +22,32 @@ pub struct TaskConfigOverride {
     pub disable_cache_args: Option<Vec<String>>,
     pub on_diff_non_key_args_raise: Option<bool>,
     pub parallel_batch_size: Option<usize>,
-    pub force_new_workflow: Option<bool>,
+    pub is_workflow_task: Option<bool>,
     pub reroute_on_cc: Option<bool>,
     pub blocking: Option<bool>,
+}
+
+pub(crate) fn concurrency_arguments(
+    mode: ConcurrencyControlType,
+    key_arguments: &[String],
+    args: &SerializedArguments,
+) -> Option<SerializedArguments> {
+    match mode {
+        ConcurrencyControlType::Unlimited => None,
+        ConcurrencyControlType::Task => Some(SerializedArguments::new()),
+        ConcurrencyControlType::Argument if key_arguments.is_empty() => Some(args.clone()),
+        ConcurrencyControlType::Argument => {
+            let mut filtered = SerializedArguments::new();
+            for key in key_arguments {
+                if let Some(value) = args.0.get(key) {
+                    filtered.insert(key, value.clone());
+                }
+            }
+            Some(filtered)
+        }
+        ConcurrencyControlType::None => Some(args.clone()),
+        _ => Some(args.clone()),
+    }
 }
 
 impl TaskConfigOverride {
@@ -59,8 +83,8 @@ impl TaskConfigOverride {
         if let Some(v) = self.parallel_batch_size {
             config.parallel_batch_size = v;
         }
-        if let Some(v) = self.force_new_workflow {
-            config.force_new_workflow = v;
+        if let Some(v) = self.is_workflow_task {
+            config.is_workflow_task = v;
         }
         if let Some(v) = self.reroute_on_cc {
             config.reroute_on_cc = v;
@@ -108,9 +132,9 @@ pub(crate) fn apply_task_env_overrides(prefix: &str, config: &mut TaskConfig) {
             config.cache_results = b;
         }
     }
-    if let Some(val) = env(prefix, "FORCE_NEW_WORKFLOW") {
+    if let Some(val) = env(prefix, "IS_WORKFLOW_TASK") {
         if let Ok(b) = val.parse::<bool>() {
-            config.force_new_workflow = b;
+            config.is_workflow_task = b;
         }
     }
     if let Some(val) = env(prefix, "REROUTE_ON_CC") {

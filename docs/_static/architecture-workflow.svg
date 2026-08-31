@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="590" viewBox="0 0 1200 590" role="img" aria-labelledby="title desc">
+  <title id="title">Rustvello explicit workflow identity and replay flow</title>
+  <desc id="desc">Ordinary top-level tasks remain standalone, explicit workflow tasks create roots or subworkflows, ordinary child tasks inherit workflow identity, and only defining roots access deterministic operations.</desc>
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L8 3Z" fill="#52606d"/></marker>
+    <style>.h{font:700 25px Inter,system-ui;fill:#24313d}.s{font:13px Inter,system-ui;fill:#52606d}.t{font:600 14px Inter,system-ui;fill:#24313d}.n{font:12px Inter,system-ui;fill:#52606d}.b{stroke-width:2;rx:7}.l{stroke:#52606d;stroke-width:1.7;fill:none;marker-end:url(#a)}</style>
+  </defs>
+  <rect width="1200" height="590" fill="#f8fafb"/>
+  <text x="48" y="48" class="h">Explicit workflow roots and replay data</text>
+  <text x="48" y="73" class="s">Workflow identity starts only at a workflow task; deterministic access is validated at the defining invocation</text>
+  <rect x="45" y="115" width="205" height="90" class="b" fill="#edf2f7" stroke="#60758a"/>
+  <text x="148" y="147" text-anchor="middle" class="t">Top-level ordinary task</text>
+  <text x="148" y="171" text-anchor="middle" class="n">no workflow identity</text>
+  <text x="148" y="191" text-anchor="middle" class="n">root operations rejected</text>
+  <rect x="45" y="245" width="205" height="90" class="b" fill="#f3ecfa" stroke="#77559a"/>
+  <text x="148" y="277" text-anchor="middle" class="t">#[rustvello::workflow]</text>
+  <text x="148" y="301" text-anchor="middle" class="n">top level creates root</text>
+  <text x="148" y="321" text-anchor="middle" class="n">nested call creates subroot</text>
+  <rect x="310" y="225" width="220" height="130" class="b" fill="#eaf7f6" stroke="#2f7f78"/>
+  <text x="420" y="258" text-anchor="middle" class="t">WorkflowIdentity</text>
+  <text x="420" y="282" text-anchor="middle" class="n">workflow_id + type</text>
+  <text x="420" y="303" text-anchor="middle" class="n">parent workflow + depth</text>
+  <text x="420" y="324" text-anchor="middle" class="n">defining when ID == invocation</text>
+  <text x="420" y="345" text-anchor="middle" class="n">persisted by state backend</text>
+  <path d="M250 290H302" class="l"/>
+  <rect x="590" y="115" width="210" height="90" class="b" fill="#eaf1fb" stroke="#4f75a8"/>
+  <text x="695" y="147" text-anchor="middle" class="t">Ordinary child task</text>
+  <text x="695" y="171" text-anchor="middle" class="n">inherits workflow ID/type</text>
+  <text x="695" y="191" text-anchor="middle" class="n">increments member depth</text>
+  <rect x="590" y="245" width="210" height="90" class="b" fill="#fff4e6" stroke="#b56d24"/>
+  <text x="695" y="277" text-anchor="middle" class="t">Child workflow task</text>
+  <text x="695" y="301" text-anchor="middle" class="n">creates its own workflow ID</text>
+  <text x="695" y="321" text-anchor="middle" class="n">links parent workflow</text>
+  <path d="M530 260L582 180" class="l"/>
+  <path d="M530 300H582" class="l"/>
+  <rect x="860" y="205" width="260" height="130" class="b" fill="#fff0f4" stroke="#a44e69"/>
+  <text x="990" y="238" text-anchor="middle" class="t">InvocationContext</text>
+  <text x="990" y="262" text-anchor="middle" class="n">invocation + optional workflow</text>
+  <text x="990" y="283" text-anchor="middle" class="n">defining marker + state backend</text>
+  <text x="990" y="304" text-anchor="middle" class="n">task-local / blocking-thread fallback</text>
+  <text x="990" y="325" text-anchor="middle" class="n">drives child submission semantics</text>
+  <path d="M800 160H830V245H852" class="l"/>
+  <path d="M800 290H852" class="l"/>
+  <rect x="250" y="425" width="250" height="105" class="b" fill="#eaf1fb" stroke="#4f75a8"/>
+  <text x="375" y="458" text-anchor="middle" class="t">WorkflowRoot::current()</text>
+  <text x="375" y="482" text-anchor="middle" class="n">typed membership + root validation</text>
+  <text x="375" y="503" text-anchor="middle" class="n">random, UTC time, UUID</text>
+  <path d="M990 335V385H375V417" class="l"/>
+  <rect x="585" y="425" width="235" height="105" class="b" fill="#e8f3ec" stroke="#3f7d5c"/>
+  <text x="703" y="458" text-anchor="middle" class="t">Internal replay executor</text>
+  <text x="703" y="482" text-anchor="middle" class="n">operation + sequence key</text>
+  <text x="703" y="503" text-anchor="middle" class="n">first run writes; replay reads</text>
+  <path d="M500 477H577" class="l"/>
+  <rect x="905" y="425" width="245" height="105" class="b" fill="#e8f3ec" stroke="#3f7d5c"/>
+  <text x="1028" y="458" text-anchor="middle" class="t">StateBackendQuery</text>
+  <text x="1028" y="482" text-anchor="middle" class="n">workflow-scoped key/value data</text>
+  <text x="1028" y="503" text-anchor="middle" class="n">durable replay contract</text>
+  <path d="M820 477H897" class="l"/>
+</svg>

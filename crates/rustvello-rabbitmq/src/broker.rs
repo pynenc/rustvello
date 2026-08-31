@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use lapin::options::{
     BasicGetOptions, BasicPublishOptions, QueueDeclareOptions, QueuePurgeOptions,
@@ -32,6 +35,7 @@ pub struct RabbitMqBroker {
     prefix: String,
     /// Cached global queue name (built once at construction)
     cached_global_queue: String,
+    task_queues: Arc<tokio::sync::Mutex<HashSet<String>>>,
 }
 
 impl RabbitMqBroker {
@@ -45,6 +49,7 @@ impl RabbitMqBroker {
             conn: AmqpConnection::new(uri),
             prefix: prefix.to_string(),
             cached_global_queue,
+            task_queues: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
         }
     }
 
@@ -54,6 +59,18 @@ impl RabbitMqBroker {
 
     fn task_queue(&self, task_id: &TaskId) -> String {
         format!("{}_{}", self.prefix, queue_name_for_task(task_id))
+    }
+
+    fn language_queue(&self, language: &str) -> String {
+        format!("{}_{}_{}", self.prefix, GLOBAL_QUEUE, language)
+    }
+
+    fn queue_for_task(&self, task_id: &TaskId) -> String {
+        if task_id.language().is_empty() {
+            self.task_queue(task_id)
+        } else {
+            self.language_queue(task_id.language())
+        }
     }
 
     async fn ensure_queue(&self, queue: &str) -> RustvelloResult<()> {
@@ -80,40 +97,37 @@ impl RabbitMqBroker {
         .map_err(broker_err)?;
         Ok(())
     }
-}
 
-#[async_trait]
-impl Broker for RabbitMqBroker {
-    async fn route_invocation(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
-        self.publish(self.global_queue(), invocation_id).await
-    }
-
-    async fn route_invocation_for_task(
+    async fn publish_many(
         &self,
-        invocation_id: &InvocationId,
-        task_id: &TaskId,
+        queue: &str,
+        invocation_ids: &[InvocationId],
     ) -> RustvelloResult<()> {
-        self.publish(&self.task_queue(task_id), invocation_id).await
+        self.ensure_queue(queue).await?;
+        let ch = self.conn.channel().await.map_err(broker_err)?;
+        for invocation_id in invocation_ids {
+            ch.basic_publish(
+                "",
+                queue,
+                BasicPublishOptions::default(),
+                invocation_id.as_str().as_bytes(),
+                BasicProperties::default(),
+            )
+            .await
+            .map_err(broker_err)?
+            .await
+            .map_err(broker_err)?;
+        }
+        Ok(())
     }
 
-    async fn retrieve_invocation(
-        &self,
-        task_id: Option<&TaskId>,
-    ) -> RustvelloResult<Option<InvocationId>> {
-        let queue = match task_id {
-            Some(tid) => self.task_queue(tid),
-            None => self.global_queue().to_owned(),
-        };
-        self.ensure_queue(&queue).await?;
+    async fn retrieve_from_queue(&self, queue: &str) -> RustvelloResult<Option<InvocationId>> {
+        self.ensure_queue(queue).await?;
         let ch = self.conn.channel().await.map_err(broker_err)?;
         // At-most-once semantics: `no_ack: true` means RabbitMQ removes the
-        // message on delivery. If the process crashes before processing, the
-        // message is permanently lost. This is consistent with the other broker
-        // implementations (in-memory, SQLite, Redis) which are also
-        // at-most-once. For at-least-once guarantees, switch to manual ack
-        // with `no_ack: false` and call `basic_ack` after successful processing.
+        // message on delivery. This matches the other broker implementations.
         let msg = ch
-            .basic_get(&queue, BasicGetOptions { no_ack: true })
+            .basic_get(queue, BasicGetOptions { no_ack: true })
             .await
             .map_err(broker_err)?;
 
@@ -127,35 +141,117 @@ impl Broker for RabbitMqBroker {
             None => Ok(None),
         }
     }
+}
 
-    async fn count_invocations(&self, task_id: Option<&TaskId>) -> RustvelloResult<usize> {
+#[async_trait]
+impl Broker for RabbitMqBroker {
+    async fn route_invocation(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
+        self.publish(self.global_queue(), invocation_id).await
+    }
+
+    async fn route_invocation_for_task(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: &TaskId,
+    ) -> RustvelloResult<()> {
+        let queue = self.queue_for_task(task_id);
+        self.task_queues.lock().await.insert(queue.clone());
+        self.publish(&queue, invocation_id).await
+    }
+
+    async fn retrieve_invocation(
+        &self,
+        task_id: Option<&TaskId>,
+    ) -> RustvelloResult<Option<InvocationId>> {
         let queue = match task_id {
-            Some(tid) => self.task_queue(tid),
+            Some(tid) => self.queue_for_task(tid),
             None => self.global_queue().to_owned(),
         };
-        self.ensure_queue(&queue).await?;
-        let ch = self.conn.channel().await.map_err(broker_err)?;
-        let state = ch
-            .queue_declare(
-                &queue,
-                QueueDeclareOptions::default(),
-                FieldTable::default(),
-            )
+        self.retrieve_from_queue(&queue).await
+    }
+
+    async fn retrieve_invocation_for_language(
+        &self,
+        language: &str,
+    ) -> RustvelloResult<Option<InvocationId>> {
+        if let Some(invocation_id) = self.retrieve_from_queue(self.global_queue()).await? {
+            return Ok(Some(invocation_id));
+        }
+        if !language.is_empty() {
+            return self
+                .retrieve_from_queue(&self.language_queue(language))
+                .await;
+        }
+        let language_prefix = format!("{}_{}_", self.prefix, GLOBAL_QUEUE);
+        let queues: Vec<String> = self
+            .task_queues
+            .lock()
             .await
-            .map_err(broker_err)?;
-        Ok(state.message_count() as usize)
+            .iter()
+            .filter(|queue| !queue.starts_with(&language_prefix))
+            .cloned()
+            .collect();
+        for queue in queues {
+            if let Some(invocation_id) = self.retrieve_from_queue(&queue).await? {
+                return Ok(Some(invocation_id));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn route_invocations(&self, ids: &[InvocationId]) -> RustvelloResult<()> {
+        self.publish_many(self.global_queue(), ids).await
+    }
+
+    async fn count_invocations(&self, task_id: Option<&TaskId>) -> RustvelloResult<usize> {
+        if let Some(tid) = task_id {
+            let queue = self.queue_for_task(tid);
+            self.ensure_queue(&queue).await?;
+            let ch = self.conn.channel().await.map_err(broker_err)?;
+            let state = ch
+                .queue_declare(
+                    &queue,
+                    QueueDeclareOptions::default(),
+                    FieldTable::default(),
+                )
+                .await
+                .map_err(broker_err)?;
+            return Ok(state.message_count() as usize);
+        }
+        let mut queues = vec![self.global_queue().to_owned()];
+        queues.extend(self.task_queues.lock().await.iter().cloned());
+        let ch = self.conn.channel().await.map_err(broker_err)?;
+        let mut total = 0;
+        for queue in queues {
+            let state = ch
+                .queue_declare(
+                    &queue,
+                    QueueDeclareOptions::default(),
+                    FieldTable::default(),
+                )
+                .await
+                .map_err(broker_err)?;
+            total += state.message_count() as usize;
+        }
+        Ok(total)
     }
 
     async fn purge(&self, task_id: Option<&TaskId>) -> RustvelloResult<()> {
-        let queue = match task_id {
-            Some(tid) => self.task_queue(tid),
-            None => self.global_queue().to_owned(),
-        };
-        self.ensure_queue(&queue).await?;
         let ch = self.conn.channel().await.map_err(broker_err)?;
-        ch.queue_purge(&queue, QueuePurgeOptions::default())
-            .await
-            .map_err(broker_err)?;
+        let queues = match task_id {
+            Some(tid) => vec![self.queue_for_task(tid)],
+            None => {
+                let mut queues = vec![self.global_queue().to_owned()];
+                queues.extend(self.task_queues.lock().await.drain());
+                queues
+            }
+        };
+        for queue in queues {
+            self.ensure_queue(&queue).await?;
+            ch.queue_purge(&queue, QueuePurgeOptions::default())
+                .await
+                .map_err(broker_err)?;
+        }
         Ok(())
     }
 }

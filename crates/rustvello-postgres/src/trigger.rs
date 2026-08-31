@@ -10,8 +10,9 @@ use rustvello_core::error::{RustvelloError, RustvelloResult};
 use rustvello_core::trigger::TriggerStore;
 use rustvello_proto::identifiers::TaskId;
 use rustvello_proto::trigger::{
-    ConditionContext, ConditionId, TriggerCondition, TriggerDefinitionDTO, TriggerDefinitionId,
-    TriggerLogic, TriggerRunId, ValidCondition,
+    ConditionContext, ConditionId, EventQuery, EventRecord, TriggerCondition, TriggerDefinitionDTO,
+    TriggerDefinitionId, TriggerLogic, TriggerRunId, TriggerRunQuery, TriggerRunRecord,
+    ValidCondition,
 };
 
 use crate::db::{pg_err, Database};
@@ -487,11 +488,225 @@ impl TriggerStore for PostgresTriggerStore {
         Ok(changed > 0)
     }
 
+    async fn store_event(&self, event: &EventRecord) -> RustvelloResult<()> {
+        let client = self.db.conn().await?;
+        let json = serde_json::to_string(event).map_err(|e| RustvelloError::Serialization {
+            message: e.to_string(),
+        })?;
+        client
+            .execute(
+                "INSERT INTO trg_events
+                 (event_id, event_code, event_timestamp, emitted_by_invocation_id, event_json)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (event_id) DO UPDATE SET event_code = $2,
+                   event_timestamp = $3, emitted_by_invocation_id = $4, event_json = $5",
+                &[
+                    &event.event_id,
+                    &event.event_code,
+                    &event.timestamp,
+                    &event
+                        .emitted_by_invocation_id
+                        .as_ref()
+                        .map(ToString::to_string),
+                    &json,
+                ],
+            )
+            .await
+            .map_err(pg_err)?;
+        Ok(())
+    }
+
+    async fn get_event(&self, event_id: &str) -> RustvelloResult<Option<EventRecord>> {
+        let client = self.db.conn().await?;
+        let row = client
+            .query_opt(
+                "SELECT event_json FROM trg_events WHERE event_id = $1",
+                &[&event_id],
+            )
+            .await
+            .map_err(pg_err)?;
+        row.map(|value| {
+            serde_json::from_str(value.get::<_, String>(0).as_str()).map_err(|e| {
+                RustvelloError::Serialization {
+                    message: e.to_string(),
+                }
+            })
+        })
+        .transpose()
+    }
+
+    async fn get_events(&self, query: &EventQuery) -> RustvelloResult<Vec<EventRecord>> {
+        let client = self.db.conn().await?;
+        let rows = client
+            .query("SELECT event_json FROM trg_events", &[])
+            .await
+            .map_err(pg_err)?;
+        let mut events = Vec::new();
+        for row in rows {
+            let event: EventRecord = serde_json::from_str(row.get::<_, String>(0).as_str())
+                .map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })?;
+            if query
+                .event_code
+                .as_ref()
+                .is_some_and(|code| code != &event.event_code)
+                || query
+                    .emitted_by_invocation_id
+                    .as_ref()
+                    .is_some_and(|id| event.emitted_by_invocation_id.as_ref() != Some(id))
+                || query.start.is_some_and(|start| event.timestamp < start)
+                || query.end.is_some_and(|end| event.timestamp > end)
+            {
+                continue;
+            }
+            events.push(event);
+        }
+        events.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+        if let Some(limit) = query.limit {
+            events.truncate(limit);
+        }
+        Ok(events)
+    }
+
+    async fn store_trigger_run(&self, run: &TriggerRunRecord) -> RustvelloResult<()> {
+        let mut client = self.db.conn().await?;
+        let transaction = client.transaction().await.map_err(pg_err)?;
+        let json = serde_json::to_string(run).map_err(|e| RustvelloError::Serialization {
+            message: e.to_string(),
+        })?;
+        transaction
+            .execute(
+                "INSERT INTO trg_trigger_runs
+                 (trigger_run_id, claimed_at, triggered_invocation_id, run_json)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (trigger_run_id) DO UPDATE SET claimed_at = $2,
+                   triggered_invocation_id = $3, run_json = $4",
+                &[
+                    &run.trigger_run_id.as_str(),
+                    &run.claimed_at,
+                    &run.triggered_invocation_id
+                        .as_ref()
+                        .map(ToString::to_string),
+                    &json,
+                ],
+            )
+            .await
+            .map_err(pg_err)?;
+        transaction
+            .execute(
+                "DELETE FROM trg_trigger_run_events WHERE trigger_run_id = $1",
+                &[&run.trigger_run_id.as_str()],
+            )
+            .await
+            .map_err(pg_err)?;
+        transaction
+            .execute(
+                "DELETE FROM trg_trigger_run_sources WHERE trigger_run_id = $1",
+                &[&run.trigger_run_id.as_str()],
+            )
+            .await
+            .map_err(pg_err)?;
+        for event_id in run.event_ids() {
+            transaction
+                .execute(
+                    "INSERT INTO trg_trigger_run_events (trigger_run_id, event_id)
+                     VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    &[&run.trigger_run_id.as_str(), &event_id],
+                )
+                .await
+                .map_err(pg_err)?;
+        }
+        for invocation_id in run.source_invocation_ids() {
+            transaction
+                .execute(
+                    "INSERT INTO trg_trigger_run_sources (trigger_run_id, invocation_id)
+                     VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    &[&run.trigger_run_id.as_str(), &invocation_id.to_string()],
+                )
+                .await
+                .map_err(pg_err)?;
+        }
+        transaction.commit().await.map_err(pg_err)?;
+        Ok(())
+    }
+
+    async fn get_trigger_run(
+        &self,
+        run_id: &TriggerRunId,
+    ) -> RustvelloResult<Option<TriggerRunRecord>> {
+        let client = self.db.conn().await?;
+        let row = client
+            .query_opt(
+                "SELECT run_json FROM trg_trigger_runs WHERE trigger_run_id = $1",
+                &[&run_id.as_str()],
+            )
+            .await
+            .map_err(pg_err)?;
+        row.map(|value| {
+            serde_json::from_str(value.get::<_, String>(0).as_str()).map_err(|e| {
+                RustvelloError::Serialization {
+                    message: e.to_string(),
+                }
+            })
+        })
+        .transpose()
+    }
+
+    async fn get_trigger_runs(
+        &self,
+        query: &TriggerRunQuery,
+    ) -> RustvelloResult<Vec<TriggerRunRecord>> {
+        let client = self.db.conn().await?;
+        let rows = client
+            .query("SELECT run_json FROM trg_trigger_runs", &[])
+            .await
+            .map_err(pg_err)?;
+        let mut runs = Vec::new();
+        for row in rows {
+            let run: TriggerRunRecord = serde_json::from_str(row.get::<_, String>(0).as_str())
+                .map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })?;
+            if query
+                .event_id
+                .as_ref()
+                .is_some_and(|event_id| !run.event_ids().contains(&event_id.as_str()))
+                || query
+                    .source_invocation_id
+                    .as_ref()
+                    .is_some_and(|invocation_id| {
+                        !run.source_invocation_ids().contains(&invocation_id)
+                    })
+                || query
+                    .triggered_invocation_id
+                    .as_ref()
+                    .is_some_and(|invocation_id| {
+                        run.triggered_invocation_id.as_ref() != Some(invocation_id)
+                    })
+                || query.start.is_some_and(|start| run.claimed_at < start)
+                || query.end.is_some_and(|end| run.claimed_at > end)
+            {
+                continue;
+            }
+            runs.push(run);
+        }
+        runs.sort_by(|left, right| right.claimed_at.cmp(&left.claimed_at));
+        if let Some(limit) = query.limit {
+            runs.truncate(limit);
+        }
+        Ok(runs)
+    }
+
     async fn purge(&self) -> RustvelloResult<()> {
         let client = self.db.conn().await?;
         client
             .batch_execute(
-                "DELETE FROM trg_trigger_run_claims;
+                "DELETE FROM trg_trigger_run_sources;
+                 DELETE FROM trg_trigger_run_events;
+                 DELETE FROM trg_trigger_runs;
+                 DELETE FROM trg_events;
+                 DELETE FROM trg_trigger_run_claims;
                  DELETE FROM trg_cron_executions;
                  DELETE FROM trg_valid_conditions;
                  DELETE FROM trg_source_task_conditions;

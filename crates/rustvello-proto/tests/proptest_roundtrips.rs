@@ -1,12 +1,16 @@
 //! Property-based tests for status transitions and serde round-trips.
 
 use proptest::prelude::*;
+use std::collections::BTreeMap;
 
+use rustvello_proto::call::SerializedArguments;
 use rustvello_proto::identifiers::TaskId;
 use rustvello_proto::identifiers::{CallId, InvocationId, RunnerId};
+use rustvello_proto::invocation::{InvocationHistory, WorkflowIdentity};
 use rustvello_proto::status::{ConcurrencyControlType, InvocationStatus, InvocationStatusRecord};
 use rustvello_proto::trigger::{
-    CronCondition, EventCondition, StatusCondition, TriggerCondition, TriggerLogic,
+    ConditionContext, CronCondition, EventCondition, EventContext, StatusCondition,
+    TriggerCondition, TriggerLogic,
 };
 
 // ---------------------------------------------------------------------------
@@ -27,7 +31,6 @@ fn arb_invocation_status() -> impl Strategy<Value = InvocationStatus> {
         Just(InvocationStatus::PendingRecovery),
         Just(InvocationStatus::RunningRecovery),
         Just(InvocationStatus::Paused),
-        Just(InvocationStatus::Resumed),
         Just(InvocationStatus::Killed),
     ]
 }
@@ -77,6 +80,130 @@ proptest! {
             prop_assert!(!status.valid_transitions().is_empty(),
                 "Non-terminal status {:?} should have at least one transition", status);
         }
+    }
+
+    #[test]
+    fn arbitrary_status_sequences_never_escape_the_declared_graph(
+        candidates in proptest::collection::vec(arb_invocation_status(), 0..80),
+    ) {
+        let mut current = InvocationStatus::Registered;
+        for candidate in candidates {
+            let accepted = current.can_transition_to(candidate);
+            prop_assert_eq!(
+                accepted,
+                current.valid_transitions().contains(&candidate)
+            );
+            if accepted {
+                prop_assert!(!current.is_terminal());
+                current = candidate;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Arguments, trigger filters, and workflow replay-history properties
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #[test]
+    fn serialized_arguments_roundtrip_and_hash_are_order_independent(
+        entries in proptest::collection::btree_map(
+            "[a-zA-Z_][a-zA-Z0-9_]{0,12}",
+            ".{0,40}",
+            0..16,
+        ),
+    ) {
+        let args = SerializedArguments(entries.clone());
+        let json = serde_json::to_string(&args).unwrap();
+        let decoded: SerializedArguments = serde_json::from_str(&json).unwrap();
+        prop_assert_eq!(&decoded, &args);
+
+        let mut reversed = SerializedArguments::new();
+        for (key, value) in entries.iter().rev() {
+            reversed.insert(key.clone(), value.clone());
+        }
+        prop_assert_eq!(args.compute_args_id(), reversed.compute_args_id());
+    }
+
+    #[test]
+    fn concurrency_pairs_preserve_every_argument(
+        entries in proptest::collection::btree_map(
+            "[a-z]{1,10}",
+            "[a-zA-Z0-9_-]{0,20}",
+            0..12,
+        ),
+    ) {
+        let args = SerializedArguments(entries.clone());
+        let pairs = args.cc_arg_pairs();
+        if entries.is_empty() {
+            prop_assert_eq!(pairs, vec![(String::new(), String::new())]);
+        } else {
+            prop_assert_eq!(pairs, entries.into_iter().collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn event_payload_filter_matches_subsets_and_rejects_changed_values(
+        key in "[a-z]{1,12}",
+        value in "[a-zA-Z0-9_-]{0,20}",
+    ) {
+        let mut filter = BTreeMap::new();
+        filter.insert(key.clone(), serde_json::Value::String(value.clone()));
+        let condition = TriggerCondition::Event(EventCondition {
+            event_code: "event.test".to_string(),
+            payload_filter: Some(filter),
+        });
+        let matching = ConditionContext::Event(EventContext {
+            event_id: "evt-1".to_string(),
+            event_code: "event.test".to_string(),
+            payload: serde_json::json!({ key.clone(): value }),
+        });
+        prop_assert!(condition.is_satisfied_by(&matching));
+
+        let changed = ConditionContext::Event(EventContext {
+            event_id: "evt-2".to_string(),
+            event_code: "event.test".to_string(),
+            payload: serde_json::json!({ key: "different" }),
+        });
+        prop_assert!(!condition.is_satisfied_by(&changed));
+    }
+
+    #[test]
+    fn workflow_replay_history_roundtrip_preserves_order(
+        statuses in proptest::collection::vec(arb_invocation_status(), 0..50),
+        depth in 0u32..20,
+    ) {
+        let workflow_id = InvocationId::from_string("workflow-property");
+        let identity = WorkflowIdentity::child(
+            workflow_id.clone(),
+            TaskId::new("property", "workflow"),
+            InvocationId::from_string("parent-property"),
+            depth,
+        );
+        let identity_json = serde_json::to_string(&identity).unwrap();
+        let decoded_identity: WorkflowIdentity = serde_json::from_str(&identity_json).unwrap();
+        prop_assert_eq!(decoded_identity.workflow_id, workflow_id.clone());
+        prop_assert_eq!(decoded_identity.depth, depth);
+
+        let history: Vec<_> = statuses
+            .iter()
+            .copied()
+            .map(|status| {
+                InvocationHistory::new(
+                    workflow_id.clone(),
+                    InvocationStatusRecord::new(status, None),
+                    None,
+                )
+            })
+            .collect();
+        let json = serde_json::to_string(&history).unwrap();
+        let decoded: Vec<InvocationHistory> = serde_json::from_str(&json).unwrap();
+        let decoded_statuses: Vec<_> = decoded
+            .into_iter()
+            .map(|entry| entry.status_record.status)
+            .collect();
+        prop_assert_eq!(decoded_statuses, statuses);
     }
 }
 

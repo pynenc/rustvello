@@ -211,27 +211,27 @@ impl RustvelloApp {
         config
     }
 
-    /// Resolve just the `force_new_workflow` flag without cloning the full config.
+    /// Resolve whether the task explicitly defines a workflow root.
     ///
     /// Priority: env > per-task override > global defaults > base config
     /// (matching `resolve_task_config` layering order).
-    fn resolve_force_new_workflow(&self, task_id: &TaskId, base: &TaskConfig) -> bool {
+    fn resolve_is_workflow_task(&self, task_id: &TaskId, base: &TaskConfig) -> bool {
         // Highest priority: env override
         let env_override = self.get_or_load_env_override(task_id.name());
-        if let Some(v) = env_override.force_new_workflow {
+        if let Some(v) = env_override.is_workflow_task {
             return v;
         }
         // Then per-task config override
         if let Some(per_task) = self.task_config_overrides.get(task_id.name()) {
-            if let Some(v) = per_task.force_new_workflow {
+            if let Some(v) = per_task.is_workflow_task {
                 return v;
             }
         }
         // Then global defaults
-        if let Some(v) = self.task_defaults_override.force_new_workflow {
+        if let Some(v) = self.task_defaults_override.is_workflow_task {
             return v;
         }
-        base.force_new_workflow
+        base.is_workflow_task
     }
 
     /// Get or lazily load the env-based config override for a task name.
@@ -263,8 +263,8 @@ impl RustvelloApp {
             disable_cache_args: None,
             on_diff_non_key_args_raise: None,
             parallel_batch_size: None,
-            force_new_workflow: (config.force_new_workflow != base.force_new_workflow)
-                .then_some(config.force_new_workflow),
+            is_workflow_task: (config.is_workflow_task != base.is_workflow_task)
+                .then_some(config.is_workflow_task),
             reroute_on_cc: (config.reroute_on_cc != base.reroute_on_cc)
                 .then_some(config.reroute_on_cc),
             blocking: (config.blocking != base.blocking).then_some(config.blocking),

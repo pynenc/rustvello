@@ -13,6 +13,9 @@
   .ft-hover .ft-node:not(.ft-related) { opacity: 0.3; }
   .ft-hover .ft-edge:not(.ft-related) { opacity: 0.15; }
   .timeline-runner-info { font-size: 11px; }
+  .timeline-zoom-active { cursor: crosshair; user-select: none; }
+  .timeline-zoom-dragging { cursor: col-resize; }
+  .timeline-zoom-selection { fill: rgba(13, 110, 253, 0.18); stroke: #0d6efd; stroke-width: 1; pointer-events: none; }
   .overlap-highlight { r: 7; stroke: #333; stroke-width: 2.5; filter: drop-shadow(0 0 6px rgba(0,0,0,0.5)); }
   #overlap-tooltip {
     position: fixed; display: none; z-index: 2000; pointer-events: none;
@@ -101,6 +104,13 @@
               <label class="form-label" for="filter_workflow_id">Workflow ID</label>
               <input type="text" name="workflow_id" id="filter_workflow_id" class="form-control" value="{{ current_filters.workflow_id }}" placeholder="Workflow ID">
             </div>
+            <div class="mb-2">
+              <label class="form-label" for="filter_inv_ids">Invocation Scope</label>
+              <input type="text" name="inv_ids" id="filter_inv_ids" class="form-control" value="{{ current_filters.inv_ids }}" placeholder="Comma-separated IDs" spellcheck="false" autocomplete="off">
+            </div>
+            {% if !selected_invocation.is_empty() %}
+            <input type="hidden" name="selected" value="{{ selected_invocation }}">
+            {% endif %}
             <button type="submit" class="btn btn-sm btn-primary w-100 mt-1">
               <span class="material-icons align-middle" style="font-size: 14px">filter_list</span>
               Apply
@@ -124,7 +134,12 @@
       <div class="card pynmon-card">
         <div class="card-header pynmon-card-header compact-header d-flex justify-content-between align-items-center">
           <span>Timeline</span>
-          <span class="text-muted" style="font-size: 11px" id="hover-info"></span>
+          <div class="d-flex align-items-center gap-2">
+            <span class="text-muted" style="font-size: 11px" id="hover-info"></span>
+            <button id="timeline-range-zoom" class="btn btn-sm btn-outline-secondary" type="button" aria-label="Select timeline range to zoom" aria-pressed="false" title="Select timeline range to zoom">
+              <span class="material-icons align-middle" style="font-size: 15px" aria-hidden="true">zoom_in</span>
+            </button>
+          </div>
         </div>
         <div class="card-body pynmon-card-body p-2">
           <div id="timeline-container" class="timeline-svg-container" style="overflow-x: auto; overflow-y: auto; width: 100%">
@@ -197,6 +212,144 @@
   var currentInvId = null;
   var currentHistory = null;
 
+  // --- Timeline range zoom -------------------------------------------------
+  // The SVG carries its own UTC bounds, so the browser can convert a drag
+  // selection without guessing from CSS dimensions or server-side state.
+  var rangeZoom = { enabled: false, dragging: false, startX: 0, currentX: 0 };
+  var timelineContainer = document.getElementById('timeline-container');
+  var rangeZoomButton = document.getElementById('timeline-range-zoom');
+
+  function timelineSvg() {
+    return timelineContainer && timelineContainer.querySelector('svg');
+  }
+
+  function timelineBounds(svg) {
+    if (!svg || !svg.dataset.timelineStart || !svg.dataset.timelineEnd) return null;
+    var start = new Date(svg.dataset.timelineStart);
+    var end = new Date(svg.dataset.timelineEnd);
+    var left = Number(svg.dataset.timelineLeft);
+    var right = Number(svg.dataset.timelineRight);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) ||
+        !Number.isFinite(left) || !Number.isFinite(right) || right <= left) return null;
+    return { start: start, end: end, left: left, right: right, width: right - left };
+  }
+
+  function clientToTimelineX(svg, event) {
+    var bounds = timelineBounds(svg);
+    var matrix = svg && svg.getScreenCTM && svg.getScreenCTM();
+    if (!bounds || !matrix) return null;
+    var point = svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    var svgPoint;
+    try { svgPoint = point.matrixTransform(matrix.inverse()); } catch (error) { return null; }
+    return Math.max(bounds.left, Math.min(bounds.right, svgPoint.x));
+  }
+
+  function updateRangeSelection(svg, startX, currentX) {
+    var rect = svg.querySelector('#timeline-zoom-selection');
+    if (!rect) {
+      rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.id = 'timeline-zoom-selection';
+      rect.setAttribute('y', '0');
+      rect.setAttribute('height', String(svg.viewBox.baseVal.height || 0));
+      rect.setAttribute('class', 'timeline-zoom-selection');
+      svg.appendChild(rect);
+    }
+    rect.setAttribute('x', Math.min(startX, currentX).toFixed(1));
+    rect.setAttribute('width', Math.abs(currentX - startX).toFixed(1));
+  }
+
+  function clearRangeSelection() {
+    var rect = document.getElementById('timeline-zoom-selection');
+    if (rect) rect.remove();
+  }
+
+  function setRangeZoomEnabled(enabled) {
+    rangeZoom.enabled = enabled;
+    rangeZoom.dragging = false;
+    if (rangeZoomButton) {
+      rangeZoomButton.classList.toggle('active', enabled);
+      rangeZoomButton.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    }
+    if (timelineContainer) {
+      timelineContainer.classList.toggle('timeline-zoom-active', enabled);
+      timelineContainer.classList.remove('timeline-zoom-dragging');
+    }
+    if (!enabled) clearRangeSelection();
+  }
+
+  function zoomToRange(svg, startX, endX) {
+    var bounds = timelineBounds(svg);
+    if (!bounds || Math.abs(endX - startX) < 8) return;
+    var left = Math.min(startX, endX);
+    var right = Math.max(startX, endX);
+    var duration = bounds.end.getTime() - bounds.start.getTime();
+    var start = new Date(bounds.start.getTime() + duration * ((left - bounds.left) / bounds.width));
+    var end = new Date(bounds.start.getTime() + duration * ((right - bounds.left) / bounds.width));
+    if (end <= start) return;
+    var params = new URLSearchParams(window.location.search);
+    params.set('time_range', 'custom');
+    params.set('start_date', start.toISOString().slice(0, 23));
+    params.set('end_date', end.toISOString().slice(0, 23));
+    window.location.href = '/invocations/timeline?' + params.toString();
+  }
+
+  if (rangeZoomButton && timelineContainer) {
+    var initialSvg = timelineSvg();
+    if (!timelineBounds(initialSvg)) rangeZoomButton.disabled = true;
+    rangeZoomButton.addEventListener('click', function() {
+      if (!rangeZoomButton.disabled) setRangeZoomEnabled(!rangeZoom.enabled);
+    });
+    timelineContainer.addEventListener('pointerdown', function(event) {
+      if (!rangeZoom.enabled || event.button !== 0) return;
+      var svg = timelineSvg();
+      var x = clientToTimelineX(svg, event);
+      if (x === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      rangeZoom.dragging = true;
+      rangeZoom.startX = x;
+      rangeZoom.currentX = x;
+      timelineContainer.classList.add('timeline-zoom-dragging');
+      if (timelineContainer.setPointerCapture) timelineContainer.setPointerCapture(event.pointerId);
+      updateRangeSelection(svg, x, x);
+    });
+    timelineContainer.addEventListener('pointermove', function(event) {
+      if (!rangeZoom.dragging) return;
+      var svg = timelineSvg();
+      var x = clientToTimelineX(svg, event);
+      if (x === null) return;
+      event.preventDefault();
+      rangeZoom.currentX = x;
+      updateRangeSelection(svg, rangeZoom.startX, x);
+    });
+    timelineContainer.addEventListener('pointerup', function(event) {
+      if (!rangeZoom.dragging) return;
+      var svg = timelineSvg();
+      var x = clientToTimelineX(svg, event) || rangeZoom.currentX;
+      event.preventDefault();
+      event.stopPropagation();
+      if (timelineContainer.releasePointerCapture) timelineContainer.releasePointerCapture(event.pointerId);
+      timelineContainer.classList.remove('timeline-zoom-dragging');
+      rangeZoom.dragging = false;
+      if (Math.abs(x - rangeZoom.startX) >= 8) {
+        setRangeZoomEnabled(false);
+        zoomToRange(svg, rangeZoom.startX, x);
+      } else {
+        clearRangeSelection();
+      }
+    });
+    timelineContainer.addEventListener('pointercancel', function() {
+      rangeZoom.dragging = false;
+      timelineContainer.classList.remove('timeline-zoom-dragging');
+      clearRangeSelection();
+    });
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape' && rangeZoom.enabled) setRangeZoomEnabled(false);
+    });
+  }
+
   // --- Filter form: show/hide custom date fields ---
   var timeRangeSelect = document.getElementById('time_range');
   var customFields = document.getElementById('custom-date-fields');
@@ -213,9 +366,9 @@
       'Pending': 'bg-warning text-dark', 'PendingRecovery': 'bg-warning text-dark',
       'Running': 'bg-info', 'RunningRecovery': 'bg-info',
       'Success': 'bg-success', 'Failed': 'bg-danger', 'Killed': 'bg-danger',
-      'Paused': 'bg-primary', 'Resumed': 'bg-info',
+      'Paused': 'bg-primary',
       'Retry': 'bg-secondary', 'Rerouted': 'bg-info',
-      'ConcurrencyControlled': 'bg-warning', 'ConcurrencyControlledFinal': 'bg-warning'
+      'ConcurrencyControlled': 'bg-warning', 'ConcurrencyControlledFinal': 'bg-danger'
     };
     return map[status] || 'bg-secondary';
   }

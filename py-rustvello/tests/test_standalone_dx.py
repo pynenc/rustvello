@@ -52,6 +52,26 @@ class TestDecorator:
             return x
 
         assert isinstance(serial, TaskHandle)
+        key = f"{serial._module}.{serial._name}"
+        assert sync_app._task_configs[key]["running_concurrency"] == 1
+
+    def test_runner_config_retains_retry_and_cache_settings(self, sync_app: App) -> None:
+        @sync_app.task(max_retries=3, cache_results=True)
+        def configured(x: int) -> int:
+            return x
+
+        key = f"{configured._module}.{configured._name}"
+        assert sync_app._task_configs[key]["max_retries"] == 3
+        assert sync_app._task_configs[key]["cache_results"] is True
+
+    def test_async_task_is_rejected_at_registration(self, sync_app: App) -> None:
+        """The standalone runner accepts synchronous Python callables only."""
+
+        with pytest.raises(TypeError, match="synchronous callable"):
+
+            @sync_app.task
+            async def async_task(x: int) -> int:
+                return x
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +128,38 @@ class TestSubmitAndResult:
 
         result = greet().result(timeout=5)
         assert result == "hello world"
+
+    def test_signature_binding_rejects_missing_argument(self, sync_app: App) -> None:
+        @sync_app.task
+        def add(x: int, y: int) -> int:
+            return x + y
+
+        with pytest.raises(TypeError, match="missing a required argument"):
+            add(1)
+
+    def test_signature_binding_rejects_duplicate_argument(self, sync_app: App) -> None:
+        @sync_app.task
+        def add(x: int, y: int) -> int:
+            return x + y
+
+        with pytest.raises(TypeError, match="multiple values for argument"):
+            add(1, x=2, y=3)
+
+    def test_sync_exception_preserves_python_type(self, sync_app: App) -> None:
+        @sync_app.task
+        def fail() -> None:
+            raise ValueError("invalid input")
+
+        with pytest.raises(ValueError, match="invalid input"):
+            fail()
+
+    def test_unserializable_argument_fails_before_dispatch(self, sync_app: App) -> None:
+        @sync_app.task
+        def echo(value: object) -> object:
+            return value
+
+        with pytest.raises(TypeError, match="JSON serializable"):
+            echo(object())
 
 
 # ---------------------------------------------------------------------------

@@ -150,6 +150,9 @@ endblock %} {% block content %}
                         >{{ inv.invocation_id }}</code
                       >
                     </a>
+                    {% if inv.is_workflow_defining %}
+                    <span class="badge bg-info text-dark ms-1" title="Workflow-defining invocation">Workflow root</span>
+                    {% endif %}
                     <a
                       href="#"
                       class="ms-1 view-in-timeline-link"

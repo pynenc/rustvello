@@ -10,12 +10,14 @@ mod condition;
 mod context;
 mod definition;
 pub(crate) mod filter;
+mod monitoring;
 #[cfg(test)]
 mod tests;
 
 pub use condition::*;
 pub use context::*;
 pub use definition::*;
+pub use monitoring::*;
 
 // ---------------------------------------------------------------------------
 // Identifiers

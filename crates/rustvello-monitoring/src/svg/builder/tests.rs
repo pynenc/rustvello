@@ -367,6 +367,15 @@ fn test_rendered_svg_sequential_invocations_same_y() {
     let data = builder.build();
     let svg = TimelineSvgRenderer::render(&data);
 
+    assert!(
+        svg.contains("data-timeline-start=") && svg.contains("data-timeline-end="),
+        "timeline SVG should expose its UTC bounds for browser range zoom"
+    );
+    assert!(
+        svg.starts_with(r#"<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="#),
+        "timeline SVG should use its viewBox aspect ratio for responsive height"
+    );
+
     // Extract all segment Y values for the runner group (not "unassigned").
     // Segments are rendered as <rect ... y="Y" ... data-invocation-id="inv-X">
     // (not self-closing — they contain <title>)

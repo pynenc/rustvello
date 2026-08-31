@@ -536,8 +536,8 @@ pub(super) fn parse_task_config_override(
             o.key_arguments = Some(keys);
         }
     }
-    if let Some(toml::Value::Boolean(v)) = table.get("force_new_workflow") {
-        o.force_new_workflow = Some(*v);
+    if let Some(toml::Value::Boolean(v)) = table.get("is_workflow_task") {
+        o.is_workflow_task = Some(*v);
     }
     if let Some(toml::Value::Boolean(v)) = table.get("reroute_on_cc") {
         o.reroute_on_cc = Some(*v);

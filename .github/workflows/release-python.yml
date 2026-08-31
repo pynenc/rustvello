@@ -26,9 +26,6 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.12"
-  # Python versions to build wheels for (space-separated).
-  # Must stay within PyO3's supported range — currently ≤ 3.13 (pyo3 0.22).
-  WHEEL_PYTHON_VERSIONS: "3.12 3.13"
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
@@ -195,6 +192,10 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Read supported Python versions
+        id: python-versions
+        run: echo "versions=$(python scripts/python_compatibility.py)" >> "$GITHUB_OUTPUT"
+
       - name: Patch version for non-release builds
         if: >-
           (needs.check-version.result == 'success' && needs.check-version.outputs.is_release != 'true') ||
@@ -210,7 +211,7 @@ jobs:
           args: >
             --release
             --manifest-path py-rustvello/Cargo.toml
-            --interpreter ${{ env.WHEEL_PYTHON_VERSIONS }}
+            --interpreter ${{ steps.python-versions.outputs.versions }}
             --out dist
 
       - name: Test wheel

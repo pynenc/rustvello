@@ -34,6 +34,7 @@ struct InvocationRow {
     status: String,
     status_class: String,
     num_retries: usize,
+    is_workflow_defining: bool,
 }
 
 /// Current filter values echoed back to the template.
@@ -86,6 +87,7 @@ struct InvocationDetailTemplate {
     parent_invocation_id: Option<String>,
     workflow_type: Option<String>,
     workflow_id: Option<String>,
+    is_workflow_defining: bool,
     created_at: Option<String>,
     completed_at: Option<String>,
     duration: Option<String>,
@@ -119,6 +121,21 @@ pub struct TimelineQuery {
     pub workflow_id: Option<String>,
     pub limit: Option<String>,
     pub selected: Option<String>,
+    pub inv_ids: Option<String>,
+}
+
+fn parse_timeline_datetime(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    // Query-string decoding turns an unescaped `+00:00` offset into a space.
+    // Normalize that form so links from event and trigger pages remain valid.
+    let normalized = value.replace(' ', "+");
+    chrono::DateTime::parse_from_rfc3339(&normalized)
+        .map(|datetime| datetime.with_timezone(&chrono::Utc))
+        .or_else(|_| {
+            chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.3f")
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S"))
+                .map(|datetime| datetime.and_utc())
+        })
+        .ok()
 }
 
 /// Current filter values for the timeline sidebar.
@@ -130,6 +147,7 @@ struct TimelineFilters {
     workflow_type: String,
     workflow_id: String,
     limit: String,
+    inv_ids: String,
 }
 
 #[derive(Template)]
@@ -232,6 +250,9 @@ async fn list(
                 .as_ref()
                 .map(|i| i.call_id.to_string())
                 .unwrap_or_default();
+            let is_workflow_defining = inv
+                .as_ref()
+                .is_some_and(rustvello_proto::invocation::InvocationDTO::is_workflow_defining);
             let badge = status_colors::badge_class(&status);
 
             // Count retries from history
@@ -253,6 +274,7 @@ async fn list(
                 status: format!("{status:?}"),
                 status_class: badge.to_owned(),
                 num_retries,
+                is_workflow_defining,
             });
 
             if invocations.len() >= max_collect {
@@ -351,6 +373,9 @@ async fn detail(
         .as_ref()
         .and_then(|i| i.workflow.as_ref())
         .map(|wf| wf.workflow_id.to_string());
+    let is_workflow_defining = inv
+        .as_ref()
+        .is_some_and(rustvello_proto::invocation::InvocationDTO::is_workflow_defining);
     let history_records = app
         .state_backend
         .get_history(&inv_id_typed)
@@ -484,6 +509,7 @@ async fn detail(
         parent_invocation_id,
         workflow_type,
         workflow_id,
+        is_workflow_defining,
         created_at,
         completed_at,
         duration,
@@ -504,24 +530,16 @@ async fn timeline(
 
     // Parse time range
     let now = chrono::Utc::now();
-    // Parse datetime with optional millisecond precision
-    fn parse_datetime(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.3f")
-            .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S"))
-            .ok()
-            .map(|dt| dt.and_utc())
-    }
-
     let (mut start_dt, mut end_dt) = if time_range == "custom" {
         let start = query
             .start_date
             .as_deref()
-            .and_then(parse_datetime)
+            .and_then(parse_timeline_datetime)
             .unwrap_or_else(|| now - chrono::Duration::minutes(5));
         let end = query
             .end_date
             .as_deref()
-            .and_then(parse_datetime)
+            .and_then(parse_timeline_datetime)
             .unwrap_or(now);
         (start, end)
     } else {
@@ -570,64 +588,139 @@ async fn timeline(
         }
     }
 
-    // Task ID filter
-    let filter_task_ids: Vec<_> = if let Some(tid_str) = &query.task_id {
-        if tid_str.is_empty() {
-            app.task_ids.clone()
-        } else {
-            app.task_ids
-                .iter()
-                .filter(|t| t.to_string() == *tid_str)
-                .cloned()
-                .collect()
+    let limit: Option<usize> = query
+        .limit
+        .as_deref()
+        .and_then(|s| if s.is_empty() { None } else { s.parse().ok() })
+        .map(|value: usize| value.min(50_000));
+
+    // Use the backend's bounded history query to identify active invocations
+    // before loading complete histories for the small set that will render.
+    // This avoids the previous task-by-task full-history scan and keeps the
+    // timeline responsive when old invocations greatly outnumber visible ones.
+    let task_filter = query.task_id.as_deref().filter(|value| !value.is_empty());
+    let workflow_type_filter = query
+        .workflow_type
+        .as_deref()
+        .filter(|value| !value.is_empty());
+    let workflow_id_filter = query
+        .workflow_id
+        .as_deref()
+        .filter(|value| !value.is_empty());
+
+    let requested_inv_ids = parse_invocation_scope(query.inv_ids.as_deref());
+    let mut candidate_ids = Vec::new();
+    let mut candidate_seen = std::collections::HashSet::new();
+
+    if let Some(requested_ids) = &requested_inv_ids {
+        // An explicit scope is authoritative. Do not discard a selected
+        // invocation merely because a backend's range index is stale or the
+        // requested window contains only part of its history.
+        for inv_id in requested_ids {
+            if candidate_seen.insert(inv_id.clone()) {
+                candidate_ids.push(rustvello_core::prelude::InvocationId::from(inv_id.as_str()));
+            }
         }
     } else {
-        app.task_ids.clone()
-    };
+        match app
+            .state_backend
+            .get_history_in_timerange(start_dt, end_dt, 0, 0)
+            .await
+        {
+            Ok(ranged_history) => {
+                for entry in ranged_history {
+                    let inv_id = entry.invocation_id.to_string();
+                    if candidate_seen.insert(inv_id) {
+                        candidate_ids.push(entry.invocation_id);
+                    }
+                }
+            }
+            Err(error) => {
+                // Keep the dashboard usable with older or partially migrated
+                // backend indexes. The fallback is intentionally limited to
+                // the registered task set and still applies the filters below.
+                tracing::warn!(%error, "timeline range query failed; falling back to task index");
+                let fallback_task_ids = task_filter.map_or_else(
+                    || app.task_ids.clone(),
+                    |task_id| {
+                        app.task_ids
+                            .iter()
+                            .filter(|candidate| candidate.to_string() == task_id)
+                            .cloned()
+                            .collect()
+                    },
+                );
+                for task_id in fallback_task_ids {
+                    if let Ok(invocations) =
+                        app.orchestrator.get_invocations_by_task(&task_id).await
+                    {
+                        for inv_id in invocations {
+                            if candidate_seen.insert(inv_id.to_string()) {
+                                candidate_ids.push(inv_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-    let limit: Option<usize> =
-        query
-            .limit
-            .as_deref()
-            .and_then(|s| if s.is_empty() { None } else { s.parse().ok() });
-
-    // Build the SVG
+    // Build the SVG from complete histories so an invocation that started
+    // just before the visible window still renders its correct transitions.
     let mut builder = crate::svg::TimelineDataBuilder::new(crate::svg::TimelineConfig::default());
     builder.set_time_bounds(start_dt, end_dt);
 
     let mut inv_count = 0usize;
     let mut runner_ids_seen = std::collections::HashSet::new();
-    for tid in &filter_task_ids {
-        let inv_ids = app
-            .orchestrator
-            .get_invocations_by_task(tid)
+    for inv_id in &candidate_ids {
+        if limit.is_some_and(|maximum| inv_count >= maximum) {
+            break;
+        }
+
+        let history = app
+            .state_backend
+            .get_history(inv_id)
             .await
             .unwrap_or_default();
-        for inv_id in &inv_ids {
-            if let Some(lim) = limit {
-                if inv_count >= lim {
-                    break;
-                }
+        if history.is_empty() {
+            continue;
+        }
+
+        let invocation = app.state_backend.get_invocation(inv_id).await.ok();
+        let Some(invocation) = invocation else {
+            continue;
+        };
+        if task_filter.is_some_and(|value| invocation.task_id.to_string() != value) {
+            continue;
+        }
+        if workflow_type_filter.is_some_and(|value| {
+            invocation
+                .workflow
+                .as_ref()
+                .is_none_or(|workflow| workflow.workflow_type.to_string() != value)
+        }) {
+            continue;
+        }
+        if workflow_id_filter.is_some_and(|value| {
+            invocation
+                .workflow
+                .as_ref()
+                .is_none_or(|workflow| !workflow.workflow_id.to_string().contains(value))
+        }) {
+            continue;
+        }
+
+        for entry in &history {
+            if let Some(ref rid) = entry.runner_id {
+                runner_ids_seen.insert(rid.to_string());
             }
-            let history = app
-                .state_backend
-                .get_history(inv_id)
-                .await
-                .unwrap_or_default();
-            if !history.is_empty() {
-                for entry in &history {
-                    if let Some(ref rid) = entry.runner_id {
-                        runner_ids_seen.insert(rid.to_string());
-                    }
-                    if let Some(ref rid) = entry.status_record.runner_id {
-                        runner_ids_seen.insert(rid.to_string());
-                    }
-                }
-                let tid_str = tid.to_string();
-                builder.add_history_batch_for_task(history, &tid_str);
-                inv_count += 1;
+            if let Some(ref rid) = entry.status_record.runner_id {
+                runner_ids_seen.insert(rid.to_string());
             }
         }
+        let task_id = invocation.task_id.to_string();
+        builder.add_history_batch_for_task(history, &task_id);
+        inv_count += 1;
     }
 
     // Fetch runner contexts for enriched labels
@@ -674,11 +767,23 @@ async fn timeline(
             workflow_type: query.workflow_type.unwrap_or_default(),
             workflow_id: query.workflow_id.unwrap_or_default(),
             limit: query.limit.unwrap_or_else(|| "500".to_owned()),
+            inv_ids: query.inv_ids.unwrap_or_default(),
         },
         start_datetime,
         end_datetime,
         selected_invocation: query.selected.unwrap_or_default(),
     }))
+}
+
+fn parse_invocation_scope(value: Option<&str>) -> Option<std::collections::HashSet<String>> {
+    let ids: std::collections::HashSet<String> = value
+        .unwrap_or_default()
+        .split([',', ' ', '\n', '\t'])
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect();
+    (!ids.is_empty()).then_some(ids)
 }
 
 async fn table_partial(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
@@ -783,6 +888,7 @@ async fn api_json(
                     "created_at": inv.created_at.to_rfc3339(),
                     "updated_at": inv.updated_at.to_rfc3339(),
                     "parent_invocation_id": inv.parent_invocation_id.as_ref().map(std::string::ToString::to_string),
+                    "is_workflow_defining": inv.is_workflow_defining(),
                     "workflow": inv.workflow.as_ref().map(|w| serde_json::json!({
                         "workflow_type": w.workflow_type.to_string(),
                         "workflow_id": w.workflow_id.to_string(),
@@ -834,6 +940,36 @@ async fn rerun(
             }
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_invocation_scope, parse_timeline_datetime};
+    use chrono::{Datelike, Timelike};
+
+    #[test]
+    fn parse_timeline_datetime_accepts_rfc3339_offsets() {
+        let parsed = parse_timeline_datetime("2026-08-31T08:04:25.701+00:00").unwrap();
+        assert_eq!(parsed.year(), 2026);
+        assert_eq!(parsed.hour(), 8);
+        assert_eq!(parsed.nanosecond(), 701_000_000);
+    }
+
+    #[test]
+    fn parse_timeline_datetime_accepts_url_decoded_positive_offset() {
+        let parsed = parse_timeline_datetime("2026-08-31T08:04:25.701 00:00").unwrap();
+        assert_eq!(parsed.to_rfc3339(), "2026-08-31T08:04:25.701+00:00");
+    }
+
+    #[test]
+    fn parse_invocation_scope_accepts_comma_and_whitespace_separators() {
+        let parsed = parse_invocation_scope(Some("first, second\nfirst\tthird")).unwrap();
+        assert_eq!(parsed.len(), 3);
+        assert!(parsed.contains("first"));
+        assert!(parsed.contains("second"));
+        assert!(parsed.contains("third"));
+        assert!(parse_invocation_scope(Some("  , \n\t")).is_none());
+    }
 }
 
 // Family tree sub-module

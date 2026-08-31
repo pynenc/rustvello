@@ -20,22 +20,26 @@ cargo install rustvello-cli
 
 ## Common Options
 
-Most commands accept `--db_path <path>` to use a SQLite database. Without it, an in-memory database is used.
+Most data commands accept `--db-path <path>` to use a SQLite database. Without
+it, an in-memory SQLite database is used.
+
+The runner discovers tasks registered in the binary through Rust `inventory`.
+It does not scan files for Python application objects.
 
 ## Examples
 
 ```bash
 # Start a runner
-rustvello run --app_id my_app --db_path tasks.db
+rustvello run --app-id my_app --db-path tasks.db
 
 # List all pending invocations
-rustvello list --status PENDING --db_path tasks.db
+rustvello list --status PENDING --db-path tasks.db
 
 # Check status of a specific invocation
-rustvello status inv_abc123 --db_path tasks.db
+rustvello status 550e8400-e29b-41d4-a716-446655440000 --db-path tasks.db
 
 # Purge all data (with confirmation skip)
-rustvello purge --db_path tasks.db --yes
+rustvello purge --db-path tasks.db --yes
 
 # Show version and system info
 rustvello info

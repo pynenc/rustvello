@@ -40,6 +40,9 @@ pub struct RedisOrchestrator {
     pub(crate) cc_rev_prefix: String,
     pub(crate) heartbeat_prefix: String,
     pub(crate) retries_prefix: String,
+    pub(crate) auto_purge_prefix: String,
+    pub(crate) atomic_timeline_key: String,
+    pub(crate) atomic_timeline_sequence_key: String,
 }
 
 impl RedisOrchestrator {
@@ -54,6 +57,9 @@ impl RedisOrchestrator {
             cc_rev_prefix: format!("{p}orch:cc_rev:"),
             heartbeat_prefix: format!("{p}orch:heartbeat:"),
             retries_prefix: format!("{p}orch:retries:"),
+            auto_purge_prefix: format!("{p}orch:auto_purge:"),
+            atomic_timeline_key: format!("{p}orch:atomic_timeline"),
+            atomic_timeline_sequence_key: format!("{p}orch:atomic_timeline_sequence"),
             pool,
         }
     }

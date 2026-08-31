@@ -60,13 +60,19 @@ pub async fn test_per_task_isolation(broker: &dyn Broker) {
 
 /// Count invocations accurately.
 pub async fn test_count_invocations(broker: &dyn Broker) {
+    let task = test_task_id("count_task");
     assert_eq!(broker.count_invocations(None).await.unwrap(), 0);
 
     let ids = generate_invocation_ids(3);
     for id in &ids {
         broker.route_invocation(id).await.unwrap();
     }
-    assert_eq!(broker.count_invocations(None).await.unwrap(), 3);
+    broker
+        .route_invocation_for_task(&InvocationId::new(), &task)
+        .await
+        .unwrap();
+    assert_eq!(broker.count_invocations(None).await.unwrap(), 4);
+    assert_eq!(broker.count_invocations(Some(&task)).await.unwrap(), 1);
 }
 
 /// Count per-task invocations.
@@ -97,6 +103,10 @@ pub async fn test_purge_all(broker: &dyn Broker) {
     for id in &ids {
         broker.route_invocation(id).await.unwrap();
     }
+    broker
+        .route_invocation_for_task(&InvocationId::new(), &test_task_id("purge_task"))
+        .await
+        .unwrap();
     broker.purge(None).await.unwrap();
     assert_eq!(broker.count_invocations(None).await.unwrap(), 0);
     assert_eq!(broker.retrieve_invocation(None).await.unwrap(), None);

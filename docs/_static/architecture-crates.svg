@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc">
+  <title id="title">Rustvello workspace crate dependency map</title>
+  <desc id="desc">Dependency layers from protocol and core traits through backends and application to monitoring, command line, testing, and Python bindings.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L8 3Z" fill="#52606d"/></marker>
+    <style>
+      .h{font:700 25px Inter,system-ui,sans-serif;fill:#24313d}.s{font:13px Inter,system-ui,sans-serif;fill:#52606d}
+      .t{font:600 15px Inter,system-ui,sans-serif;fill:#24313d}.n{font:12px Inter,system-ui,sans-serif;fill:#52606d}
+      .box{stroke-width:2;rx:7}.line{stroke:#52606d;stroke-width:1.6;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="680" fill="#f8fafb"/>
+  <text x="50" y="48" class="h">Workspace dependency direction</text>
+  <text x="50" y="73" class="s">Arrows point from consumers toward the internal crate they depend on</text>
+  <rect x="470" y="560" width="260" height="74" class="box" fill="#e8f3ec" stroke="#3f7d5c"/>
+  <text x="600" y="590" text-anchor="middle" class="t">rustvello-proto</text><text x="600" y="612" text-anchor="middle" class="n">wire types and status model</text>
+  <rect x="470" y="430" width="260" height="74" class="box" fill="#eaf1fb" stroke="#4f75a8"/>
+  <text x="600" y="460" text-anchor="middle" class="t">rustvello-core</text><text x="600" y="482" text-anchor="middle" class="n">traits, managers, context</text>
+  <path d="M600 504V552" class="line"/>
+  <rect x="50" y="280" width="240" height="100" class="box" fill="#fff4e6" stroke="#b56d24"/>
+  <text x="170" y="309" text-anchor="middle" class="t">Backend implementations</text>
+  <text x="170" y="333" text-anchor="middle" class="n">mem, sqlite, redis, postgres</text><text x="170" y="353" text-anchor="middle" class="n">mongo, mongo3, rabbitmq</text>
+  <rect x="330" y="280" width="200" height="100" class="box" fill="#f3ecfa" stroke="#77559a"/>
+  <text x="430" y="315" text-anchor="middle" class="t">rustvello-macros</text><text x="430" y="340" text-anchor="middle" class="n">typed task generation</text>
+  <rect x="570" y="280" width="260" height="100" class="box" fill="#eaf7f6" stroke="#2f7f78"/>
+  <text x="700" y="312" text-anchor="middle" class="t">rustvello</text><text x="700" y="336" text-anchor="middle" class="n">app, builder, orchestration</text><text x="700" y="356" text-anchor="middle" class="n">task discovery and runners</text>
+  <rect x="870" y="280" width="280" height="100" class="box" fill="#f7eeee" stroke="#986060"/>
+  <text x="1010" y="310" text-anchor="middle" class="t">rustvello-test-suite</text><text x="1010" y="334" text-anchor="middle" class="n">backend contract macros</text><text x="1010" y="354" text-anchor="middle" class="n">dev dependency of backends</text>
+  <path d="M170 380L505 425" class="line"/><path d="M700 380L635 423" class="line"/><path d="M1010 380L695 425" class="line"/><path d="M430 380L640 424" class="line"/>
+  <rect x="45" y="110" width="210" height="90" class="box" fill="#edf2f7" stroke="#60758a"/>
+  <text x="150" y="144" text-anchor="middle" class="t">monitoring</text><text x="150" y="168" text-anchor="middle" class="n">Axum, Askama, HTMX</text>
+  <rect x="285" y="110" width="185" height="90" class="box" fill="#edf2f7" stroke="#60758a"/>
+  <text x="378" y="144" text-anchor="middle" class="t">CLI</text><text x="378" y="168" text-anchor="middle" class="n">operator commands</text>
+  <rect x="500" y="110" width="210" height="90" class="box" fill="#edf2f7" stroke="#60758a"/>
+  <text x="605" y="144" text-anchor="middle" class="t">Prometheus</text><text x="605" y="168" text-anchor="middle" class="n">event metrics</text>
+  <rect x="740" y="110" width="210" height="90" class="box" fill="#fff0f4" stroke="#a44e69"/>
+  <text x="845" y="140" text-anchor="middle" class="t">rustvello-python</text><text x="845" y="164" text-anchor="middle" class="n">PyO3 wrappers</text>
+  <rect x="980" y="110" width="175" height="90" class="box" fill="#fff0f4" stroke="#a44e69"/>
+  <text x="1068" y="140" text-anchor="middle" class="t">py-rustvello</text><text x="1068" y="164" text-anchor="middle" class="n">Python wheel</text>
+  <path d="M150 200L625 275" class="line"/><path d="M378 200L655 274" class="line"/><path d="M605 200L687 273" class="line"/><path d="M845 200L754 274" class="line"/><path d="M1068 200L900 202L858 205" class="line"/>
+</svg>

@@ -57,6 +57,13 @@ impl InvocationDTO {
             workflow: Some(workflow),
         }
     }
+
+    /// Whether this invocation defines its workflow or sub-workflow identity.
+    pub fn is_workflow_defining(&self) -> bool {
+        self.workflow
+            .as_ref()
+            .is_some_and(|workflow| workflow.workflow_id == self.invocation_id)
+    }
 }
 
 /// An audit log entry for status changes.
@@ -144,7 +151,7 @@ impl WorkflowIdentity {
         }
     }
 
-    /// Create a new sub-workflow identity (force_new_workflow).
+    /// Create a new explicit sub-workflow identity.
     pub fn sub_workflow(
         workflow_id: InvocationId,
         workflow_type: TaskId,
@@ -193,6 +200,30 @@ mod tests {
         let back: InvocationDTO = serde_json::from_str(&json).unwrap();
         assert_eq!(back.invocation_id, dto.invocation_id);
         assert_eq!(back.status, InvocationStatus::Registered);
+    }
+
+    #[test]
+    fn workflow_defining_is_derived_from_persisted_identity() {
+        let task_id = TaskId::new("mod", "workflow");
+        let root_id = InvocationId::from_string("root-1");
+        let call_id = CallId::new(task_id.clone(), "hash");
+        let root = InvocationDTO::with_workflow(
+            root_id.clone(),
+            task_id.clone(),
+            call_id.clone(),
+            None,
+            WorkflowIdentity::root(root_id.clone(), task_id.clone()),
+        );
+        let child = InvocationDTO::with_workflow(
+            InvocationId::from_string("child-1"),
+            task_id.clone(),
+            call_id,
+            Some(root_id.clone()),
+            WorkflowIdentity::child(root_id, task_id, InvocationId::from_string("child-1"), 1),
+        );
+
+        assert!(root.is_workflow_defining());
+        assert!(!child.is_workflow_defining());
     }
 
     #[test]

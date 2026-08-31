@@ -46,8 +46,6 @@ pub enum InvocationStatus {
     RunningRecovery,
     /// Task execution is paused
     Paused,
-    /// Task execution has been resumed after pause
-    Resumed,
     /// Task execution has been killed
     Killed,
     /// Completed successfully
@@ -69,7 +67,6 @@ pub const ALL_STATUSES: &[InvocationStatus] = &[
     InvocationStatus::Running,
     InvocationStatus::RunningRecovery,
     InvocationStatus::Paused,
-    InvocationStatus::Resumed,
     InvocationStatus::Killed,
     InvocationStatus::Success,
     InvocationStatus::Failed,
@@ -124,7 +121,6 @@ impl fmt::Display for InvocationStatus {
             Self::Running => write!(f, "RUNNING"),
             Self::RunningRecovery => write!(f, "RUNNING_RECOVERY"),
             Self::Paused => write!(f, "PAUSED"),
-            Self::Resumed => write!(f, "RESUMED"),
             Self::Killed => write!(f, "KILLED"),
             Self::Success => write!(f, "SUCCESS"),
             Self::Failed => write!(f, "FAILED"),
@@ -147,7 +143,6 @@ impl FromStr for InvocationStatus {
             "RUNNING" => Ok(Self::Running),
             "RUNNING_RECOVERY" => Ok(Self::RunningRecovery),
             "PAUSED" => Ok(Self::Paused),
-            "RESUMED" => Ok(Self::Resumed),
             "KILLED" => Ok(Self::Killed),
             "SUCCESS" => Ok(Self::Success),
             "FAILED" => Ok(Self::Failed),
@@ -289,10 +284,8 @@ fn build_config() -> StatusConfiguration {
         (
             Pending,
             StatusDefinition {
-                // An invocation can FAIL without running by the CYCLE-CONTROL mechanism
-                // to avoid deadlocks.
                 // PENDING_RECOVERY is for timeout recovery without ownership validation.
-                allowed_transitions: vec![Running, Killed, Rerouted, Failed, PendingRecovery],
+                allowed_transitions: vec![Running, Killed, Rerouted, PendingRecovery],
                 requires_ownership: true,
                 acquires_ownership: true,
                 ..StatusDefinition::new()
@@ -327,15 +320,7 @@ fn build_config() -> StatusConfiguration {
         (
             Paused,
             StatusDefinition {
-                allowed_transitions: vec![Resumed, Killed],
-                requires_ownership: true,
-                ..StatusDefinition::new()
-            },
-        ),
-        (
-            Resumed,
-            StatusDefinition {
-                allowed_transitions: vec![Paused, Killed, Retry, Success, Failed],
+                allowed_transitions: vec![Running, Killed],
                 requires_ownership: true,
                 ..StatusDefinition::new()
             },

@@ -18,41 +18,52 @@ use super::RustvelloApp;
 impl RustvelloApp {
     /// Resolve the workflow identity for a new invocation.
     ///
-    /// If called from within a running task (i.e. `with_invocation_context()` returns
-    /// `Some`), the new invocation inherits the parent's workflow unless
-    /// `force_new_workflow` is set—in which case a sub-workflow is created.
-    /// When called from top-level code (no context), a new root workflow is started.
+    /// Ordinary tasks inherit workflow membership from their caller and remain
+    /// standalone at top level. Workflow tasks define a root at top level and
+    /// a sub-workflow when invoked from an existing workflow.
     fn resolve_workflow(
         &self,
         invocation_id: &InvocationId,
         task_id: &TaskId,
-        force_new_workflow: bool,
-    ) -> (Option<InvocationId>, WorkflowIdentity) {
-        // Use borrow-based accessor to avoid cloning the entire context
-        let parent_info = with_invocation_context(|ctx| {
-            (
-                ctx.invocation_id.clone(),
-                ctx.workflow.workflow_id.clone(),
-                ctx.workflow.workflow_type.clone(),
-                ctx.workflow.depth,
-            )
-        });
+        is_workflow_task: bool,
+    ) -> (Option<InvocationId>, Option<WorkflowIdentity>) {
+        let parent_info =
+            with_invocation_context(|ctx| (ctx.invocation_id.clone(), ctx.workflow.clone()));
 
-        match parent_info {
-            Some((parent_inv_id, wf_id, wf_type, depth)) if !force_new_workflow => {
-                let workflow =
-                    WorkflowIdentity::child(wf_id, wf_type, parent_inv_id.clone(), depth + 1);
-                (Some(parent_inv_id), workflow)
-            }
-            Some((parent_inv_id, wf_id, _, _)) => {
-                let workflow =
-                    WorkflowIdentity::sub_workflow(invocation_id.clone(), task_id.clone(), wf_id);
-                (Some(parent_inv_id), workflow)
-            }
-            None => {
-                let workflow = WorkflowIdentity::root(invocation_id.clone(), task_id.clone());
-                (None, workflow)
-            }
+        match (parent_info, is_workflow_task) {
+            (Some((parent_inv_id, Some(parent_workflow))), false) => (
+                Some(parent_inv_id.clone()),
+                Some(WorkflowIdentity::child(
+                    parent_workflow.workflow_id,
+                    parent_workflow.workflow_type,
+                    parent_inv_id,
+                    parent_workflow.depth + 1,
+                )),
+            ),
+            (Some((parent_inv_id, Some(parent_workflow))), true) => (
+                Some(parent_inv_id),
+                Some(WorkflowIdentity::sub_workflow(
+                    invocation_id.clone(),
+                    task_id.clone(),
+                    parent_workflow.workflow_id,
+                )),
+            ),
+            (Some((parent_inv_id, None)), false) => (Some(parent_inv_id), None),
+            (Some((parent_inv_id, None)), true) => (
+                Some(parent_inv_id),
+                Some(WorkflowIdentity::root(
+                    invocation_id.clone(),
+                    task_id.clone(),
+                )),
+            ),
+            (None, false) => (None, None),
+            (None, true) => (
+                None,
+                Some(WorkflowIdentity::root(
+                    invocation_id.clone(),
+                    task_id.clone(),
+                )),
+            ),
         }
     }
 
@@ -98,7 +109,7 @@ impl RustvelloApp {
                 task_id: task_id.clone(),
             }
         })?;
-        let force_new = self.resolve_force_new_workflow(task_id, task.config());
+        let is_workflow_task = self.resolve_is_workflow_task(task_id, task.config());
 
         // Create the call DTO
         let call = CallDTO::new(task_id.clone(), args);
@@ -111,20 +122,40 @@ impl RustvelloApp {
             .await?;
 
         // Resolve workflow identity
-        let (parent_id, workflow) = self.resolve_workflow(&invocation_id, task_id, force_new);
+        let (parent_id, workflow) =
+            self.resolve_workflow(&invocation_id, task_id, is_workflow_task);
 
         // Store in state backend
-        let inv_dto = InvocationDTO::with_workflow(
-            invocation_id.clone(),
-            task_id.clone(),
-            call.call_id.clone(),
-            parent_id,
-            workflow,
-        );
+        let inv_dto = match workflow.clone() {
+            Some(workflow) => InvocationDTO::with_workflow(
+                invocation_id.clone(),
+                task_id.clone(),
+                call.call_id.clone(),
+                parent_id.clone(),
+                workflow,
+            ),
+            None => {
+                let mut dto = InvocationDTO::new(
+                    invocation_id.clone(),
+                    task_id.clone(),
+                    call.call_id.clone(),
+                );
+                dto.parent_invocation_id = parent_id.clone();
+                dto
+            }
+        };
         self.coordinator
             .state_backend
             .upsert_invocation(&inv_dto, &call)
             .await?;
+        if is_workflow_task {
+            if let Some(workflow) = workflow.as_ref() {
+                self.coordinator
+                    .state_backend
+                    .store_workflow_run(workflow)
+                    .await?;
+            }
+        }
 
         // Record the initial Registered history entry.
         // Always capture the caller's runner identity — never None.
@@ -169,7 +200,7 @@ impl RustvelloApp {
         &self,
         task_id: &TaskId,
         args: SerializedArguments,
-        key_args: Option<&SerializedArguments>,
+        _key_args: Option<&SerializedArguments>,
     ) -> RustvelloResult<InvocationId> {
         // Look up config to check registration_concurrency
         let task = self.task_registry.get_dyn(task_id).ok_or_else(|| {
@@ -190,11 +221,36 @@ impl RustvelloApp {
             let existing = self
                 .coordinator
                 .orchestrator
-                .get_existing_invocations(task_id, key_args, &non_terminal)
+                .get_existing_invocations(task_id, None, &non_terminal)
                 .await?;
 
-            if let Some(inv_id) = existing.first() {
-                return Ok(inv_id.clone());
+            let requested_key = crate::task_config::concurrency_arguments(
+                config.registration_concurrency,
+                &config.key_arguments,
+                &args,
+            );
+            for inv_id in existing {
+                if config.registration_concurrency == ConcurrencyControlType::Task {
+                    return Ok(inv_id);
+                }
+                let invocation = self
+                    .coordinator
+                    .state_backend
+                    .get_invocation(&inv_id)
+                    .await?;
+                let call = self
+                    .coordinator
+                    .state_backend
+                    .get_call(&invocation.call_id)
+                    .await?;
+                let existing_key = crate::task_config::concurrency_arguments(
+                    config.registration_concurrency,
+                    &config.key_arguments,
+                    &call.serialized_arguments,
+                );
+                if existing_key == requested_key {
+                    return Ok(inv_id);
+                }
             }
         }
 
@@ -278,22 +334,42 @@ impl RustvelloApp {
             .register_invocation(&call_dto)
             .await?;
 
-        // Resolve workflow identity — only need force_new_workflow from config
-        let force_new = self.resolve_force_new_workflow(task_id, task.config());
-        let (parent_id, workflow) = self.resolve_workflow(&invocation_id, task_id, force_new);
+        // Resolve workflow identity from the explicit workflow-task marker.
+        let is_workflow_task = self.resolve_is_workflow_task(task_id, task.config());
+        let (parent_id, workflow) =
+            self.resolve_workflow(&invocation_id, task_id, is_workflow_task);
 
         // Store in state backend
-        let inv_dto = InvocationDTO::with_workflow(
-            invocation_id.clone(),
-            task_id.clone(),
-            call_dto.call_id.clone(),
-            parent_id,
-            workflow,
-        );
+        let inv_dto = match workflow.clone() {
+            Some(workflow) => InvocationDTO::with_workflow(
+                invocation_id.clone(),
+                task_id.clone(),
+                call_dto.call_id.clone(),
+                parent_id.clone(),
+                workflow,
+            ),
+            None => {
+                let mut dto = InvocationDTO::new(
+                    invocation_id.clone(),
+                    task_id.clone(),
+                    call_dto.call_id.clone(),
+                );
+                dto.parent_invocation_id = parent_id.clone();
+                dto
+            }
+        };
         self.coordinator
             .state_backend
             .upsert_invocation(&inv_dto, &call_dto)
             .await?;
+        if is_workflow_task {
+            if let Some(workflow) = workflow.as_ref() {
+                self.coordinator
+                    .state_backend
+                    .store_workflow_run(workflow)
+                    .await?;
+            }
+        }
 
         // Record the initial Registered history entry.
         // Always capture the caller's runner identity — never None.

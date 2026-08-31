@@ -16,10 +16,16 @@ impl TimelineSvgRenderer {
 
         let mut buf = String::with_capacity(8192);
 
-        // SVG header — responsive with viewBox
+        // SVG header — responsive with viewBox and machine-readable bounds for
+        // the browser's drag-to-zoom interaction. Leave height intrinsic so a
+        // wide responsive SVG does not reserve a fixed-height blank viewport.
         let _ = write!(
             buf,
-            r#"<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="{height}" viewBox="0 0 {width} {height}" preserveAspectRatio="xMinYMin meet" style="font-family: system-ui, -apple-system, sans-serif;">"#,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 {width} {height}" preserveAspectRatio="xMinYMin meet" data-timeline-start="{start}" data-timeline-end="{end}" data-timeline-left="{left:.1}" data-timeline-right="{right:.1}" style="font-family: system-ui, -apple-system, sans-serif;">"#,
+            start = data.bounds.start.to_rfc3339(),
+            end = data.bounds.end.to_rfc3339(),
+            left = data.bounds.left_margin,
+            right = data.bounds.left_margin + data.bounds.drawable_width,
         );
 
         // Background

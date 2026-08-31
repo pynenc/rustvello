@@ -223,14 +223,46 @@ async fn event_trigger_fires() {
         .await
         .unwrap();
 
-    let _event_id = tm
+    let event_id = tm
         .emit_event("data_ready", serde_json::json!({"key": "value"}))
         .await
         .unwrap();
 
-    let to_invoke = tm.evaluate_triggers().await.unwrap();
+    let event = store.get_event(&event_id).await.unwrap().unwrap();
+    assert!(event.is_matched());
+    assert!(!event.is_triggered());
+
+    let to_invoke = tm.evaluate_trigger_runs().await.unwrap();
     assert_eq!(to_invoke.len(), 1);
-    assert_eq!(to_invoke[0].0.task_id, target);
+    assert_eq!(to_invoke[0].trigger.task_id, target);
+    let invocation_id = rustvello_proto::identifiers::InvocationId::new();
+    tm.complete_trigger_run(&to_invoke[0].run_id, &invocation_id)
+        .await
+        .unwrap();
+
+    let run = store
+        .get_trigger_run(&to_invoke[0].run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.triggered_invocation_id, Some(invocation_id.clone()));
+    assert_eq!(run.event_ids(), vec![event_id.as_str()]);
+    let event = store.get_event(&event_id).await.unwrap().unwrap();
+    assert_eq!(event.triggered_invocation_ids, vec![invocation_id]);
+}
+
+#[tokio::test]
+async fn unmatched_event_is_still_persisted_for_monitoring() {
+    let store = mem_store();
+    let tm = TriggerManager::new(Arc::clone(&store));
+    let event_id = tm
+        .emit_event("unmatched", serde_json::json!({"visible": true}))
+        .await
+        .unwrap();
+
+    let event = store.get_event(&event_id).await.unwrap().unwrap();
+    assert_eq!(event.event_code, "unmatched");
+    assert!(!event.is_matched());
 }
 
 #[tokio::test]

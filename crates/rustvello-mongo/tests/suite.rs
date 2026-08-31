@@ -84,6 +84,11 @@ mod client_data_store_suite {
     rustvello_test_suite::async_client_data_store_suite!(make_client_data_store());
 }
 
+mod concurrency_suite {
+    use super::*;
+    rustvello_test_suite::async_concurrency_suite!(make_orchestrator());
+}
+
 mod lifecycle_suite {
     use super::*;
     rustvello_test_suite::async_lifecycle_suite!(make_triple());

@@ -20,6 +20,7 @@ use rustvello_core::client_data_store::ClientDataStoreManager;
 use rustvello_core::error::RustvelloResult;
 use rustvello_core::orchestrator::Orchestrator;
 use rustvello_core::state_backend::StateBackend;
+use rustvello_core::trigger::TriggerStore;
 use rustvello_proto::config::AppConfig;
 use rustvello_proto::identifiers::TaskId;
 
@@ -51,6 +52,8 @@ pub struct AppInstance {
     pub broker: Arc<dyn Broker>,
     pub orchestrator: Arc<dyn Orchestrator>,
     pub state_backend: Arc<dyn StateBackend>,
+    /// Trigger evidence for full stores; absent only for broker-only apps.
+    pub trigger_store: Option<Arc<dyn TriggerStore>>,
     pub client_data_store: Arc<ClientDataStoreManager>,
     pub task_ids: Vec<TaskId>,
 }

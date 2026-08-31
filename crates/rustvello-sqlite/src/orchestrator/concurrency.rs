@@ -120,6 +120,76 @@ impl OrchestratorConcurrency for SqliteOrchestrator {
         .await
     }
 
+    async fn try_acquire_concurrency_slot(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: &TaskId,
+        task_config: &TaskConfig,
+        cc_args: Option<&SerializedArguments>,
+    ) -> RustvelloResult<bool> {
+        if task_config.concurrency_control == ConcurrencyControlType::Unlimited {
+            return Ok(true);
+        }
+
+        let db = Arc::clone(&self.db);
+        let invocation_id = invocation_id.clone();
+        let task_id = task_id.clone();
+        let task_config = task_config.clone();
+        let cc_args = cc_args.cloned().unwrap_or_default();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let tx = conn.unchecked_transaction().map_err(sql_err)?;
+            let task_key = task_id.to_string();
+            let pairs = cc_args.cc_arg_pairs();
+            let pair_conditions: Vec<String> = (0..pairs.len())
+                .map(|index| {
+                    format!(
+                        "(cp.arg_key = ?{} AND cp.arg_value = ?{})",
+                        index * 2 + 2,
+                        index * 2 + 3
+                    )
+                })
+                .collect();
+            let sql = format!(
+                "SELECT COUNT(*) FROM (
+                     SELECT cp.invocation_id FROM cc_arg_pairs cp
+                     WHERE cp.task_id = ?1 AND ({})
+                     GROUP BY cp.invocation_id
+                     HAVING COUNT(*) = {}
+                 )",
+                pair_conditions.join(" OR "),
+                pairs.len()
+            );
+            let mut params = vec![task_key.clone()];
+            for (key, value) in &pairs {
+                params.push(key.clone());
+                params.push(value.clone());
+            }
+            let count: i64 = tx
+                .query_row(&sql, rusqlite::params_from_iter(params.iter()), |row| {
+                    row.get(0)
+                })
+                .map_err(sql_err)?;
+            let limit = i64::from(task_config.running_concurrency.unwrap_or(1));
+            if count >= limit {
+                return Ok(false);
+            }
+
+            for (key, value) in pairs {
+                tx.execute(
+                    "INSERT OR REPLACE INTO cc_arg_pairs
+                     (invocation_id, task_id, arg_key, arg_value)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![invocation_id.as_str(), &task_key, &key, &value],
+                )
+                .map_err(sql_err)?;
+            }
+            tx.commit().map_err(sql_err)?;
+            Ok(true)
+        })
+        .await
+    }
+
     async fn remove_from_concurrency_index(
         &self,
         invocation_id: &InvocationId,

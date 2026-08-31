@@ -49,15 +49,17 @@ pub fn get_current_num_retries() -> Option<u32> {
 /// this to construct a `WorkflowIdentity` without async backend calls.
 #[pyfunction]
 pub fn get_current_workflow_info() -> Option<(String, String, Option<String>)> {
-    get_invocation_context().map(|ctx| {
-        (
-            ctx.workflow.workflow_id.to_string(),
-            ctx.workflow.workflow_type.to_string(),
-            ctx.workflow
-                .parent_id
-                .as_ref()
-                .map(std::string::ToString::to_string),
-        )
+    get_invocation_context().and_then(|ctx| {
+        ctx.workflow.map(|workflow| {
+            (
+                workflow.workflow_id.to_string(),
+                workflow.workflow_type.to_string(),
+                workflow
+                    .parent_id
+                    .as_ref()
+                    .map(std::string::ToString::to_string),
+            )
+        })
     })
 }
 

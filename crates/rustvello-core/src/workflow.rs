@@ -1,7 +1,4 @@
-//! Workflow-related types and utilities.
-//!
-//! Provides deterministic execution capabilities for workflow replay,
-//! matching pynenc's `DeterministicExecutor`.
+//! Explicit workflow-root operations and deterministic replay support.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,17 +6,92 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
-use crate::error::RustvelloResult;
+use crate::context::get_invocation_context;
+use crate::error::{RustvelloError, RustvelloResult};
 use crate::state_backend::StateBackend;
 use rustvello_proto::identifiers::InvocationId;
 
-/// Handles deterministic operations for workflow execution.
+/// Root-scoped deterministic operations for an explicit workflow invocation.
+///
+/// Obtain this from [`WorkflowRoot::current`] inside a `#[rustvello::workflow]`
+/// function. Ordinary tasks, including child tasks that belong to a workflow,
+/// cannot construct this root handle.
+pub struct WorkflowRoot {
+    executor: DeterministicExecutor,
+}
+
+impl WorkflowRoot {
+    /// Resolve the current explicit workflow root.
+    pub fn current() -> RustvelloResult<Self> {
+        let ctx = get_invocation_context().ok_or(RustvelloError::WorkflowContextUnavailable)?;
+        let workflow = ctx
+            .workflow
+            .ok_or_else(|| RustvelloError::WorkflowMembershipRequired {
+                invocation_id: ctx.invocation_id.clone(),
+            })?;
+
+        if !ctx.is_workflow_defining || workflow.workflow_id != ctx.invocation_id {
+            return Err(RustvelloError::WorkflowRootRequired {
+                invocation_id: ctx.invocation_id,
+                workflow_id: workflow.workflow_id,
+            });
+        }
+
+        let state_backend = ctx
+            .state_backend
+            .ok_or(RustvelloError::WorkflowContextUnavailable)?;
+        Ok(Self {
+            executor: DeterministicExecutor::new(workflow.workflow_id, state_backend),
+        })
+    }
+
+    /// Generate the next deterministic random value in `[0, 1)`.
+    pub fn random(&mut self) -> RustvelloResult<f64> {
+        let handle = current_runtime_handle()?;
+        handle.block_on(self.executor.random())
+    }
+
+    /// Return the next deterministic UTC timestamp.
+    pub fn utc_now(&mut self) -> RustvelloResult<DateTime<Utc>> {
+        let handle = current_runtime_handle()?;
+        handle.block_on(self.executor.utc_now())
+    }
+
+    /// Return the next deterministic UUID string.
+    pub fn uuid(&mut self) -> RustvelloResult<String> {
+        let handle = current_runtime_handle()?;
+        handle.block_on(self.executor.uuid())
+    }
+
+    /// Async variant of [`WorkflowRoot::random`] for embedded runtimes.
+    pub async fn random_async(&mut self) -> RustvelloResult<f64> {
+        self.executor.random().await
+    }
+
+    /// Async variant of [`WorkflowRoot::utc_now`] for embedded runtimes.
+    pub async fn utc_now_async(&mut self) -> RustvelloResult<DateTime<Utc>> {
+        self.executor.utc_now().await
+    }
+
+    /// Async variant of [`WorkflowRoot::uuid`] for embedded runtimes.
+    pub async fn uuid_async(&mut self) -> RustvelloResult<String> {
+        self.executor.uuid().await
+    }
+}
+
+fn current_runtime_handle() -> RustvelloResult<tokio::runtime::Handle> {
+    tokio::runtime::Handle::try_current().map_err(|error| RustvelloError::Internal {
+        message: format!("workflow operation requires a Tokio runtime: {error}"),
+    })
+}
+
+/// Internal replay engine used by [`WorkflowRoot`].
 ///
 /// Mirrors pynenc's `DeterministicExecutor`. Ensures that operations like
 /// random number generation, time functions, and UUIDs behave deterministically
 /// across workflow replays by using deterministic seeds and storing results
 /// in the state backend.
-pub struct DeterministicExecutor {
+pub(crate) struct DeterministicExecutor {
     workflow_id: InvocationId,
     state_backend: Arc<dyn StateBackend>,
     operation_counters: HashMap<String, u64>,
@@ -27,7 +99,7 @@ pub struct DeterministicExecutor {
 
 impl DeterministicExecutor {
     /// Create a new deterministic executor for a workflow.
-    pub fn new(workflow_id: InvocationId, state_backend: Arc<dyn StateBackend>) -> Self {
+    fn new(workflow_id: InvocationId, state_backend: Arc<dyn StateBackend>) -> Self {
         Self {
             workflow_id,
             state_backend,

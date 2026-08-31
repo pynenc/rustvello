@@ -8,28 +8,116 @@
 //!
 //! # Browser debugging
 //!
-//! Set `KEEP_ALIVE` to `true` below (or the env var
-//! `RUSTVELLO_MONITOR_KEEP_ALIVE=1`) to keep the server running after
-//! all tests complete. Open the printed URL in your browser, then press
-//! Ctrl-C when done.
+//! Set `KEEP_ALIVE` to `true` below, or set `KEEP_ALIVE=1` /
+//! `RUSTVELLO_MONITOR_KEEP_ALIVE=1`, to keep the server running after
+//! the selected test completes. Open the printed URL in your browser,
+//! then press Ctrl-C when done.
 //!
 //! ```bash
-//! RUSTVELLO_MONITOR_KEEP_ALIVE=1 cargo test -p rustvello-monitoring \
-//!     --test monitoring_dashboard -- --nocapture
+//! KEEP_ALIVE=1 cargo test -p rustvello-monitoring \
+//!     --test monitoring_dashboard test_hierarchical_timeline -- --nocapture
 //! ```
 
 mod common;
 
 use common::{
     create_hierarchical_test_app, create_test_app, register_hierarchical_tasks,
-    seed_grandparents_only, seed_invocations, should_keep_alive, start_test_server, TestServer,
+    seed_grandparents_only, seed_hierarchical_invocations, seed_invocations, should_keep_alive,
+    start_test_server, TestServer,
 };
 use rustvello::prelude::{PerInvocationTokioRunner, RayonRunner};
 use rustvello_core::runner::Runner;
+use rustvello_core::trigger::TriggerStore;
+use rustvello_proto::identifiers::{InvocationId, TaskId};
+use rustvello_proto::trigger::{
+    ConditionId, EventRecord, TriggerDefinitionId, TriggerLogic, TriggerRunId,
+    TriggerRunParticipant, TriggerRunRecord,
+};
 
 /// Set to `true` to keep the monitoring server alive for browser debugging.
-/// The env var `RUSTVELLO_MONITOR_KEEP_ALIVE=1` also works.
+/// The env vars `KEEP_ALIVE=1` and `RUSTVELLO_MONITOR_KEEP_ALIVE=1` also work.
 const KEEP_ALIVE: bool = false;
+
+#[tokio::test]
+async fn test_event_and_trigger_run_monitoring_views() {
+    let setup = create_test_app("events-monitoring");
+    let store: std::sync::Arc<dyn TriggerStore> = std::sync::Arc::clone(&setup.trigger_store);
+    let timestamp = chrono::Utc::now();
+    let event = EventRecord {
+        event_id: "event-monitor-1".into(),
+        event_code: "payment_received".into(),
+        payload: serde_json::json!({"order_id": "ORD-42"}),
+        timestamp,
+        matched_condition_ids: vec![ConditionId::from("condition-payment")],
+        valid_condition_ids: vec!["valid-payment".into()],
+        triggered_invocation_ids: vec![InvocationId::from_string("triggered-invocation")],
+        emitted_by_invocation_id: Some(InvocationId::from_string("source-invocation")),
+        emitted_by_task_id: Some(TaskId::new("test", "source")),
+        emitted_by_runner_id: None,
+    };
+    store.store_event(&event).await.unwrap();
+    let run = TriggerRunRecord {
+        trigger_run_id: TriggerRunId::from("trigger-run-monitor-1"),
+        trigger_id: TriggerDefinitionId::from("trigger-payment"),
+        task_id: TaskId::new("test", "target"),
+        logic: TriggerLogic::Or,
+        arguments: serde_json::json!({"order_id": "ORD-42"}),
+        participants: vec![TriggerRunParticipant {
+            context_type: "event".into(),
+            condition_id: ConditionId::from("condition-payment"),
+            valid_condition_id: "valid-payment".into(),
+            event_id: Some(event.event_id.clone()),
+            source_invocation_id: None,
+            context_summary: "payment_received".into(),
+        }],
+        claimed_at: timestamp,
+        executed_at: Some(timestamp),
+        triggered_invocation_id: Some(InvocationId::from_string("triggered-invocation")),
+        atomic_service_run_id: None,
+        atomic_service_runner_id: None,
+    };
+    store.store_trigger_run(&run).await.unwrap();
+
+    let server = start_test_server(setup).await;
+    let client = server.client();
+
+    let response = client
+        .get(format!("{}/events?event_code=payment_received", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let list = response.text().await.unwrap();
+    assert!(list.contains("event-monitor-1"));
+    assert!(list.contains("Matched"));
+    assert!(list.contains("Triggered"));
+
+    let response = client
+        .get(format!("{}/events/event-monitor-1", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let detail = response.text().await.unwrap();
+    assert!(detail.contains("ORD-42"));
+    assert!(detail.contains("/trigger-runs/trigger-run-monitor-1"));
+    assert!(detail.contains("time_range=custom"));
+    assert!(detail.contains("start_date="));
+    assert!(detail.contains("end_date="));
+
+    let response = client
+        .get(format!("{}/trigger-runs/trigger-run-monitor-1", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let run_detail = response.text().await.unwrap();
+    assert!(run_detail.contains("condition-payment"));
+    assert!(run_detail.contains("valid-payment"));
+    assert!(run_detail.contains("/events/event-monitor-1"));
+
+    server.shutdown().await;
+}
 
 // unused for now but kept as a pattern for future richer tests
 #[allow(dead_code)]
@@ -47,6 +135,7 @@ async fn setup_with_runner() -> (TestServer, reqwest::Client) {
     let broker = setup.broker.clone();
     let orchestrator = setup.orchestrator.clone();
     let state_backend = setup.state_backend.clone();
+    let trigger_store = setup.trigger_store.clone();
     let client_data_store = setup.client_data_store.clone();
     let config = setup.config.clone();
     let task_ids = setup.task_ids.clone();
@@ -74,6 +163,7 @@ async fn setup_with_runner() -> (TestServer, reqwest::Client) {
         broker,
         orchestrator,
         state_backend,
+        trigger_store,
         client_data_store,
         task_ids,
     };
@@ -443,7 +533,163 @@ async fn test_invocations_timeline() {
         body.contains("timeline-container"),
         "should have timeline container div"
     );
+    assert!(
+        body.contains("timeline-range-zoom"),
+        "should expose the drag-to-zoom control"
+    );
+    assert!(
+        body.contains("data-timeline-start=") && body.contains("data-timeline-end="),
+        "should expose SVG time bounds for drag-to-zoom"
+    );
     assert!(body.contains("Apply"), "should have filter Apply button");
+
+    handle_keep_alive(server).await;
+}
+
+#[tokio::test]
+async fn test_timeline_renders_complete_invocation_history() {
+    let setup = create_test_app("test-timeline-lifecycle");
+    let inv_ids = seed_invocations(&setup.app, 1)
+        .await
+        .expect("seed invocation");
+    let inv_id = rustvello_proto::identifiers::InvocationId::from_string(inv_ids[0].clone());
+    let runner_id = rustvello_proto::identifiers::RunnerId::from_string("timeline-runner");
+    let now = chrono::Utc::now();
+
+    for (status, offset) in [
+        (rustvello_proto::status::InvocationStatus::Pending, -3),
+        (rustvello_proto::status::InvocationStatus::Running, -2),
+        (rustvello_proto::status::InvocationStatus::Success, -1),
+    ] {
+        let mut record =
+            rustvello_proto::status::InvocationStatusRecord::new(status, Some(runner_id.clone()));
+        record.timestamp = now + chrono::Duration::milliseconds(offset);
+        setup
+            .state_backend
+            .add_history(
+                &rustvello_proto::invocation::InvocationHistory::new(inv_id.clone(), record, None)
+                    .with_runner(runner_id.clone()),
+            )
+            .await
+            .expect("store lifecycle history");
+    }
+
+    let server = start_test_server(setup).await;
+    let body = server
+        .client()
+        .get(format!("{}/invocations/timeline", server.url))
+        .send()
+        .await
+        .expect("timeline request")
+        .text()
+        .await
+        .expect("timeline body");
+
+    for status in ["Registered", "Pending", "Running", "Success"] {
+        assert!(
+            body.contains(&format!("data-status=\"{status}\"")),
+            "timeline should render {status} for the complete invocation history"
+        );
+    }
+
+    handle_keep_alive(server).await;
+}
+
+#[tokio::test]
+async fn test_timeline_invocation_scope_filter() {
+    let setup = create_test_app("test-timeline-scope");
+    let inv_ids = seed_invocations(&setup.app, 2)
+        .await
+        .expect("seed invocations");
+    let server = start_test_server(setup).await;
+    let client = server.client();
+
+    let resp = client
+        .get(format!(
+            "{}/invocations/timeline?inv_ids={}",
+            server.url, inv_ids[0]
+        ))
+        .send()
+        .await
+        .expect("scoped timeline request");
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.expect("body");
+    assert!(
+        body.contains(&format!("data-invocation-id=\"{}\"", inv_ids[0])),
+        "scoped timeline should render the requested invocation"
+    );
+    assert!(
+        !body.contains(&format!("data-invocation-id=\"{}\"", inv_ids[1])),
+        "scoped timeline should not render unrelated invocations"
+    );
+
+    handle_keep_alive(server).await;
+}
+
+#[tokio::test]
+async fn test_timeline_workflow_type_filter() {
+    let setup = create_hierarchical_test_app("test-timeline-workflow-filter");
+    let broker = setup.broker.clone();
+    let orchestrator = setup.orchestrator.clone();
+    let state_backend = setup.state_backend.clone();
+    let (grandparent_ids, _, _) =
+        seed_hierarchical_invocations(&setup.app, &orchestrator, &state_backend, &broker)
+            .await
+            .expect("seed hierarchy");
+    let server = start_test_server(setup).await;
+    let client = server.client();
+
+    let resp = client
+        .get(format!(
+            "{}/invocations/timeline?workflow_type=test.grandparent_task",
+            server.url
+        ))
+        .send()
+        .await
+        .expect("workflow-filtered timeline request");
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.expect("body");
+    let timeline_markup = body
+        .split("id=\"timeline-container\"")
+        .nth(1)
+        .and_then(|rest| rest.split("</div>").next())
+        .expect("timeline container markup");
+    assert!(
+        timeline_markup.contains("data-task-key=\"test.parent_task\""),
+        "workflow filter should keep workflow members"
+    );
+    assert!(
+        timeline_markup.contains("data-task-key=\"test.child_task\""),
+        "workflow filter should keep nested workflow members"
+    );
+    assert!(
+        timeline_markup.contains("data-task-key=\"test.grandparent_task\""),
+        "workflow filter should keep the defining task"
+    );
+
+    let resp = client
+        .get(format!(
+            "{}/invocations/timeline?workflow_id={}",
+            server.url, grandparent_ids[0]
+        ))
+        .send()
+        .await
+        .expect("workflow-id-filtered timeline request");
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.expect("body");
+    let timeline_markup = body
+        .split("id=\"timeline-container\"")
+        .nth(1)
+        .and_then(|rest| rest.split("</div>").next())
+        .expect("timeline container markup");
+    assert!(
+        timeline_markup.contains(&format!("data-invocation-id=\"{}\"", grandparent_ids[0])),
+        "workflow ID filter should keep the selected workflow"
+    );
+    assert!(
+        !timeline_markup.contains(&format!("data-invocation-id=\"{}\"", grandparent_ids[1])),
+        "workflow ID filter should remove a different workflow"
+    );
 
     handle_keep_alive(server).await;
 }
@@ -710,6 +956,7 @@ async fn setup_hierarchical_with_runners() -> (TestServer, reqwest::Client) {
     let broker = setup.broker.clone();
     let orchestrator = setup.orchestrator.clone();
     let state_backend = setup.state_backend.clone();
+    let trigger_store = setup.trigger_store.clone();
     let client_data_store = setup.client_data_store.clone();
     // Use short intervals so atomic service fires during the 3-second test run
     setup.config.heartbeat_interval_seconds = 1;
@@ -837,6 +1084,7 @@ async fn setup_hierarchical_with_runners() -> (TestServer, reqwest::Client) {
         broker,
         orchestrator,
         state_backend,
+        trigger_store,
         client_data_store,
         task_ids,
     };
@@ -852,9 +1100,9 @@ async fn setup_hierarchical_with_runners() -> (TestServer, reqwest::Client) {
 /// exercises the full pipeline from hierarchical submission through
 /// concurrent execution to monitoring visualization.
 ///
-/// Run with KEEP_ALIVE to explore the dashboard in a browser:
+/// Run with keep-alive enabled to explore the dashboard in a browser:
 /// ```bash
-/// RUSTVELLO_MONITOR_KEEP_ALIVE=1 cargo test -p rustvello-monitoring \
+/// KEEP_ALIVE=1 cargo test -p rustvello-monitoring \
 ///     --test monitoring_dashboard test_hierarchical_timeline -- --nocapture
 /// ```
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -870,6 +1118,12 @@ async fn test_hierarchical_timeline() {
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.expect("body");
     assert!(body.contains("<svg"), "timeline should contain an SVG");
+    assert!(
+        body.contains("data-status=\"Registered\"")
+            && body.contains("data-status=\"Running\"")
+            && body.contains("data-status=\"Success\""),
+        "timeline should render the full invocation lifecycle, not only registration"
+    );
 
     // 2. Invocation list should show all three task types
     let resp = client
@@ -933,6 +1187,10 @@ async fn test_hierarchical_timeline() {
             detail.contains("grandparent_task"),
             "detail should show task name"
         );
+        assert!(
+            detail.contains("Workflow root"),
+            "workflow-defining invocation should be identified"
+        );
 
         // 4b. History should have entries (Registered + Running + Success)
         let resp = client
@@ -967,6 +1225,7 @@ async fn test_hierarchical_timeline() {
             .await
             .expect("api");
         let api: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(api["is_workflow_defining"], true);
         assert_eq!(api["invocation_id"], gp_id);
 
         // 4d. Family tree should show children
@@ -1556,6 +1815,7 @@ async fn test_atomic_service_recovery() {
     let broker = setup.broker.clone();
     let orchestrator = setup.orchestrator.clone();
     let state_backend = setup.state_backend.clone();
+    let trigger_store = setup.trigger_store.clone();
     let client_data_store = setup.client_data_store.clone();
     let task_ids = setup.task_ids.clone();
 
@@ -1620,6 +1880,7 @@ async fn test_atomic_service_recovery() {
         broker,
         orchestrator,
         state_backend,
+        trigger_store,
         client_data_store,
         task_ids,
     };
@@ -1667,6 +1928,10 @@ async fn test_log_explorer_resolves_truncated_runner_ids() {
 
     let setup = create_test_app("test-log-resolve");
     let state_backend = setup.state_backend.clone();
+    let inv_ids = seed_invocations(&setup.app, 1)
+        .await
+        .expect("seed invocation");
+    let inv_id = &inv_ids[0];
 
     // Full UUIDs for runner and worker
     let runner_full_id = "a86ab1f8-1234-5678-9abc-def012345678";
@@ -1708,19 +1973,26 @@ async fn test_log_explorer_resolves_truncated_runner_ids() {
     let client = server.client();
 
     // Log line with truncated runner/worker IDs (first 8 chars of the UUIDs)
-    let log_line = "2026-03-27T10:23:45.123Z INFO  [R] test-log-resolve \
-        [PTR(a86ab1f8).W(d1241003)cc6c0e34-5678-9abc-def0-123456789abc:test.process_order] \
-        rustvello::runner Invocation completed";
+    let log_line = format!(
+        "2026-03-27T10:23:45.123Z INFO  [R] test-log-resolve \
+        [PTR(a86ab1f8).W(d1241003){inv_id}:test.process_order] \
+        rustvello::runner Invocation completed"
+    );
 
     // POST to log explorer analyze endpoint
     let resp = client
         .post(format!("{}/log-explorer/analyze", server.url))
-        .form(&[("log_text", log_line)])
+        .form(&[("log_text", &log_line)])
         .send()
         .await
         .expect("analyze request");
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.expect("body");
+
+    assert!(
+        body.contains("log-svg-timeline-link") && body.contains("<svg"),
+        "log explorer should render the invocation timeline for bracket-context logs"
+    );
 
     // The runner link must point to the FULL UUID, not the truncated 8-char prefix
     assert!(

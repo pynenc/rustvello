@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use mongodb::bson::doc;
 
 use rustvello_core::error::{RustvelloError, RustvelloResult};
@@ -8,7 +8,7 @@ use rustvello_proto::call::CallDTO;
 use rustvello_proto::identifiers::{InvocationId, RunnerId};
 use rustvello_proto::status::{InvocationStatus, InvocationStatusRecord};
 
-use super::{deserialize_record, serialize_record, MongoOrchestrator, STATUS_COL};
+use super::{deserialize_record, serialize_record, MongoOrchestrator, AUTO_PURGE_COL, STATUS_COL};
 use crate::connection::mongo_err;
 
 #[async_trait]
@@ -192,6 +192,7 @@ impl OrchestratorStatus for MongoOrchestrator {
             super::CC_COL,
             super::HEARTBEAT_COL,
             "orch_retries",
+            AUTO_PURGE_COL,
         ] {
             db.collection::<mongodb::bson::Document>(col_name)
                 .delete_many(doc! {})
@@ -201,17 +202,53 @@ impl OrchestratorStatus for MongoOrchestrator {
         Ok(())
     }
 
-    async fn schedule_auto_purge(&self, _invocation_id: &InvocationId) -> RustvelloResult<()> {
-        Err(RustvelloError::NotSupported {
-            backend: "MongoDB".into(),
-            method: "schedule_auto_purge".into(),
-        })
+    async fn schedule_auto_purge(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(AUTO_PURGE_COL);
+        col.update_one(
+            doc! { "_id": invocation_id.as_str() },
+            doc! { "$set": { "scheduled_at": Utc::now().to_rfc3339() } },
+        )
+        .upsert(true)
+        .await
+        .map_err(mongo_err)?;
+        Ok(())
     }
 
-    async fn run_auto_purge(&self, _max_age_secs: u64) -> RustvelloResult<Vec<InvocationId>> {
-        Err(RustvelloError::NotSupported {
-            backend: "MongoDB".into(),
-            method: "run_auto_purge".into(),
-        })
+    async fn run_auto_purge(&self, max_age_secs: u64) -> RustvelloResult<Vec<InvocationId>> {
+        let threshold =
+            Utc::now() - chrono::Duration::seconds(i64::try_from(max_age_secs).unwrap_or(i64::MAX));
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(AUTO_PURGE_COL);
+        let mut cursor = col.find(doc! {}).await.map_err(mongo_err)?;
+        let mut expired = Vec::new();
+        use futures_util::StreamExt;
+        while let Some(item) = StreamExt::next(&mut cursor).await {
+            let document = item.map_err(mongo_err)?;
+            let timestamp = document
+                .get_str("scheduled_at")
+                .map_err(|e| RustvelloError::state_backend(e.to_string()))?;
+            let scheduled = DateTime::parse_from_rfc3339(timestamp)
+                .map(|value| value.with_timezone(&Utc))
+                .map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })?;
+            if scheduled <= threshold {
+                let id = document
+                    .get_str("_id")
+                    .map_err(|e| RustvelloError::state_backend(e.to_string()))?;
+                expired.push(InvocationId::from_string(id));
+            }
+        }
+        let mut purged = Vec::new();
+        for invocation_id in expired {
+            col.delete_one(doc! { "_id": invocation_id.as_str() })
+                .await
+                .map_err(mongo_err)?;
+            if self.remove_invocation(&invocation_id).await.is_ok() {
+                purged.push(invocation_id);
+            }
+        }
+        Ok(purged)
     }
 }

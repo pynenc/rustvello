@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use redis::AsyncCommands;
 
 use rustvello_core::error::RustvelloError;
@@ -214,6 +214,7 @@ impl OrchestratorStatus for RedisOrchestrator {
             format!("{}*", &self.cc_rev_prefix),
             format!("{}*", &self.heartbeat_prefix),
             format!("{}*", &self.retries_prefix),
+            format!("{}*", &self.auto_purge_prefix),
         ];
         for pattern in &patterns {
             let keys = crate::connection::scan_keys(&mut conn, pattern).await?;
@@ -228,17 +229,51 @@ impl OrchestratorStatus for RedisOrchestrator {
         Ok(())
     }
 
-    async fn schedule_auto_purge(&self, _invocation_id: &InvocationId) -> RustvelloResult<()> {
-        Err(RustvelloError::NotSupported {
-            backend: "Redis".into(),
-            method: "schedule_auto_purge".into(),
-        })
+    async fn schedule_auto_purge(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
+        let mut conn = self.pool.conn().await?;
+        conn.set::<_, _, ()>(
+            prefixed_key(&self.auto_purge_prefix, invocation_id.as_str()),
+            Utc::now().to_rfc3339(),
+        )
+        .await
+        .map_err(redis_err)
     }
 
-    async fn run_auto_purge(&self, _max_age_secs: u64) -> RustvelloResult<Vec<InvocationId>> {
-        Err(RustvelloError::NotSupported {
-            backend: "Redis".into(),
-            method: "run_auto_purge".into(),
-        })
+    async fn run_auto_purge(&self, max_age_secs: u64) -> RustvelloResult<Vec<InvocationId>> {
+        let threshold =
+            Utc::now() - chrono::Duration::seconds(i64::try_from(max_age_secs).unwrap_or(i64::MAX));
+        let mut conn = self.pool.conn().await?;
+        let keys =
+            crate::connection::scan_keys(&mut conn, &format!("{}*", &self.auto_purge_prefix))
+                .await?;
+        let mut expired = Vec::new();
+        for key in keys {
+            let value: Option<String> = conn.get(&key).await.map_err(redis_err)?;
+            if let Some(value) = value {
+                let scheduled = DateTime::parse_from_rfc3339(&value)
+                    .map(|timestamp| timestamp.with_timezone(&Utc))
+                    .map_err(|error| RustvelloError::Serialization {
+                        message: error.to_string(),
+                    })?;
+                if scheduled <= threshold {
+                    if let Some(id) = key.strip_prefix(&self.auto_purge_prefix) {
+                        expired.push(InvocationId::from_string(id));
+                    }
+                }
+            }
+        }
+        let mut purged = Vec::new();
+        for invocation_id in expired {
+            conn.del::<_, ()>(prefixed_key(
+                &self.auto_purge_prefix,
+                invocation_id.as_str(),
+            ))
+            .await
+            .map_err(redis_err)?;
+            if self.remove_invocation(&invocation_id).await.is_ok() {
+                purged.push(invocation_id);
+            }
+        }
+        Ok(purged)
     }
 }

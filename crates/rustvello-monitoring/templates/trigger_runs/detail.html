@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Trigger Run {{ trigger_run_id }} - Rustvello Monitor{% endblock %}
+{% block content %}
+<div class="pynmon-container">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="h4 mb-0 text-primary"><span class="material-icons align-middle me-2">account_tree</span>Trigger Run</h2>
+    <a class="btn btn-sm btn-outline-secondary" href="/events"><span class="material-icons align-middle" style="font-size:16px">arrow_back</span> Events</a>
+  </div>
+  {% if !found %}<div class="alert alert-warning">Trigger run not found.</div>{% else %}
+  <table class="table pynmon-table"><tbody>
+    <tr><th>Run ID</th><td><code>{{ trigger_run_id }}</code></td></tr>
+    <tr><th>Trigger ID</th><td><code>{{ trigger_id }}</code></td></tr>
+    <tr><th>Target task</th><td>{{ task_id }}</td></tr>
+    <tr><th>Logic</th><td>{{ logic }}</td></tr>
+    <tr><th>Claimed</th><td>{{ claimed_at }}</td></tr>
+    <tr><th>Executed</th><td>{% if let Some(value) = executed_at %}{{ value }}{% else %}<span class="text-muted">Pending</span>{% endif %}</td></tr>
+    <tr><th>Invocation</th><td>{% if let Some(id) = triggered_invocation_id %}<a href="/invocations/{{ id }}"><code>{{ id }}</code></a>{% else %}<span class="text-muted">Pending</span>{% endif %}</td></tr>
+  </tbody></table>
+  <h3 class="h6 mt-4">Arguments</h3><pre class="bg-light border p-3"><code>{{ arguments }}</code></pre>
+  <h3 class="h6 mt-4">Participants</h3>
+  <table class="table pynmon-table"><thead><tr><th>Type</th><th>Condition</th><th>Valid condition</th><th>Source</th><th>Summary</th></tr></thead><tbody>
+  {% for participant in participants %}<tr><td>{{ participant.context_type }}</td><td><code>{{ participant.condition_id }}</code></td><td><code>{{ participant.valid_condition_id }}</code></td><td>{% if let Some(id) = participant.event_id %}<a href="/events/{{ id }}">event:<code>{{ id }}</code></a>{% else if let Some(id) = participant.source_invocation_id %}<a href="/invocations/{{ id }}">invocation:<code>{{ id }}</code></a>{% else %}<span class="text-muted">Schedule</span>{% endif %}</td><td>{{ participant.context_summary }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% endif %}
+</div>
+{% endblock %}

@@ -87,6 +87,9 @@ Rustvello Monitor{% endblock %} {% block content %}
                           <span class="badge {{ status_class }}"
                             >{{ status }}</span
                           >
+                          {% if is_workflow_defining %}
+                          <span class="badge bg-info text-dark ms-1">Workflow root</span>
+                          {% endif %}
                         </td>
                       </tr>
                       <tr>

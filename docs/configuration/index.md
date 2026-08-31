@@ -85,21 +85,25 @@ See {doc}`../monitoring/logging` for details on the unified logging format.
 Per-task settings. Apply globally via `[task_defaults]` or per-task via `[tasks.<name>]`
 in a TOML file, or via env vars.
 
-| Field                        | Type                     | Default            | Description                                                        |
-| ---------------------------- | ------------------------ | ------------------ | ------------------------------------------------------------------ |
-| `max_retries`                | `u32`                    | `0`                | Maximum retry attempts on failure                                  |
-| `concurrency_control`        | `ConcurrencyControlType` | `Unlimited`        | Execution-time concurrency mode                                    |
-| `running_concurrency`        | `Option<u32>`            | `None` (unlimited) | Max simultaneous running instances                                 |
-| `registration_concurrency`   | `ConcurrencyControlType` | `Unlimited`        | Registration-time dedup mode                                       |
-| `key_arguments`              | `Vec<String>`            | `[]`               | Arg names used as the concurrency key for `Keys` mode              |
-| `cache_results`              | `bool`                   | `false`            | Cache and return previous result for identical args                |
-| `disable_cache_args`         | `Vec<String>`            | `[]`               | Args excluded from cache key computation                           |
-| `retry_for_errors`           | `Vec<String>`            | `[]`               | Error type names that trigger a retry                              |
-| `on_diff_non_key_args_raise` | `bool`                   | `false`            | Raise if a duplicate is found with different non-key args          |
-| `force_new_workflow`         | `bool`                   | `false`            | Always start a new workflow scope for this task                    |
-| `reroute_on_cc`              | `bool`                   | `false`            | Reroute to the existing invocation when hitting concurrency limits |
-| `parallel_batch_size`        | `usize`                  | `100`              | Batch size used by `parallelize()`                                 |
-| `blocking`                   | `bool`                   | `false`            | Run on a blocking (OS) thread rather than Tokio                    |
+| Field                        | Type                     | Default            | Description                                                          |
+| ---------------------------- | ------------------------ | ------------------ | -------------------------------------------------------------------- |
+| `max_retries`                | `u32`                    | `0`                | Maximum retry attempts on failure                                    |
+| `concurrency_control`        | `ConcurrencyControlType` | `Unlimited`        | Execution-time concurrency mode                                      |
+| `running_concurrency`        | `Option<u32>`            | `None` (unlimited) | Max simultaneous running instances                                   |
+| `registration_concurrency`   | `ConcurrencyControlType` | `Unlimited`        | Registration-time dedup mode                                         |
+| `key_arguments`              | `Vec<String>`            | `[]`               | Arg names used as the concurrency key for `Keys` mode                |
+| `cache_results`              | `bool`                   | `false`            | Cache and return previous result for identical args                  |
+| `disable_cache_args`         | `Vec<String>`            | `[]`               | Args excluded from cache key computation                             |
+| `retry_for_errors`           | `Vec<String>`            | `[]`               | Error type names that trigger a retry                                |
+| `on_diff_non_key_args_raise` | `bool`                   | `false`            | Raise if a duplicate is found with different non-key args            |
+| `is_workflow_task`           | `bool`                   | `false`            | Internal marker set by `#[rustvello::workflow]` or language adapters |
+| `reroute_on_cc`              | `bool`                   | `false`            | Reroute to the existing invocation when hitting concurrency limits   |
+| `parallel_batch_size`        | `usize`                  | `100`              | Batch size used by `parallelize()`                                   |
+| `blocking`                   | `bool`                   | `false`            | Run on a blocking (OS) thread rather than Tokio                      |
+
+Use `#[rustvello::workflow]` to define workflow roots. Do not toggle
+`is_workflow_task` on an ordinary Rust task; the macro sets the marker and the
+required blocking execution mode together. See {doc}`../workflows`.
 
 ---
 
@@ -113,6 +117,20 @@ in a TOML file, or via env vars.
 | `Task`      | At most one invocation of this task runs at a time  |
 | `Argument`  | At most one invocation per unique full argument set |
 | `None`      | No concurrent invocations allowed                   |
+
+Registration and execution concurrency are independent contracts:
+
+- `registration_concurrency` decides whether submission reuses an existing
+  non-terminal invocation.
+- `concurrency_control` selects the execution key (`Task` or arguments), while
+  `running_concurrency` sets the number of slots for that key.
+
+Changing one does not implicitly enable or alter the other. Runners reserve a
+backend concurrency slot before claiming execution, so multiple runner
+instances cannot pass the same limit through a check-then-index race. A
+graceful shutdown stops retrieving new work and drains invocations that have
+already started; stale pending or running ownership is recovered by the atomic
+service after an ungraceful worker loss.
 
 Set with the macro attribute:
 

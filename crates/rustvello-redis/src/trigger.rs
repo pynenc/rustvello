@@ -9,8 +9,8 @@ use rustvello_core::error::{RustvelloError, RustvelloResult};
 use rustvello_core::trigger::TriggerStore;
 use rustvello_proto::identifiers::TaskId;
 use rustvello_proto::trigger::{
-    ConditionId, TriggerCondition, TriggerDefinitionDTO, TriggerDefinitionId, TriggerRunId,
-    ValidCondition,
+    ConditionId, EventQuery, EventRecord, TriggerCondition, TriggerDefinitionDTO,
+    TriggerDefinitionId, TriggerRunId, TriggerRunQuery, TriggerRunRecord, ValidCondition,
 };
 
 use crate::connection::{redis_err, scan_keys, RedisPool};
@@ -66,6 +66,8 @@ pub struct RedisTriggerStore {
     trigger_task_prefix: String,
     cron_index: String,
     event_index_prefix: String,
+    event_record_prefix: String,
+    trigger_run_record_prefix: String,
 }
 
 impl RedisTriggerStore {
@@ -82,6 +84,8 @@ impl RedisTriggerStore {
             trigger_task_prefix: format!("{p}trg:trg_task:"),
             cron_index: format!("{p}trg:cron_ids"),
             event_index_prefix: format!("{p}trg:event:"),
+            event_record_prefix: format!("{p}trg:event_record:"),
+            trigger_run_record_prefix: format!("{p}trg:run_record:"),
             pool,
         }
     }
@@ -438,6 +442,162 @@ impl TriggerStore for RedisTriggerStore {
         Ok(set)
     }
 
+    async fn store_event(&self, event: &EventRecord) -> RustvelloResult<()> {
+        let mut conn = self.pool.conn().await?;
+        let json = serde_json::to_string(event).map_err(|e| RustvelloError::Serialization {
+            message: e.to_string(),
+        })?;
+        conn.set::<_, _, ()>(
+            format!("{}{}", &self.event_record_prefix, event.event_id),
+            json,
+        )
+        .await
+        .map_err(redis_err)
+    }
+
+    async fn get_event(&self, event_id: &str) -> RustvelloResult<Option<EventRecord>> {
+        let mut conn = self.pool.conn().await?;
+        let json: Option<String> = conn
+            .get(format!("{}{}", &self.event_record_prefix, event_id))
+            .await
+            .map_err(redis_err)?;
+        json.map(|value| {
+            serde_json::from_str(&value).map_err(|e| RustvelloError::Serialization {
+                message: e.to_string(),
+            })
+        })
+        .transpose()
+    }
+
+    async fn get_events(&self, query: &EventQuery) -> RustvelloResult<Vec<EventRecord>> {
+        let mut conn = self.pool.conn().await?;
+        let keys = scan_keys(&mut conn, &format!("{}*", &self.event_record_prefix)).await?;
+        let values: Vec<Option<String>> = if keys.is_empty() {
+            Vec::new()
+        } else {
+            redis::cmd("MGET")
+                .arg(&keys)
+                .query_async(&mut conn)
+                .await
+                .map_err(redis_err)?
+        };
+        let mut events = Vec::new();
+        for value in values.into_iter().flatten() {
+            let event: EventRecord =
+                serde_json::from_str(&value).map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })?;
+            if query
+                .event_code
+                .as_ref()
+                .is_some_and(|code| code != &event.event_code)
+                || query
+                    .emitted_by_invocation_id
+                    .as_ref()
+                    .is_some_and(|id| event.emitted_by_invocation_id.as_ref() != Some(id))
+                || query.start.is_some_and(|start| event.timestamp < start)
+                || query.end.is_some_and(|end| event.timestamp > end)
+            {
+                continue;
+            }
+            events.push(event);
+        }
+        events.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+        if let Some(limit) = query.limit {
+            events.truncate(limit);
+        }
+        Ok(events)
+    }
+
+    async fn store_trigger_run(&self, run: &TriggerRunRecord) -> RustvelloResult<()> {
+        let mut conn = self.pool.conn().await?;
+        let json = serde_json::to_string(run).map_err(|e| RustvelloError::Serialization {
+            message: e.to_string(),
+        })?;
+        conn.set::<_, _, ()>(
+            format!(
+                "{}{}",
+                &self.trigger_run_record_prefix,
+                run.trigger_run_id.as_str()
+            ),
+            json,
+        )
+        .await
+        .map_err(redis_err)
+    }
+
+    async fn get_trigger_run(
+        &self,
+        run_id: &TriggerRunId,
+    ) -> RustvelloResult<Option<TriggerRunRecord>> {
+        let mut conn = self.pool.conn().await?;
+        let json: Option<String> = conn
+            .get(format!(
+                "{}{}",
+                &self.trigger_run_record_prefix,
+                run_id.as_str()
+            ))
+            .await
+            .map_err(redis_err)?;
+        json.map(|value| {
+            serde_json::from_str(&value).map_err(|e| RustvelloError::Serialization {
+                message: e.to_string(),
+            })
+        })
+        .transpose()
+    }
+
+    async fn get_trigger_runs(
+        &self,
+        query: &TriggerRunQuery,
+    ) -> RustvelloResult<Vec<TriggerRunRecord>> {
+        let mut conn = self.pool.conn().await?;
+        let keys = scan_keys(&mut conn, &format!("{}*", &self.trigger_run_record_prefix)).await?;
+        let values: Vec<Option<String>> = if keys.is_empty() {
+            Vec::new()
+        } else {
+            redis::cmd("MGET")
+                .arg(&keys)
+                .query_async(&mut conn)
+                .await
+                .map_err(redis_err)?
+        };
+        let mut runs = Vec::new();
+        for value in values.into_iter().flatten() {
+            let run: TriggerRunRecord =
+                serde_json::from_str(&value).map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })?;
+            if query
+                .event_id
+                .as_ref()
+                .is_some_and(|event_id| !run.event_ids().contains(&event_id.as_str()))
+                || query
+                    .source_invocation_id
+                    .as_ref()
+                    .is_some_and(|invocation_id| {
+                        !run.source_invocation_ids().contains(&invocation_id)
+                    })
+                || query
+                    .triggered_invocation_id
+                    .as_ref()
+                    .is_some_and(|invocation_id| {
+                        run.triggered_invocation_id.as_ref() != Some(invocation_id)
+                    })
+                || query.start.is_some_and(|start| run.claimed_at < start)
+                || query.end.is_some_and(|end| run.claimed_at > end)
+            {
+                continue;
+            }
+            runs.push(run);
+        }
+        runs.sort_by(|left, right| right.claimed_at.cmp(&left.claimed_at));
+        if let Some(limit) = query.limit {
+            runs.truncate(limit);
+        }
+        Ok(runs)
+    }
+
     async fn purge(&self) -> RustvelloResult<()> {
         let prefixes = [
             &self.cond_prefix,
@@ -449,6 +609,8 @@ impl TriggerStore for RedisTriggerStore {
             &self.run_prefix,
             &self.trigger_task_prefix,
             &self.event_index_prefix,
+            &self.event_record_prefix,
+            &self.trigger_run_record_prefix,
         ];
         let mut conn = self.pool.conn().await?;
         for prefix in prefixes {

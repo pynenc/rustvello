@@ -140,6 +140,22 @@ pub enum RustvelloError {
     #[error("configuration error: {message}")]
     Configuration { message: String },
 
+    // --- Workflow errors ---
+    /// A workflow operation was requested outside a runner-managed invocation.
+    #[error("workflow context is unavailable outside a running invocation")]
+    WorkflowContextUnavailable,
+
+    /// A workflow operation was requested by an invocation with no workflow.
+    #[error("invocation {invocation_id} is not a workflow member")]
+    WorkflowMembershipRequired { invocation_id: InvocationId },
+
+    /// A root-only workflow operation was requested by an ordinary member.
+    #[error("invocation {invocation_id} is not the defining root of workflow {workflow_id}")]
+    WorkflowRootRequired {
+        invocation_id: InvocationId,
+        workflow_id: InvocationId,
+    },
+
     // --- Internal (no pynenc equivalent — for Rust-only bugs) ---
     /// Generic internal error
     #[error("internal error: {message}")]

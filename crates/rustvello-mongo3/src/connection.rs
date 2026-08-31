@@ -158,6 +158,42 @@ async fn ensure_indexes(db: &Database) -> Result<(), mongodb::error::Error> {
         )
         .await?;
 
+    let event_record_col = db.collection::<mongodb::bson::Document>("trg_event_records");
+    event_record_col
+        .create_index(
+            IndexModel::builder()
+                .keys(mongodb::bson::doc! { "event_code": 1, "timestamp": -1 })
+                .build(),
+            None,
+        )
+        .await?;
+    event_record_col
+        .create_index(
+            IndexModel::builder()
+                .keys(mongodb::bson::doc! { "emitted_by_invocation_id": 1, "timestamp": -1 })
+                .build(),
+            None,
+        )
+        .await?;
+    let trigger_run_record_col =
+        db.collection::<mongodb::bson::Document>("trg_trigger_run_records");
+    trigger_run_record_col
+        .create_index(
+            IndexModel::builder()
+                .keys(mongodb::bson::doc! { "claimed_at": -1 })
+                .build(),
+            None,
+        )
+        .await?;
+    trigger_run_record_col
+        .create_index(
+            IndexModel::builder()
+                .keys(mongodb::bson::doc! { "triggered_invocation_id": 1 })
+                .build(),
+            None,
+        )
+        .await?;
+
     // State backend: history indexes for runner and time-range queries
     let history_col = db.collection::<mongodb::bson::Document>("state_history");
     history_col
@@ -202,6 +238,27 @@ async fn ensure_indexes(db: &Database) -> Result<(), mongodb::error::Error> {
         .create_index(
             IndexModel::builder()
                 .keys(mongodb::bson::doc! { "workflow_type": 1 })
+                .build(),
+            None,
+        )
+        .await?;
+
+    let atomic_timeline_col =
+        db.collection::<mongodb::bson::Document>("orch_atomic_service_timeline");
+    atomic_timeline_col
+        .create_index(
+            IndexModel::builder()
+                .keys(mongodb::bson::doc! { "start": -1 })
+                .build(),
+            None,
+        )
+        .await?;
+
+    let auto_purge_col = db.collection::<mongodb::bson::Document>("orch_auto_purge");
+    auto_purge_col
+        .create_index(
+            IndexModel::builder()
+                .keys(mongodb::bson::doc! { "scheduled_at": 1 })
                 .build(),
             None,
         )

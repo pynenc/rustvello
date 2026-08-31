@@ -8,10 +8,10 @@
 //!
 //! # Browser debugging
 //!
-//! Set `KEEP_ALIVE = true` in your test module (or the env var
-//! `RUSTVELLO_MONITOR_KEEP_ALIVE=1`) to keep the server running after
-//! tests complete. Open the printed URL in your browser and press
-//! Ctrl-C when done.
+//! Set `KEEP_ALIVE = true` in your test module, or set
+//! `KEEP_ALIVE=1` / `RUSTVELLO_MONITOR_KEEP_ALIVE=1`, to keep the server
+//! running after tests complete. Open the printed URL in your browser and
+//! press Ctrl-C when done.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -22,10 +22,12 @@ use rustvello_core::client_data_store::{ClientDataStore, ClientDataStoreManager}
 use rustvello_core::context::get_or_create_runner_context;
 use rustvello_core::error::RustvelloResult;
 use rustvello_core::state_backend::StoredRunnerContext;
+use rustvello_core::trigger::{TriggerManager, TriggerStore};
 use rustvello_mem::broker::MemBroker;
 use rustvello_mem::client_data_store::MemClientDataStore;
 use rustvello_mem::orchestrator::MemOrchestrator;
 use rustvello_mem::state_backend::MemStateBackend;
+use rustvello_mem::trigger::MemTriggerStore;
 use rustvello_monitoring::AppInstance;
 use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::config::{AppConfig, ClientDataStoreConfig, TaskConfig};
@@ -89,6 +91,7 @@ pub struct TestAppSetup {
     pub broker: Arc<dyn rustvello_core::broker::Broker>,
     pub orchestrator: Arc<dyn rustvello_core::orchestrator::Orchestrator>,
     pub state_backend: Arc<dyn rustvello_core::state_backend::StateBackend>,
+    pub trigger_store: Arc<dyn TriggerStore>,
     pub client_data_store: Arc<ClientDataStoreManager>,
     pub task_ids: Vec<TaskId>,
 }
@@ -110,6 +113,7 @@ pub fn create_test_app_with_config(config: AppConfig) -> TestAppSetup {
         cds,
         ClientDataStoreConfig::default(),
     ));
+    let trigger_store: Arc<dyn TriggerStore> = Arc::new(MemTriggerStore::new());
 
     let mut app = RustvelloApp::with_backends(
         config.clone(),
@@ -118,6 +122,7 @@ pub fn create_test_app_with_config(config: AppConfig) -> TestAppSetup {
         Arc::clone(&state_backend),
         Arc::clone(&client_data_store),
     );
+    app.set_trigger_manager(TriggerManager::new(Arc::clone(&trigger_store)));
 
     // Register a simple task
     let task_id = TaskId::new("test", "process_order");
@@ -143,6 +148,7 @@ pub fn create_test_app_with_config(config: AppConfig) -> TestAppSetup {
         broker,
         orchestrator,
         state_backend,
+        trigger_store,
         client_data_store,
         task_ids,
     }
@@ -181,6 +187,7 @@ pub async fn start_test_server(setup: TestAppSetup) -> TestServer {
         broker: setup.broker,
         orchestrator: setup.orchestrator,
         state_backend: setup.state_backend,
+        trigger_store: Some(setup.trigger_store),
         client_data_store: setup.client_data_store,
         task_ids: setup.task_ids,
     };
@@ -236,18 +243,20 @@ pub async fn start_test_server(setup: TestAppSetup) -> TestServer {
 
 /// Check whether the test should keep the server alive for debugging.
 ///
-/// Returns `true` if the env var `RUSTVELLO_MONITOR_KEEP_ALIVE` is set to `1`,
-/// `true`, or `yes` (case-insensitive).
+/// Returns `true` if either keep-alive env var is set to a truthy value.
 pub fn should_keep_alive(module_keep_alive: bool) -> bool {
     if module_keep_alive {
         return true;
     }
+    ["KEEP_ALIVE", "RUSTVELLO_MONITOR_KEEP_ALIVE"]
+        .into_iter()
+        .any(|key| is_truthy(&std::env::var(key).unwrap_or_default()))
+}
+
+fn is_truthy(value: &str) -> bool {
     matches!(
-        std::env::var("RUSTVELLO_MONITOR_KEEP_ALIVE")
-            .unwrap_or_default()
-            .to_lowercase()
-            .as_str(),
-        "1" | "true" | "yes"
+        value.trim().to_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
     )
 }
 
@@ -296,9 +305,12 @@ pub fn register_hierarchical_tasks(
         let orch = Arc::clone(orchestrator);
         let sb = Arc::clone(state_backend);
         let br = Arc::clone(broker);
+        let mut config = TaskConfig::default();
+        config.is_workflow_task = true;
+        config.blocking = true;
         app.register_task(
             TaskId::new("test", "grandparent_task"),
-            TaskConfig::default(),
+            config,
             Arc::new(move |args_json: String| {
                 let args: serde_json::Value = serde_json::from_str(&args_json).map_err(|e| {
                     rustvello_core::error::RustvelloError::Serialization {
@@ -314,7 +326,10 @@ pub fn register_hierarchical_tasks(
                 let inv_ctx =
                     get_invocation_context().expect("grandparent_task must run inside a runner");
                 let gp_id = inv_ctx.invocation_id.clone();
-                let workflow = inv_ctx.workflow.clone();
+                let workflow = inv_ctx
+                    .workflow
+                    .clone()
+                    .expect("grandparent_task must define a workflow");
                 let parent_tid = TaskId::new("test", "parent_task");
 
                 for pi in 0..num_children {
@@ -375,7 +390,10 @@ pub fn register_hierarchical_tasks(
                 let inv_ctx =
                     get_invocation_context().expect("parent_task must run inside a runner");
                 let p_id = inv_ctx.invocation_id.clone();
-                let workflow = inv_ctx.workflow.clone();
+                let workflow = inv_ctx
+                    .workflow
+                    .clone()
+                    .expect("parent_task must inherit a workflow");
                 let child_tid = TaskId::new("test", "child_task");
 
                 for ci in 0..num_children {
@@ -447,6 +465,7 @@ pub fn create_hierarchical_test_app(app_id: &str) -> TestAppSetup {
         cds,
         ClientDataStoreConfig::default(),
     ));
+    let trigger_store: Arc<dyn TriggerStore> = Arc::new(MemTriggerStore::new());
 
     let mut app = RustvelloApp::with_backends(
         config.clone(),
@@ -455,6 +474,7 @@ pub fn create_hierarchical_test_app(app_id: &str) -> TestAppSetup {
         Arc::clone(&state_backend),
         Arc::clone(&client_data_store),
     );
+    app.set_trigger_manager(TriggerManager::new(Arc::clone(&trigger_store)));
 
     register_hierarchical_tasks(&mut app, &orchestrator, &state_backend, &broker);
 
@@ -466,6 +486,7 @@ pub fn create_hierarchical_test_app(app_id: &str) -> TestAppSetup {
         broker,
         orchestrator,
         state_backend,
+        trigger_store,
         client_data_store,
         task_ids,
     }
@@ -649,4 +670,23 @@ pub async fn seed_hierarchical_invocations(
     }
 
     Ok((grandparent_ids, parent_ids, child_ids))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_truthy;
+
+    #[test]
+    fn keep_alive_truthy_values_are_recognized() {
+        for value in ["1", "true", "TRUE", "yes", "on", " on "] {
+            assert!(is_truthy(value), "{value:?} should enable keep-alive");
+        }
+    }
+
+    #[test]
+    fn keep_alive_falsey_values_are_ignored() {
+        for value in ["", "0", "false", "no", "off", "maybe"] {
+            assert!(!is_truthy(value), "{value:?} should not enable keep-alive");
+        }
+    }
 }

@@ -21,24 +21,20 @@ use crate::error::RustvelloResult;
 pub trait Broker: Send + Sync {
     /// Queue an invocation for processing by a runner.
     ///
-    /// When the task ID is unknown at the call site this is the fallback.
-    /// Prefer [`route_invocation_for_task`] when the task ID is available —
-    /// backends that support per-task queue isolation (e.g. `MemBroker`) use
-    /// it to enable task-filtered retrieval.
+    /// When the task ID is unknown at the call site this selects the global
+    /// queue. Callers with a task ID must use
+    /// [`route_invocation_for_task`] to preserve routing identity.
     async fn route_invocation(&self, invocation_id: &InvocationId) -> RustvelloResult<()>;
 
     /// Queue an invocation for processing, with the task ID for per-task routing.
     ///
-    /// Default implementation calls [`route_invocation`] (global queue).
-    /// Override in backends that support per-task queue isolation.
-    #[instrument(skip(self), fields(%invocation_id))]
+    /// Backends must preserve the task identity so task-filtered retrieval
+    /// remains correct. A global-only queue is not a complete implementation.
     async fn route_invocation_for_task(
         &self,
         invocation_id: &InvocationId,
-        _task_id: &TaskId,
-    ) -> RustvelloResult<()> {
-        self.route_invocation(invocation_id).await
-    }
+        task_id: &TaskId,
+    ) -> RustvelloResult<()>;
 
     /// Queue multiple invocations at once (batch optimization).
     #[instrument(skip(self, ids), fields(count = ids.len()))]
@@ -66,15 +62,12 @@ pub trait Broker: Send + Sync {
     /// language-specific tasks to per-task queues via [`route_invocation_for_task`]
     /// and use [`retrieve_invocation`] with `None` only for language-agnostic work.
     ///
-    /// Default implementation falls back to [`retrieve_invocation`] with no
-    /// language filtering — backends should override for proper isolation.
-    #[instrument(skip(self))]
+    /// Backends must preserve language filtering while allowing global queue
+    /// items to be consumed by any language worker.
     async fn retrieve_invocation_for_language(
         &self,
-        _language: &str,
-    ) -> RustvelloResult<Option<InvocationId>> {
-        self.retrieve_invocation(None).await
-    }
+        language: &str,
+    ) -> RustvelloResult<Option<InvocationId>>;
 
     /// Retrieve up to `max` invocations at once (batch optimization).
     ///

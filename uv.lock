@@ -20,6 +20,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
     { name = "pytest-cov", specifier = ">=4.0.0" },
     { name = "ruff", specifier = ">=0.6.9" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
     { name = "tox-uv", specifier = ">=1.11.3" },
 ]
 docs = [
@@ -786,6 +787,7 @@ dev = [
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 
 [package.metadata]
@@ -797,6 +799,7 @@ dev = [
     { name = "pre-commit", specifier = ">=3.5.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.14.0" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
 ]
 
 [[package]]

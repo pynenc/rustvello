@@ -7,58 +7,10 @@ fn make_db() -> Arc<Database> {
     Arc::new(Database::in_memory().unwrap())
 }
 
-/// SQLite broker only supports global queue — per-task and language-specific
-/// routing tests are skipped because `SqliteBroker` does not implement
-/// `route_invocation_for_task` or `retrieve_invocation_for_language` overrides.
-/// All invocations go through a single FIFO queue, so `test_language_routing`
-/// is not applicable. However, `test_global_queue_language_fallback` passes
-/// because the default `retrieve_invocation_for_language` delegates to
-/// `retrieve_invocation(None)`.
 mod broker_suite {
     use super::*;
     use rustvello_sqlite::broker::SqliteBroker;
-
-    #[tokio::test]
-    async fn suite_broker_route_and_retrieve() {
-        let broker = SqliteBroker::new(make_db());
-        rustvello_test_suite::broker::test_route_and_retrieve(&broker).await;
-    }
-
-    #[tokio::test]
-    async fn suite_broker_retrieve_empty() {
-        let broker = SqliteBroker::new(make_db());
-        rustvello_test_suite::broker::test_retrieve_empty(&broker).await;
-    }
-
-    #[tokio::test]
-    async fn suite_broker_fifo_ordering() {
-        let broker = SqliteBroker::new(make_db());
-        rustvello_test_suite::broker::test_fifo_ordering(&broker).await;
-    }
-
-    #[tokio::test]
-    async fn suite_broker_count_invocations() {
-        let broker = SqliteBroker::new(make_db());
-        rustvello_test_suite::broker::test_count_invocations(&broker).await;
-    }
-
-    #[tokio::test]
-    async fn suite_broker_purge_all() {
-        let broker = SqliteBroker::new(make_db());
-        rustvello_test_suite::broker::test_purge_all(&broker).await;
-    }
-
-    #[tokio::test]
-    async fn suite_broker_batch_route() {
-        let broker = SqliteBroker::new(make_db());
-        rustvello_test_suite::broker::test_batch_route(&broker).await;
-    }
-
-    #[tokio::test]
-    async fn suite_broker_global_queue_language_fallback() {
-        let broker = SqliteBroker::new(make_db());
-        rustvello_test_suite::broker::test_global_queue_language_fallback(&broker).await;
-    }
+    rustvello_test_suite::broker_suite!(SqliteBroker::new(make_db()));
 }
 
 mod orchestrator_suite {
@@ -83,6 +35,12 @@ mod client_data_store_suite {
     use super::*;
     use rustvello_sqlite::client_data_store::SqliteClientDataStore;
     rustvello_test_suite::client_data_store_suite!(SqliteClientDataStore::new(make_db()));
+}
+
+mod concurrency_suite {
+    use super::*;
+    use rustvello_sqlite::orchestrator::SqliteOrchestrator;
+    rustvello_test_suite::concurrency_suite!(SqliteOrchestrator::new(make_db()));
 }
 
 mod lifecycle_suite {

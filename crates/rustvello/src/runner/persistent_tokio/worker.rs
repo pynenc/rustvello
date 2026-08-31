@@ -283,9 +283,11 @@ impl PersistentTokioRunner {
             tracing::warn!("Cron condition evaluation failed: {}", e);
         }
 
-        let to_invoke = tm.evaluate_triggers().await?;
+        let to_invoke = tm.evaluate_trigger_runs().await?;
 
-        for (trigger_def, args) in &to_invoke {
+        for execution in &to_invoke {
+            let trigger_def = &execution.trigger;
+            let args = &execution.arguments;
             let task_id = &trigger_def.task_id;
 
             tracing::info!(
@@ -334,6 +336,10 @@ impl PersistentTokioRunner {
             self.broker
                 .route_invocation_for_task(&inv_id, task_id)
                 .await?;
+
+            if let Err(error) = tm.complete_trigger_run(&execution.run_id, &inv_id).await {
+                tracing::debug!(%error, trigger_run_id = %execution.run_id, "trigger-run completion unavailable");
+            }
 
             tracing::info!("Triggered invocation:{} for task:{}", inv_id, task_id);
         }

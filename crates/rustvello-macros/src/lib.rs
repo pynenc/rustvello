@@ -1,7 +1,7 @@
 //! Proc macros for the Rustvello distributed task library.
 //!
-//! Provides the `#[rustvello::task]` attribute macro that generates
-//! a [`Task`] trait implementation from a plain function.
+//! Provides `#[rustvello::task]` and `#[rustvello::workflow]` attribute macros
+//! that generate a [`Task`] trait implementation from a plain function.
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
@@ -70,7 +70,6 @@ use syn::{
 /// | `retry_for_errors` | `[&str]` | Error type names that trigger retries            |
 /// | `on_diff_non_key_args_raise` | `bool` | Raise on non-key arg mismatch          |
 /// | `parallel_batch_size` | `usize` | Batch size for parallelize()                   |
-/// | `force_new_workflow` | `bool` | Force a new workflow for each invocation        |
 /// | `reroute_on_cc` | `bool`     | Reroute when hitting concurrency limits          |
 /// | `blocking`      | `bool`     | Run on a blocking thread                         |
 #[proc_macro_attribute]
@@ -84,11 +83,29 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
+/// Define an explicit workflow root or sub-workflow root.
+///
+/// This accepts the same configuration attributes as [`task`] and marks the
+/// generated task as workflow-defining. Ordinary `#[task]` functions remain
+/// standalone unless invoked from inside a workflow.
+#[proc_macro_attribute]
+pub fn workflow(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut attrs = parse_macro_input!(attr as TaskAttrs);
+    attrs.is_workflow_task = true;
+    let func = parse_macro_input!(item as ItemFn);
+
+    match expand_task(attrs, func) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Attribute parsing
 // ---------------------------------------------------------------------------
 
 struct TaskAttrs {
+    is_workflow_task: bool,
     max_retries: Option<u32>,
     module: Option<String>,
     concurrency: Option<String>,
@@ -99,7 +116,6 @@ struct TaskAttrs {
     retry_for_errors: Option<Vec<String>>,
     on_diff_non_key_args_raise: Option<bool>,
     parallel_batch_size: Option<usize>,
-    force_new_workflow: Option<bool>,
     reroute_on_cc: Option<bool>,
     blocking: Option<bool>,
 }
@@ -116,7 +132,6 @@ impl Parse for TaskAttrs {
         let mut retry_for_errors = None;
         let mut on_diff_non_key_args_raise = None;
         let mut parallel_batch_size = None;
-        let mut force_new_workflow = None;
         let mut reroute_on_cc = None;
         let mut blocking = None;
 
@@ -173,11 +188,6 @@ impl Parse for TaskAttrs {
                     let lit: LitBool = input.parse()?;
                     cache_results = Some(lit.value());
                 }
-                "force_new_workflow" => {
-                    check_dup!(force_new_workflow);
-                    let lit: LitBool = input.parse()?;
-                    force_new_workflow = Some(lit.value());
-                }
                 "reroute_on_cc" => {
                     check_dup!(reroute_on_cc);
                     let lit: LitBool = input.parse()?;
@@ -226,7 +236,6 @@ impl Parse for TaskAttrs {
                         "retry_for_errors",
                         "on_diff_non_key_args_raise",
                         "parallel_batch_size",
-                        "force_new_workflow",
                         "reroute_on_cc",
                         "blocking",
                     ];
@@ -263,6 +272,7 @@ impl Parse for TaskAttrs {
         }
 
         Ok(Self {
+            is_workflow_task: false,
             max_retries,
             module,
             concurrency,
@@ -273,7 +283,6 @@ impl Parse for TaskAttrs {
             retry_for_errors,
             on_diff_non_key_args_raise,
             parallel_batch_size,
-            force_new_workflow,
             reroute_on_cc,
             blocking,
         })
@@ -709,16 +718,19 @@ fn build_config(
         setters.push(quote! { config.cache_results = #cache; });
     }
 
-    if let Some(force) = attrs.force_new_workflow {
-        setters.push(quote! { config.force_new_workflow = #force; });
-    }
-
     if let Some(reroute) = attrs.reroute_on_cc {
         setters.push(quote! { config.reroute_on_cc = #reroute; });
     }
 
     if let Some(blocking) = attrs.blocking {
         setters.push(quote! { config.blocking = #blocking; });
+    }
+
+    if attrs.is_workflow_task {
+        setters.push(quote! {
+            config.is_workflow_task = true;
+            config.blocking = true;
+        });
     }
 
     if let Some(ref args) = attrs.disable_cache_args {

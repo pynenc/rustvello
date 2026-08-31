@@ -1,43 +1,47 @@
 # Test Inventory
 
-Current test counts and coverage status for rustvello v0.1.0.
+Current coverage structure for Rustvello. Exact test counts are reported by the
+test runner and are intentionally not duplicated here because the shared suites
+expand differently for each backend implementation.
 
 ## Summary
 
-| Category                                  |                              Count |
-| ----------------------------------------- | ---------------------------------: |
-| Inline unit test modules (`#[cfg(test)]`) |                                 53 |
-| Shared test functions (test-suite)        |                                 51 |
-| Backend suite instantiations              |                         7 backends |
-| Integration test files                    | 9 (main crate) + 11 (other crates) |
-| Property-based tests (proptest)           |                                 8+ |
-| Fuzz targets                              |                                  2 |
-| Benchmark groups (criterion)              |                   2 (6 benchmarks) |
+| Category                     | Coverage                                                                                           |
+| ---------------------------- | -------------------------------------------------------------------------------------------------- |
+| Inline unit tests            | Internal modules across workspace crates                                                           |
+| Shared compliance functions  | Broker, orchestrator, state, trigger, client-data, lifecycle, isolation, and concurrency contracts |
+| Backend suite instantiations | Memory, SQLite, Redis, PostgreSQL, MongoDB, MongoDB 3, and RabbitMQ (broker-only)                  |
+| Integration tests            | Cross-component runner, workflow, trigger, monitoring, CLI, and binding behavior                   |
+| Property tests               | Serde, status graphs, argument/concurrency keys, trigger filters, and workflow histories           |
+| Fuzz targets                 | JSON trigger and TOML configuration parsing                                                        |
+| Stress/soak tests            | Fast in-memory contention plus ignored high-volume runner and SQLite persistence tests             |
 
 ## Backend Compliance Suite
 
-51 shared test functions across 7 modules:
+Shared test functions are grouped by contract module:
 
-| Module              | Tests | What it verifies                                                                                            |
-| ------------------- | ----: | ----------------------------------------------------------------------------------------------------------- |
-| `broker`            |    11 | Message routing, FIFO ordering, per-task isolation, batch routing, language-specific queues, purge          |
-| `orchestrator`      |    10 | Invocation registration, status transitions, queries by task/status, pagination, concurrency control, purge |
-| `state_backend`     |     7 | State upsert/get, call retrieval, result/error storage, history, purge                                      |
-| `trigger`           |    11 | Condition registration, event/cron conditions, trigger lifecycle, optimistic locking, dedup, purge          |
-| `client_data_store` |     7 | Store/retrieve, missing key errors, upsert semantics, multiple keys, large values, backend name             |
-| `lifecycle`         |     5 | Full success/failure lifecycle, multiple invocations, purge-all, broker-orchestrator consistency            |
+| Module              | What it verifies                                                                                      |
+| ------------------- | ----------------------------------------------------------------------------------------------------- |
+| `broker`            | Message routing, FIFO ordering, per-task isolation, batch routing, language queues, and purge         |
+| `orchestrator`      | Registration, status transitions, queries, pagination, concurrency, atomic-service history, and purge |
+| `state_backend`     | State upsert/get, call retrieval, result/error storage, history, and purge                            |
+| `trigger`           | Condition registration, events, cron, lifecycle, optimistic locking, deduplication, and purge         |
+| `client_data_store` | Store/retrieve, missing keys, upserts, multiple keys, large values, and backend name                  |
+| `lifecycle`         | Success/failure lifecycle, multiple invocations, purge-all, and component consistency                 |
+| `isolation`         | Application namespace isolation for persistent/distributed backends                                   |
+| `concurrency`       | Registration and running concurrency policies and atomic slot acquisition                             |
 
 ## Backend Instantiation Matrix
 
-| Backend  | Style         | Docker |          Suites |
-| -------- | ------------- | :----: | --------------: |
-| mem      | Sync macros   |   No   |               6 |
-| sqlite   | Manual wiring |   No   |               6 |
-| redis    | Async macros  |  Yes   |               6 |
-| mongo    | Async macros  |  Yes   |               6 |
-| mongo3   | Async macros  |  Yes   |               6 |
-| postgres | Async macros  |  Yes   |               6 |
-| rabbitmq | Async macros  |  Yes   | 1 (broker only) |
+| Backend    | Style         | Docker | Coverage                                                                            |
+| ---------- | ------------- | :----: | ----------------------------------------------------------------------------------- |
+| Memory     | Sync macros   |   No   | Complete local backend contracts plus concurrency                                   |
+| SQLite     | Manual wiring |   No   | Complete local backend contracts plus isolation, concurrency, and persistent stress |
+| Redis      | Async macros  |  Yes   | Complete distributed backend contracts plus isolation and concurrency               |
+| MongoDB    | Async macros  |  Yes   | Complete distributed backend contracts plus isolation and concurrency               |
+| MongoDB 3  | Async macros  |  Yes   | Complete legacy distributed backend contracts plus isolation and concurrency        |
+| PostgreSQL | Async macros  |  Yes   | Complete distributed backend contracts plus isolation and concurrency               |
+| RabbitMQ   | Async macros  |  Yes   | Complete Broker contract                                                            |
 
 ## Inline Unit Tests by Crate
 
@@ -79,12 +83,16 @@ Current test counts and coverage status for rustvello v0.1.0.
 | `rustvello-cli`        | `cli_tests.rs`            | CLI argument parsing       |
 | `rustvello-proto`      | `proptest_roundtrips.rs`  | Property-based serde tests |
 
-## Known Gaps
+## Known Limits
 
-| Area                       | Status      | Notes                                                 |
-| -------------------------- | ----------- | ----------------------------------------------------- |
-| Docker tests in CI         | ⚠️ Skipped  | GitHub Actions lacks Docker service containers        |
-| Python FFI tests           | ⚠️ Broken   | `pyo3::prepare_freethreaded_python()` not called      |
-| Multi-threaded tokio tests | ⚠️ Missing  | No `#[tokio::test(flavor = "multi_thread")]` anywhere |
-| Concurrency verification   | ⚠️ Missing  | No `loom` integration                                 |
-| SQLite macro migration     | ℹ️ Optional | Still uses manual wiring (works fine, just verbose)   |
+| Area                            | Status                  | Notes                                                                                  |
+| ------------------------------- | ----------------------- | -------------------------------------------------------------------------------------- |
+| Docker backend tests            | Scheduled/manual        | `.github/workflows/backend-and-stress.yml` runs ignored suites against real containers |
+| Python bindings                 | Default CI              | PyO3 extension is built before pytest on supported Python versions                     |
+| Persistent contention           | SQLite covered          | Route/retrieve, claim, concurrency slot, and recovery tests run in the soak lane       |
+| Distributed stress              | Backend compliance only | Longer contention campaigns remain follow-up work for service-backed implementations   |
+| Exhaustive concurrency modeling | Not implemented         | Stress tests exercise contention, but the project does not yet use `loom`              |
+| SQLite broker routing           | Covered                 | Local SQLite still exercises task-aware, language-aware, and global routing            |
+| Atomic-service history          | Covered                 | Every orchestrator persists and queries bounded history through its native backend     |
+
+See {doc}`backend-constraints` for backend facts and the normative contract rule.

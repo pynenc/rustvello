@@ -10,7 +10,7 @@ Add the main library crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustvello = "0.1.0"
+rustvello = "0.3.1"
 ```
 
 Or via Cargo:
@@ -41,13 +41,13 @@ Examples:
 
 ```toml
 # SQLite for single-host persistence
-rustvello = { version = "0.1.0", features = ["sqlite"] }
+rustvello = { version = "0.3.1", features = ["sqlite"] }
 
 # Redis for distributed production
-rustvello = { version = "0.1.0", features = ["redis"] }
+rustvello = { version = "0.3.1", features = ["redis"] }
 
 # Everything
-rustvello = { version = "0.1.0", features = ["full"] }
+rustvello = { version = "0.3.1", features = ["full"] }
 ```
 
 ---

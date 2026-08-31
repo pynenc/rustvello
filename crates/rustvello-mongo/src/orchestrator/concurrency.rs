@@ -164,7 +164,6 @@ impl OrchestratorConcurrency for MongoOrchestrator {
         session.start_transaction().await.map_err(mongo_err)?;
 
         let cc_col = db.collection::<mongodb::bson::Document>(CC_COL);
-        let status_col = db.collection::<mongodb::bson::Document>(STATUS_COL);
         let pairs = args.cc_arg_pairs();
 
         // Intersect per-pair CC sets within the transaction
@@ -201,29 +200,7 @@ impl OrchestratorConcurrency for MongoOrchestrator {
             }
         }
 
-        let candidates: Vec<String> = intersection
-            .map(|s| s.into_iter().collect())
-            .unwrap_or_default();
-
-        // Count active (Pending/Running) invocations
-        let count = if candidates.is_empty() {
-            0
-        } else {
-            let bson_ids: Vec<mongodb::bson::Bson> = candidates
-                .into_iter()
-                .map(mongodb::bson::Bson::String)
-                .collect();
-            let count_filter = doc! {
-                "_id": { "$in": &bson_ids },
-                "status_name": { "$in": ["Pending", "Running"] },
-            };
-            let c = status_col
-                .count_documents(count_filter)
-                .session(&mut session)
-                .await
-                .map_err(mongo_err)?;
-            usize::try_from(c).unwrap_or(usize::MAX)
-        };
+        let count = intersection.map_or(0, |candidates| candidates.len());
 
         let limit = task_config.running_concurrency.unwrap_or(1) as usize;
 

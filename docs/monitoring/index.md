@@ -34,6 +34,11 @@ Parent-child invocation trees rendered as interactive family graphs. Useful for
 debugging fan-out patterns and understanding orchestration chains.
 ::::
 
+::::{grid-item-card} Trigger Evidence
+Inspect emitted events, matched conditions, trigger-run participants, and the
+invocations produced by a trigger. Event details link into a bounded timeline.
+::::
+
 ::::{grid-item-card} Prometheus Metrics
 When `rustvello-prometheus` is active, the dashboard exposes `/metrics` in Prometheus
 text format. Counters and histograms cover invocation counts, status transitions,
@@ -49,12 +54,35 @@ apps from the navigation bar without restarting.
 
 ---
 
+### Timeline Controls
+
+The invocation timeline supports bounded time ranges, task filters, workflow type
+and workflow ID filters, and an optional comma-separated invocation scope. The
+scope is useful when following one workflow or a trigger-related set of
+invocations without rendering unrelated history.
+
+Use the zoom button in the timeline header, then drag across the SVG time axis
+to open the selected range. The selection is converted to UTC and preserves the
+active filters in the URL. Invocation and event detail links can also open a
+focused bounded range around their recorded timestamps.
+
+The timeline reads history through the backend's bounded time-range query and
+loads complete histories only for invocations that intersect the visible range.
+This preserves status transitions that cross the left edge while avoiding an
+unbounded scan of old invocation histories.
+
+Rustvello does not expose Pynenc's system-task or atomic-service visibility
+toggles in this view because those are not separate invocation categories in
+the Rustvello monitoring model. Atomic-service execution has its own dedicated
+timeline view, and event/trigger evidence has dedicated list and detail views.
+
 ## Running the Dashboard
 
 The monitoring server is started programmatically alongside your application:
 
 ```rust
 use std::collections::HashMap;
+use std::sync::Arc;
 use rustvello_monitoring::{start_monitor, AppInstance, MonitorConfig};
 use std::net::SocketAddr;
 
@@ -71,6 +99,7 @@ let instance = AppInstance {
     broker: app.broker(),
     orchestrator: app.orchestrator(),
     state_backend: app.state_backend(),
+    trigger_store: app.trigger_manager().map(|manager| Arc::clone(manager.store())),
     client_data_store: app.client_data_store(),
     task_ids: app.registered_task_ids(),
 };
@@ -103,7 +132,7 @@ Open a browser at `http://localhost:8000` to view the dashboard.
 
 ```toml
 [dependencies]
-rustvello-monitoring = "0.1.0"
+rustvello-monitoring = "0.3.1"
 ```
 
 The monitoring crate does **not** require `rustvello`'s feature flags — it depends
@@ -118,9 +147,9 @@ to wire Prometheus metrics alongside the dashboard:
 
 ```toml
 [dependencies]
-rustvello = { version = "0.1.0", features = ["prometheus"] }
-rustvello-prometheus = "0.1.0"
-rustvello-monitoring = "0.1.0"
+rustvello = { version = "0.3.1", features = ["prometheus"] }
+rustvello-prometheus = "0.3.1"
+rustvello-monitoring = "0.3.1"
 ```
 
 The dashboard automatically serves the `/metrics` endpoint when the Prometheus
@@ -183,4 +212,5 @@ CSRF origin validation is enforced on all state-mutating routes.
 :maxdepth: 2
 
 logging
+triggers
 ```

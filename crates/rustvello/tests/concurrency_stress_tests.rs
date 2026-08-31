@@ -50,6 +50,7 @@ fn make_runner(
 
 /// Submit 200 invocations and process with one runner (8 workers).
 #[tokio::test]
+#[ignore = "slow stress lane"]
 async fn stress_200_invocations_single_runner() {
     let n = 200;
     let mut app = RustvelloApp::new(AppConfig::new("stress-single"));
@@ -92,6 +93,7 @@ async fn stress_200_invocations_single_runner() {
 /// Submit 200 invocations, run 4 runners with 4 workers each.
 /// Every invocation must complete exactly once.
 #[tokio::test]
+#[ignore = "slow stress lane"]
 async fn stress_200_invocations_multi_runner() {
     let n = 200;
     let mut app = RustvelloApp::new(AppConfig::new("stress-multi"));

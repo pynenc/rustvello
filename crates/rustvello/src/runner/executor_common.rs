@@ -21,7 +21,7 @@ use rustvello_core::task::{DynTask, TaskRegistry};
 use rustvello_core::trigger::TriggerManager;
 use rustvello_proto::call::SerializedArguments;
 use rustvello_proto::identifiers::{InvocationId, RunnerId};
-use rustvello_proto::invocation::{InvocationHistory, WorkflowIdentity};
+use rustvello_proto::invocation::InvocationHistory;
 use rustvello_proto::status::{ConcurrencyControlType, InvocationStatus, InvocationStatusRecord};
 use rustvello_proto::trigger::{ExceptionContext, ResultContext, StatusContext};
 
@@ -169,9 +169,10 @@ async fn check_cc_for_candidate(
 
     let cc_args = compute_cc_args(config, &call_dto.serialized_arguments);
 
-    // Check if this invocation can run under CC limits
+    // Reserve a slot before claiming the invocation. Backends implement this
+    // as one atomic check-and-index operation.
     if orchestrator
-        .check_running_concurrency(&inv_dto.task_id, config, cc_args.as_ref())
+        .try_acquire_concurrency_slot(invocation_id, &inv_dto.task_id, config, cc_args.as_ref())
         .await?
     {
         return Ok(true); // CC check passed
@@ -237,25 +238,11 @@ pub(crate) fn compute_cc_args(
     config: &rustvello_proto::config::TaskConfig,
     args: &SerializedArguments,
 ) -> Option<SerializedArguments> {
-    match config.concurrency_control {
-        ConcurrencyControlType::Unlimited => None,
-        ConcurrencyControlType::Task => Some(SerializedArguments::new()),
-        ConcurrencyControlType::Argument => {
-            if config.key_arguments.is_empty() {
-                Some(args.clone())
-            } else {
-                let mut filtered = SerializedArguments::new();
-                for key in &config.key_arguments {
-                    if let Some(val) = args.0.get(key) {
-                        filtered.insert(key, val.clone());
-                    }
-                }
-                Some(filtered)
-            }
-        }
-        ConcurrencyControlType::None => Some(args.clone()),
-        _ => Some(args.clone()),
-    }
+    crate::task_config::concurrency_arguments(
+        config.concurrency_control,
+        &config.key_arguments,
+        args,
+    )
 }
 
 /// Execute an invocation using the shared lifecycle.
@@ -311,37 +298,24 @@ where
                 from_status,
                 to_status
             );
+            deps.orchestrator
+                .remove_from_concurrency_index(invocation_id)
+                .await?;
             return Ok(());
         }
         Err(RustvelloError::OwnershipViolation { .. }) => {
             tracing::warn!("Already owned by another runner");
+            deps.orchestrator
+                .remove_from_concurrency_index(invocation_id)
+                .await?;
             return Ok(());
         }
-        Err(e) => return Err(e),
-    }
-
-    // --- 1b. Index for concurrency control ---
-    // Now that we've claimed the invocation, index it so other workers
-    // see it as in-flight when checking CC limits.
-    if let Ok(inv_dto) = deps.state_backend.get_invocation(invocation_id).await {
-        if let Some(task) = deps.task_registry.get_dyn(&inv_dto.task_id) {
-            let config = task.config();
-            if config.concurrency_control != ConcurrencyControlType::Unlimited {
-                if let Ok(call_dto) = deps.state_backend.get_call(&inv_dto.call_id).await {
-                    let cc_args = compute_cc_args(config, &call_dto.serialized_arguments);
-                    if let Err(e) = deps
-                        .orchestrator
-                        .index_for_concurrency_control(
-                            invocation_id,
-                            &inv_dto.task_id,
-                            cc_args.as_ref(),
-                        )
-                        .await
-                    {
-                        tracing::warn!("Failed to index for CC: {}", e);
-                    }
-                }
-            }
+        Err(e) => {
+            let _ = deps
+                .orchestrator
+                .remove_from_concurrency_index(invocation_id)
+                .await;
+            return Err(e);
         }
     }
 
@@ -391,9 +365,9 @@ where
     let inv_ctx = InvocationContext {
         invocation_id: invocation_id.clone(),
         task_id: inv_dto.task_id.clone(),
-        workflow: inv_dto.workflow.clone().unwrap_or_else(|| {
-            WorkflowIdentity::root(invocation_id.clone(), inv_dto.task_id.clone())
-        }),
+        workflow: inv_dto.workflow.clone(),
+        is_workflow_defining: task.config().is_workflow_task,
+        state_backend: Some(Arc::clone(&deps.state_backend)),
         parent_invocation_id: inv_dto.parent_invocation_id.clone(),
         num_retries,
     };
@@ -548,6 +522,9 @@ where
                         .any(|e| task_error.error_type.contains(e.as_str())));
 
             if should_retry {
+                deps.orchestrator
+                    .remove_from_concurrency_index(invocation_id)
+                    .await?;
                 deps.orchestrator
                     .set_invocation_status(
                         invocation_id,

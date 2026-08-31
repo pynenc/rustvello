@@ -104,8 +104,9 @@ pub struct TaskConfig {
     pub on_diff_non_key_args_raise: bool,
     /// Batch size for `parallelize()` — how many calls to submit at once
     pub parallel_batch_size: usize,
-    /// Force a new workflow even if a matching invocation already exists
-    pub force_new_workflow: bool,
+    /// Whether this task explicitly defines a workflow or sub-workflow root.
+    #[serde(default, alias = "force_new_workflow")]
+    pub is_workflow_task: bool,
     /// Reroute an invocation when it hits concurrency control limits
     pub reroute_on_cc: bool,
     /// Whether to run this task on a blocking thread (`tokio::task::spawn_blocking`).
@@ -126,7 +127,7 @@ impl Default for TaskConfig {
             disable_cache_args: Vec::new(),
             on_diff_non_key_args_raise: false,
             parallel_batch_size: 100,
-            force_new_workflow: false,
+            is_workflow_task: false,
             reroute_on_cc: false,
             blocking: false,
         }
@@ -306,7 +307,7 @@ mod tests {
         );
         assert!(!tc.cache_results);
         assert!(tc.key_arguments.is_empty());
-        assert!(!tc.force_new_workflow);
+        assert!(!tc.is_workflow_task);
         assert!(!tc.reroute_on_cc);
     }
 
@@ -339,7 +340,7 @@ mod tests {
             disable_cache_args: vec!["timestamp".to_string()],
             on_diff_non_key_args_raise: true,
             parallel_batch_size: 50,
-            force_new_workflow: true,
+            is_workflow_task: true,
             reroute_on_cc: true,
             blocking: false,
         };
@@ -354,7 +355,7 @@ mod tests {
         );
         assert!(back.cache_results);
         assert_eq!(back.key_arguments, vec!["order_id"]);
-        assert!(back.force_new_workflow);
+        assert!(back.is_workflow_task);
         assert!(back.reroute_on_cc);
         assert!(!back.blocking);
     }

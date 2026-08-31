@@ -13,6 +13,64 @@ backend plugin. While this page documents Rustvello's internal Rust design, Pyth
 Rustvello through Pynenc can refer to the [Pynenc Architecture Docs](https://pynenc.github.io/architecture/index.html)
 for the Python perspective.
 
+The Pynenc-specific adapter is an external consumer of Rustvello's Python and
+wire contracts; it is not a crate or Python package in this repository.
+
+## Architecture Maps
+
+These static maps summarize the ownership and data-flow boundaries described
+in the sections below. They are maintained as documentation assets rather than
+generated from runtime code.
+
+:::{figure} \_static/architecture-crates.svg
+:alt: Rustvello workspace crate dependency map
+:width: 100%
+
+Workspace dependency direction.
+:::
+
+:::{figure} \_static/architecture-invocation-lifecycle.svg
+:alt: Invocation lifecycle and component ownership flow
+:width: 100%
+
+Submission, execution, persistence, and recovery ownership.
+:::
+
+:::{figure} \_static/architecture-backend-traits.svg
+:alt: Backend traits, implementations, and compliance suites
+:width: 100%
+
+Backend contracts and deployment boundaries.
+:::
+
+:::{figure} \_static/architecture-python.svg
+:alt: Standalone Python, PyO3, Rust engine, and external Pynenc adapter flow
+:width: 100%
+
+Python and external Pynenc integration boundaries.
+:::
+
+:::{figure} \_static/architecture-atomic-trigger.svg
+:alt: Trigger and atomic-service coordination flow
+:width: 100%
+
+Global service election, recovery, and trigger evaluation.
+:::
+
+:::{figure} \_static/architecture-monitoring.svg
+:alt: Monitoring data flow from backend traits to browser views
+:width: 100%
+
+Monitoring reads and operator actions.
+:::
+
+:::{figure} \_static/architecture-workflow.svg
+:alt: Workflow context and deterministic replay data flow
+:width: 100%
+
+Explicit workflow identity and root-scoped deterministic data behavior.
+:::
+
 ## Crate Dependency Graph
 
 ```text
@@ -49,8 +107,8 @@ rustvello                     Application layer — RustvelloApp, RustvelloBuild
 py-rustvello/ (Python wheel — cdylib built with maturin)
     └── rustvello Python package — exposes PyO3-wrapped Rust backends
 
-pynenc-rustvello/ (separate package — pip install pynenc-rustvello)
-    └── pynenc_rustvello/     Stateless adapters: subclass pynenc ABCs, delegate to py-rustvello
+external Pynenc adapter (separate distribution/repository)
+    └── consumes py-rustvello and maps Pynenc interfaces to Rustvello contracts
 ```
 
 ---
@@ -125,7 +183,6 @@ graph TD
 
     Pending -->|run| Running
     Pending -->|crash / OOM| Killed
-    Pending -->|cycle control| Failed
     Pending -->|re-route| Rerouted
     Pending -->|timeout| PR[PendingRecovery]
 
@@ -140,14 +197,8 @@ graph TD
 
     RR -->|re-queue| Rerouted
 
-    Paused -->|continue| Resumed
+    Paused -->|continue| Running
     Paused -->|crash / OOM| Killed
-
-    Resumed -->|complete| Success
-    Resumed -->|error| Failed
-    Resumed -->|crash / OOM| Killed
-    Resumed -->|retry| Retry
-    Resumed -->|suspend| Paused
 
     Killed -->|re-queue| Rerouted
 
@@ -166,7 +217,7 @@ graph TD
     classDef point fill:#586069,color:#fff,stroke:#586069
 
     class Registered,Rerouted,Retry available
-    class Running,Paused,Resumed execution
+    class Running,Paused execution
     class PR,RR,Killed recovery
     class Pending,CC queue
     class Failed,CCFinal termFail
@@ -176,13 +227,13 @@ graph TD
 
 **Colour legend** —
 🟢 Green: available for run (Registered, Rerouted, Retry) ·
-🟣 Purple: execution (Running, Paused, Resumed) ·
+🟣 Purple: execution (Running, Paused) ·
 🟠 Orange: recovery / kill (PendingRecovery, RunningRecovery, Killed) ·
 🔵 Blue: queued (Pending, ConcurrencyControlled) ·
 🔴 Red: terminal failure (Failed, ConcurrencyControlledFinal) ·
 ✅ Green: terminal success (Success)
 
-14 states. Terminal states: `Success`, `Failed`, `ConcurrencyControlledFinal`.
+13 states. Terminal states: `Success`, `Failed`, `ConcurrencyControlledFinal`.
 `Killed` and `Rerouted` are **not** terminal — they re-enter the lifecycle via `Rerouted` → `Pending`.
 Transitions are validated by `InvocationStatus::valid_transitions()` at runtime.
 
@@ -190,11 +241,11 @@ Mermaid source: [`_static/invocation-status-fsm.mmd`](_static/invocation-status-
 
 ### Configuration
 
-| Struct                  | Key Fields                                                                                                                                                       |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AppConfig`             | `app_id`, `dev_mode_force_sync`, `max_pending_seconds`, `heartbeat_interval_seconds`, `runner_dead_after_seconds`, `recovery_check_interval_seconds`             |
-| `TaskConfig`            | `max_retries`, `concurrency_control`, `running_concurrency`, `registration_concurrency`, `key_arguments`, `cache_results`, `force_new_workflow`, `reroute_on_cc` |
-| `ClientDataStoreConfig` | `disabled`, `min_size_to_cache`, `max_size_to_cache`, `local_cache_size`, `warn_threshold`                                                                       |
+| Struct                  | Key Fields                                                                                                                                                     |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AppConfig`             | `app_id`, `dev_mode_force_sync`, `max_pending_seconds`, `heartbeat_interval_seconds`, `runner_dead_after_seconds`, `recovery_check_interval_seconds`           |
+| `TaskConfig`            | `max_retries`, `concurrency_control`, `running_concurrency`, `registration_concurrency`, `key_arguments`, `cache_results`, `is_workflow_task`, `reroute_on_cc` |
+| `ClientDataStoreConfig` | `disabled`, `min_size_to_cache`, `max_size_to_cache`, `local_cache_size`, `warn_threshold`                                                                     |
 
 ---
 
@@ -256,6 +307,20 @@ pub trait StateBackend: Send + Sync {
 }
 ```
 
+### TriggerStore
+
+Stores trigger definitions, condition matches, execution claims, and durable
+monitoring evidence. All trigger methods are required for every full trigger
+backend. `EventRecord` and `TriggerRunRecord` are persisted and queried through
+the backend's native storage primitives; the shared evidence contract has no
+unsupported implementation path. RabbitMQ is a broker-only component and does
+not expose a trigger store.
+
+The stable monitoring DTOs live in `rustvello-proto`. Events retain payload,
+emitter, matched-condition, and produced-invocation links. Trigger runs retain
+arguments, timestamps, the produced invocation, and one participant entry per
+condition source.
+
 ---
 
 ## Application Layer (`rustvello`)
@@ -297,14 +362,17 @@ Supported attributes:
 | `registration_concurrency` | `&str`   | Registration-time dedup mode                          |
 | `key_arguments`            | `[&str]` | Argument names used as concurrency key                |
 | `cache_results`            | `bool`   | Cache results for identical args                      |
-| `force_new_workflow`       | `bool`   | Always start a new workflow scope                     |
+| `is_workflow_task`         | `bool`   | Workflow marker set by the workflow macro or adapters |
 | `reroute_on_cc`            | `bool`   | Reroute when hitting concurrency limits               |
 | `blocking`                 | `bool`   | Run on a blocking thread (for CPU-bound work)         |
 
 ### TaskRunner
 
 The `TaskRunner` spawns N async workers (configurable via `num_workers`) that
-race to claim invocations from the broker and execute them concurrently. A separate
+race to retrieve invocations from the broker and execute them concurrently.
+Before claiming `Pending` ownership, a worker atomically reserves the matching
+backend concurrency slot. Failed claims and retries release that reservation;
+terminal transitions prune it as part of status persistence. A separate
 management loop handles heartbeats, recovery checks, and trigger evaluations.
 
 ```text
@@ -371,6 +439,7 @@ Axum web server with Askama HTML templates and HTMX for live updates. Features:
 - **Log explorer** — full-text log search with cross-entity highlighting
 - **Invocation tables** — filterable by status, task, runner, time range
 - **Workflow view** — parent/child invocation trees
+- **Trigger evidence** — event list/detail and trigger-run participants
 - **Prometheus endpoint** — `/metrics` when `rustvello-prometheus` is active
 
 ### `rustvello-prometheus`
@@ -395,14 +464,17 @@ The maturin-built cdylib that produces the actual `rustvello` Python module. It 
 
 ## Pynenc Framework
 
-The `pynenc/` directory in this repository contains the pure-Python [pynenc](https://github.com/pynenc/pynenc) framework. Pynenc provides:
+The pure-Python [pynenc](https://github.com/pynenc/pynenc) framework is a
+separate repository and provides:
 
 - Task decorators (`@app.task`)
 - Builder API (`PynencBuilder`)
 - Triggers and scheduling
 - Monitoring (pynmon)
 
-Pynenc uses rustvello as one of its backend options. The bridge classes in `py-rustvello/rustvello/pynenc/` adapt the Rust-backed `Broker`, `Orchestrator`, and `StateBackend` to pynenc's abstract base classes.
+Pynenc can use Rustvello through an external adapter package. That adapter maps
+the Rust-backed `Broker`, `Orchestrator`, and `StateBackend` to Pynenc's abstract
+interfaces; no Pynenc-specific bridge classes live under `py-rustvello`.
 
 ## Composite Operations
 
@@ -542,11 +614,18 @@ CompositeCondition::Any(vec![
 
 ### Evaluation Flow
 
-1. Management loop calls `trigger_loop_iteration()` (composite in native mode)
-2. Rust iterates all registered trigger conditions
-3. Each condition is checked against current state
-4. Matching triggers create new invocations with the specified static arguments
-5. No Python callbacks during evaluation — all matching happens in Rust
+1. The management loop calls `trigger_loop_iteration()` in native mode.
+2. Rust iterates all registered trigger conditions.
+3. Each condition is checked against current state.
+4. A deterministic execution claim prevents duplicate runs across runners.
+5. Supporting stores persist the run and its condition participants.
+6. Matching triggers create new invocations with the specified static arguments.
+7. The run and participating events are linked to the created invocation.
+
+Custom events are persisted before matching, so unmatched events remain
+observable. Monitoring writes are part of the trigger-store contract and use
+backend-native persistence. See
+{doc}`monitoring/triggers` for record fields, filters, and dashboard behavior.
 
 ---
 
@@ -640,5 +719,5 @@ To add a new backend (e.g., Redis):
 
 1. Create a new crate `crates/rustvello-redis/`
 2. Implement the `Broker`, `Orchestrator`, and `StateBackend` traits from `rustvello-core`
-3. Add it as an optional dependency in `crates/rustvello/Cargo.toml` behind a feature flag
-4. Wire it into `App` construction
+3. Add its dependency to the workspace and wire it into `App` construction
+4. Keep any build-time feature flags separate from the required trait contract

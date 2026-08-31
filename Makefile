@@ -1,3 +1,7 @@
+# Keep PyO3's test interpreter aligned with the Python environment used by
+# maturin. This avoids accidentally linking Rust tests against macOS system Python.
+PYTHON_BIN ?= $(CURDIR)/.venv/bin/python
+
 .PHONY: install
 install: ## Install dependencies, build the Python extension, and set up pre-commit hooks
 	@echo "🚀 Installing dependencies"
@@ -32,13 +36,43 @@ test-python: develop ## Run Python tests with pytest
 	@echo "🚀 Testing Python: Running pytest"
 	@uv run pytest py-rustvello/ --cov --cov-config=pyproject.toml --cov-report=xml
 
+.PHONY: python-versions
+python-versions: ## Print Python versions supported by py-rustvello metadata
+	@$(PYTHON_BIN) scripts/python_compatibility.py
+
 .PHONY: test-rust
 test-rust: ## Run Rust tests
 	@echo "🚀 Testing Rust: Running cargo test"
-	@cargo test --workspace --exclude py-rustvello
+	@PYTHON_BIN="$(PYTHON_BIN)"; \
+	if [ ! -x "$$PYTHON_BIN" ]; then \
+		echo "Python environment not found at $$PYTHON_BIN; run 'make install' first."; \
+		exit 1; \
+	fi; \
+	PYTHON_PREFIX="$$("$$PYTHON_BIN" -c 'from pathlib import Path; import sys; print(Path(sys.executable).resolve().parent.parent)')"; \
+	PYTHON_LIB_DIR="$$PYTHON_PREFIX/lib"; \
+	echo "   Using Python: $$PYTHON_BIN"; \
+	PYTHONHOME="$$PYTHON_PREFIX" \
+	DYLD_FALLBACK_LIBRARY_PATH="$$PYTHON_LIB_DIR$${DYLD_FALLBACK_LIBRARY_PATH:+:$$DYLD_FALLBACK_LIBRARY_PATH}" \
+	LD_LIBRARY_PATH="$$PYTHON_LIB_DIR$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}" \
+	LIBRARY_PATH="$$PYTHON_LIB_DIR$${LIBRARY_PATH:+:$$LIBRARY_PATH}" \
+	PYO3_PYTHON="$$PYTHON_BIN" \
+	cargo test --workspace --exclude py-rustvello
 
 .PHONY: test
 test: test-rust test-python ## Run all tests (Rust + Python)
+
+.PHONY: test-docker
+test-docker: ## Run ignored Docker backend compliance suites
+	@cargo test -p rustvello-redis -p rustvello-postgres -p rustvello-mongo -p rustvello-mongo3 -p rustvello-rabbitmq -- --ignored --test-threads=1
+
+.PHONY: test-stress
+test-stress: ## Run fast in-memory contention tests
+	@cargo test -p rustvello --test concurrency_stress_tests
+
+.PHONY: test-soak
+test-soak: ## Run ignored high-volume and SQLite contention tests
+	@cargo test -p rustvello --test concurrency_stress_tests -- --ignored --test-threads=1
+	@cargo test -p rustvello-sqlite --test stress -- --ignored --test-threads=1
 
 .PHONY: fuzz
 fuzz: ## Run fuzz targets for a short duration (CI-friendly, requires nightly)

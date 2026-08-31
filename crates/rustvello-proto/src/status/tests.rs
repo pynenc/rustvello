@@ -75,7 +75,7 @@ fn status_transitions() {
     assert!(Pending.can_transition_to(Running));
     assert!(Pending.can_transition_to(Killed));
     assert!(Pending.can_transition_to(Rerouted));
-    assert!(Pending.can_transition_to(Failed));
+    assert!(!Pending.can_transition_to(Failed));
     assert!(Pending.can_transition_to(PendingRecovery));
 
     assert!(Running.can_transition_to(Paused));
@@ -85,15 +85,8 @@ fn status_transitions() {
     assert!(Running.can_transition_to(Retry));
     assert!(Running.can_transition_to(RunningRecovery));
 
-    assert!(Paused.can_transition_to(Resumed));
+    assert!(Paused.can_transition_to(Running));
     assert!(Paused.can_transition_to(Killed));
-    assert!(!Paused.can_transition_to(Running));
-
-    assert!(Resumed.can_transition_to(Paused));
-    assert!(Resumed.can_transition_to(Killed));
-    assert!(Resumed.can_transition_to(Success));
-    assert!(Resumed.can_transition_to(Failed));
-    assert!(Resumed.can_transition_to(Retry));
 
     assert!(Killed.can_transition_to(Rerouted));
     assert!(!Killed.can_transition_to(Running));
@@ -112,6 +105,14 @@ fn status_transitions() {
 
 #[test]
 fn terminal_states() {
+    assert_eq!(
+        InvocationStatus::final_statuses(),
+        &[
+            InvocationStatus::Success,
+            InvocationStatus::Failed,
+            InvocationStatus::ConcurrencyControlledFinal,
+        ]
+    );
     assert!(InvocationStatus::Success.is_terminal());
     assert!(InvocationStatus::Failed.is_terminal());
     assert!(InvocationStatus::ConcurrencyControlledFinal.is_terminal());
@@ -124,7 +125,6 @@ fn terminal_states() {
     assert!(!InvocationStatus::PendingRecovery.is_terminal());
     assert!(!InvocationStatus::RunningRecovery.is_terminal());
     assert!(!InvocationStatus::Paused.is_terminal());
-    assert!(!InvocationStatus::Resumed.is_terminal());
     assert!(!InvocationStatus::Killed.is_terminal());
 }
 
@@ -256,7 +256,7 @@ fn full_lifecycle_happy_path() {
 }
 
 #[test]
-fn pause_resume_lifecycle() {
+fn pause_running_lifecycle() {
     let runner = RunnerId::from_string("r1");
     let running = InvocationStatusRecord::new(InvocationStatus::Running, Some(runner.clone()));
 
@@ -264,12 +264,16 @@ fn pause_resume_lifecycle() {
         status_record_transition(Some(&running), InvocationStatus::Paused, Some(&runner)).unwrap();
     assert_eq!(paused.status, InvocationStatus::Paused);
 
-    let resumed =
-        status_record_transition(Some(&paused), InvocationStatus::Resumed, Some(&runner)).unwrap();
-    assert_eq!(resumed.status, InvocationStatus::Resumed);
+    let running_again =
+        status_record_transition(Some(&paused), InvocationStatus::Running, Some(&runner)).unwrap();
+    assert_eq!(running_again.status, InvocationStatus::Running);
 
-    let success =
-        status_record_transition(Some(&resumed), InvocationStatus::Success, Some(&runner)).unwrap();
+    let success = status_record_transition(
+        Some(&running_again),
+        InvocationStatus::Success,
+        Some(&runner),
+    )
+    .unwrap();
     assert_eq!(success.status, InvocationStatus::Success);
     assert!(success.runner_id.is_none());
 }
@@ -317,7 +321,6 @@ fn status_display() {
         "RUNNING_RECOVERY"
     );
     assert_eq!(InvocationStatus::Paused.to_string(), "PAUSED");
-    assert_eq!(InvocationStatus::Resumed.to_string(), "RESUMED");
     assert_eq!(InvocationStatus::Killed.to_string(), "KILLED");
 }
 
@@ -328,8 +331,8 @@ fn status_from_str() {
         InvocationStatus::Paused
     );
     assert_eq!(
-        "RESUMED".parse::<InvocationStatus>().unwrap(),
-        InvocationStatus::Resumed
+        "RUNNING".parse::<InvocationStatus>().unwrap(),
+        InvocationStatus::Running
     );
     assert_eq!(
         "KILLED".parse::<InvocationStatus>().unwrap(),
@@ -364,7 +367,7 @@ fn serde_round_trip_status() {
 fn serde_round_trip_new_statuses() {
     for status in [
         InvocationStatus::Paused,
-        InvocationStatus::Resumed,
+        InvocationStatus::Running,
         InvocationStatus::Killed,
     ] {
         let json = serde_json::to_string(&status).unwrap();

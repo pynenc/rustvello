@@ -1,0 +1,47 @@
+name: Backend and Stress Tests
+
+on:
+  schedule:
+    - cron: "30 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  docker-backends:
+    name: Docker suite (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - rustvello-redis
+          - rustvello-postgres
+          - rustvello-mongo
+          - rustvello-mongo3
+          - rustvello-rabbitmq
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run ignored backend compliance tests
+        run: cargo test -p "${{ matrix.package }}" -- --ignored --test-threads=1
+
+  soak:
+    name: Persistent and runner soak tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run high-volume runner tests
+        run: cargo test -p rustvello --test concurrency_stress_tests -- --ignored --test-threads=1
+      - name: Run SQLite contention tests
+        run: cargo test -p rustvello-sqlite --test stress -- --ignored --test-threads=1

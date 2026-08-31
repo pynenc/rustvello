@@ -132,14 +132,51 @@ impl OrchestratorRecovery for PostgresOrchestrator {
 
     async fn record_atomic_service_execution(
         &self,
-        _runner_id: &RunnerId,
-        _start: DateTime<Utc>,
-        _end: DateTime<Utc>,
+        runner_id: &RunnerId,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
     ) -> RustvelloResult<()> {
-        Ok(())
+        let mut client = self.db.conn().await?;
+        let tx = client.transaction().await.map_err(pg_err)?;
+        tx.execute(
+            "INSERT INTO atomic_service_timeline (runner_id, start_time, end_time)
+             VALUES ($1, $2, $3)",
+            &[&runner_id.as_str(), &start, &end],
+        )
+        .await
+        .map_err(pg_err)?;
+        tx.execute(
+            "DELETE FROM atomic_service_timeline
+             WHERE id IN (
+                 SELECT id FROM atomic_service_timeline
+                 ORDER BY start_time DESC, id DESC OFFSET 200
+             )",
+            &[],
+        )
+        .await
+        .map_err(pg_err)?;
+        tx.commit().await.map_err(pg_err)
     }
 
     async fn get_atomic_service_timeline(&self) -> RustvelloResult<Vec<AtomicServiceExecution>> {
-        Ok(Vec::new())
+        let client = self.db.conn().await?;
+        let rows = client
+            .query(
+                "SELECT runner_id, start_time, end_time
+                 FROM atomic_service_timeline
+                 ORDER BY start_time DESC, id DESC
+                 LIMIT 200",
+                &[],
+            )
+            .await
+            .map_err(pg_err)?;
+        Ok(rows
+            .iter()
+            .map(|row| AtomicServiceExecution {
+                runner_id: row.get(0),
+                start: row.get(1),
+                end: row.get(2),
+            })
+            .collect())
     }
 }

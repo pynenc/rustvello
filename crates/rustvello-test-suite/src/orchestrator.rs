@@ -226,6 +226,19 @@ pub async fn test_purge(orch: &dyn Orchestrator) {
     assert_eq!(after, 0);
 }
 
+/// Scheduled invocations are removed once their auto-purge age expires.
+pub async fn test_auto_purge(orch: &dyn Orchestrator) {
+    let task_id = test_task_id("auto_purge_task");
+    let call = make_call(&task_id);
+    let inv_id = orch.register_invocation(&call).await.unwrap();
+
+    orch.schedule_auto_purge(&inv_id).await.unwrap();
+    let purged = orch.run_auto_purge(0).await.unwrap();
+
+    assert!(purged.contains(&inv_id));
+    assert!(orch.get_invocation_status(&inv_id).await.is_err());
+}
+
 // ===========================================================================
 // Negative path tests
 // ===========================================================================
@@ -391,27 +404,34 @@ pub async fn test_cc_key_arguments_subset(orch: &dyn Orchestrator) {
     assert!(allowed, "Different key_argument value should be allowed");
 }
 
-/// Record and retrieve atomic service executions.
-///
-/// Backends that don't override the default no-op trait impls will return an
-/// empty timeline — the test gracefully skips assertions in that case.
+/// Record and retrieve atomic-service executions.
 pub async fn test_atomic_service_timeline(orch: &dyn Orchestrator) {
-    let runner_id = rustvello_proto::identifiers::RunnerId::from_string("atomic-runner");
+    let first_runner = rustvello_proto::identifiers::RunnerId::from_string("atomic-runner-1");
+    let second_runner = rustvello_proto::identifiers::RunnerId::from_string("atomic-runner-2");
     let now = chrono::Utc::now();
-    let start = now - chrono::Duration::seconds(10);
-    let end = now - chrono::Duration::seconds(5);
 
-    orch.record_atomic_service_execution(&runner_id, start, end)
-        .await
-        .unwrap();
+    orch.record_atomic_service_execution(
+        &first_runner,
+        now - chrono::Duration::seconds(20),
+        now - chrono::Duration::seconds(15),
+    )
+    .await
+    .unwrap();
+    orch.record_atomic_service_execution(
+        &second_runner,
+        now - chrono::Duration::seconds(10),
+        now - chrono::Duration::seconds(5),
+    )
+    .await
+    .unwrap();
 
     let timeline = orch.get_atomic_service_timeline().await.unwrap();
-    // Default trait impl returns empty vec; only assert when the backend
-    // actually persists atomic-service executions.
-    if !timeline.is_empty() {
-        assert_eq!(timeline[0].runner_id, "atomic-runner");
-        assert!(timeline[0].duration_secs() > 0.0);
-    }
+    assert_eq!(timeline.len(), 2, "executions must be persisted");
+    assert_eq!(timeline[0].runner_id, "atomic-runner-2");
+    assert_eq!(timeline[1].runner_id, "atomic-runner-1");
+    assert!(timeline
+        .iter()
+        .all(|execution| execution.duration_secs() > 0.0));
 }
 
 /// Stale pending invocations are detected after timeout.
@@ -542,6 +562,12 @@ macro_rules! orchestrator_suite {
         async fn suite_orch_purge() {
             let orch = $setup;
             $crate::orchestrator::test_purge(&orch).await;
+        }
+
+        #[tokio::test]
+        async fn suite_orch_auto_purge() {
+            let orch = $setup;
+            $crate::orchestrator::test_auto_purge(&orch).await;
         }
 
         #[tokio::test]
@@ -681,6 +707,13 @@ macro_rules! async_orchestrator_suite {
         async fn suite_orch_purge() {
             let (_c, orch) = $setup.await;
             $crate::orchestrator::test_purge(&orch).await;
+        }
+
+        #[tokio::test]
+        #[ignore = "requires Docker"]
+        async fn suite_orch_auto_purge() {
+            let (_c, orch) = $setup.await;
+            $crate::orchestrator::test_auto_purge(&orch).await;
         }
 
         #[tokio::test]

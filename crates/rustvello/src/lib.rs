@@ -32,7 +32,7 @@ pub use rustvello_core as core;
 pub use rustvello_proto as proto;
 
 // Re-export the task proc macro so users can write `#[rustvello::task]`
-pub use rustvello_macros::task;
+pub use rustvello_macros::{task, workflow};
 
 /// Internal re-exports used by the `#[rustvello::task]` proc macro.
 /// Not part of the public API.

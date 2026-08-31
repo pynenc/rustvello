@@ -59,7 +59,8 @@ with synthetic invocation data, and assert on HTML/JSON responses. Use
 `KEEP_ALIVE=1` to keep the server running for browser inspection:
 
 ```bash
-KEEP_ALIVE=1 cargo test -p rustvello-monitoring --test monitoring_dashboard -- --nocapture
+KEEP_ALIVE=1 cargo test -p rustvello-monitoring \
+  --test monitoring_dashboard test_hierarchical_timeline -- --nocapture
 ```
 
 ### Prometheus Tests

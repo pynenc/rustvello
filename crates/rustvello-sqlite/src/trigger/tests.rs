@@ -197,6 +197,66 @@ async fn claim_trigger_run_dedup() {
 }
 
 #[tokio::test]
+async fn monitoring_records_round_trip_and_filter() {
+    let store = make_store();
+    let event = EventRecord {
+        event_id: "event-1".into(),
+        event_code: "payment".into(),
+        payload: serde_json::json!({"order_id": 7}),
+        timestamp: Utc::now(),
+        matched_condition_ids: vec![ConditionId::from("condition-1")],
+        valid_condition_ids: vec!["valid-1".into()],
+        triggered_invocation_ids: Vec::new(),
+        emitted_by_invocation_id: Some(rustvello_proto::identifiers::InvocationId::from_string(
+            "source-1",
+        )),
+        emitted_by_task_id: Some(TaskId::new("mod", "source")),
+        emitted_by_runner_id: None,
+    };
+    store.store_event(&event).await.unwrap();
+
+    let events = store
+        .get_events(&EventQuery {
+            event_code: Some("payment".into()),
+            ..EventQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(events, vec![event.clone()]);
+
+    let run = TriggerRunRecord {
+        trigger_run_id: TriggerRunId::from("run-1"),
+        trigger_id: TriggerDefinitionId::from("trigger-1"),
+        task_id: TaskId::new("mod", "target"),
+        logic: TriggerLogic::Or,
+        arguments: serde_json::json!({}),
+        participants: vec![TriggerRunParticipant {
+            context_type: "event".into(),
+            condition_id: ConditionId::from("condition-1"),
+            valid_condition_id: "valid-1".into(),
+            event_id: Some(event.event_id.clone()),
+            source_invocation_id: None,
+            context_summary: "payment".into(),
+        }],
+        claimed_at: Utc::now(),
+        executed_at: None,
+        triggered_invocation_id: None,
+        atomic_service_run_id: None,
+        atomic_service_runner_id: None,
+    };
+    store.store_trigger_run(&run).await.unwrap();
+
+    let runs = store
+        .get_trigger_runs(&TriggerRunQuery {
+            event_id: Some(event.event_id),
+            ..TriggerRunQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(runs, vec![run]);
+}
+
+#[tokio::test]
 async fn purge_clears_all() {
     let store = make_store();
     let cond = TriggerCondition::Event(EventCondition {

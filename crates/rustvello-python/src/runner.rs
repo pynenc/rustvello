@@ -205,6 +205,7 @@ impl PyTaskRunnerBuilder {
     /// On error, the Python exception type name is captured for retry matching.
     #[pyo3(signature = (module, name, func, *,
         concurrency_control = "Unlimited",
+        running_concurrency = None,
         key_arguments = vec![],
         reroute_on_cc = false,
         max_retries = 0,
@@ -214,7 +215,7 @@ impl PyTaskRunnerBuilder {
         disable_cache_args = vec![],
         on_diff_non_key_args_raise = false,
         parallel_batch_size = 100,
-        force_new_workflow = false,
+        is_workflow_task = false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn register_task(
@@ -224,6 +225,7 @@ impl PyTaskRunnerBuilder {
         name: &str,
         func: PyObject,
         concurrency_control: &str,
+        running_concurrency: Option<u32>,
         key_arguments: Vec<String>,
         reroute_on_cc: bool,
         max_retries: u32,
@@ -233,7 +235,7 @@ impl PyTaskRunnerBuilder {
         disable_cache_args: Vec<String>,
         on_diff_non_key_args_raise: bool,
         parallel_batch_size: usize,
-        force_new_workflow: bool,
+        is_workflow_task: bool,
     ) -> PyResult<()> {
         let task_id = TaskId::try_new(module, name)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -269,6 +271,7 @@ impl PyTaskRunnerBuilder {
         let mut config = rustvello_proto::config::TaskConfig::default();
         config.blocking = true;
         config.concurrency_control = parse_cc_type(concurrency_control)?;
+        config.running_concurrency = running_concurrency;
         config.key_arguments = key_arguments;
         config.reroute_on_cc = reroute_on_cc;
         config.max_retries = max_retries;
@@ -278,7 +281,7 @@ impl PyTaskRunnerBuilder {
         config.disable_cache_args = disable_cache_args;
         config.on_diff_non_key_args_raise = on_diff_non_key_args_raise;
         config.parallel_batch_size = parallel_batch_size;
-        config.force_new_workflow = force_new_workflow;
+        config.is_workflow_task = is_workflow_task;
 
         self.task_registry
             .register(TaskDefinition::new(task_id, config, task_fn))

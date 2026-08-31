@@ -52,5 +52,6 @@ pub mod prelude {
         CrossLanguageSafe, DynTask, ForeignTask, Task, TaskDefinition, TaskModule, TaskRegistry,
     };
     pub use crate::trigger::{TriggerManager, TriggerStore};
+    pub use crate::workflow::WorkflowRoot;
     pub use rustvello_proto::prelude::*;
 }

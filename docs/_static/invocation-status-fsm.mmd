@@ -3,7 +3,7 @@
 %%
 %% Colour legend
 %%   Green  (#22863a) — available_for_run  (Registered, Rerouted, Retry)
-%%   Purple (#6f42c1) — execution          (Running, Paused, Resumed)
+%%   Purple (#6f42c1) — execution          (Running, Paused)
 %%   Orange (#e36209) — recovery / kill    (PendingRecovery, RunningRecovery, Killed)
 %%   Blue   (#0366d6) — queued             (Pending, ConcurrencyControlled)
 %%   Red    (#cb2431) — terminal failure   (Failed, ConcurrencyControlledFinal)
@@ -22,7 +22,6 @@ graph TD
 
     Pending -->|run| Running
     Pending -->|crash / OOM| Killed
-    Pending -->|cycle control| Failed
     Pending -->|re-route| Rerouted
     Pending -->|timeout| PR[PendingRecovery]
 
@@ -37,14 +36,8 @@ graph TD
 
     RR -->|re-queue| Rerouted
 
-    Paused -->|continue| Resumed
+    Paused -->|continue| Running
     Paused -->|crash / OOM| Killed
-
-    Resumed -->|complete| Success
-    Resumed -->|error| Failed
-    Resumed -->|crash / OOM| Killed
-    Resumed -->|retry| Retry
-    Resumed -->|suspend| Paused
 
     Killed -->|re-queue| Rerouted
 
@@ -63,7 +56,7 @@ graph TD
     classDef point fill:#586069,color:#fff,stroke:#586069
 
     class Registered,Rerouted,Retry available
-    class Running,Paused,Resumed execution
+    class Running,Paused execution
     class PR,RR,Killed recovery
     class Pending,CC queue
     class Failed,CCFinal termFail

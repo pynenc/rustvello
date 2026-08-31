@@ -23,6 +23,8 @@ Running a persistent worker::
     app.run()  # blocks, processes queued invocations
 """
 
+from __future__ import annotations
+
 import inspect
 import json
 import threading
@@ -158,8 +160,10 @@ class TaskHandle:
     def _dispatch(self, serialized: dict[str, str]) -> Invocation:
         """Route to call_sync or submit depending on the app mode."""
         if self._app._dev_mode_force_sync:
-            raw = self._app._engine.call_sync(self._module, self._name, serialized)
-            value = json.loads(raw) if raw is not None else None
+            deserialized = {key: json.loads(value) for key, value in serialized.items()}
+            result = self._func(**deserialized)
+            raw = json.dumps(result)
+            value = json.loads(raw)
             return Invocation(
                 self._app,
                 InvocationId(),  # synthetic — not stored in the broker
@@ -298,6 +302,9 @@ class App:
             A :class:`TaskHandle` that submits the task when called.
         """
         extra_config = {
+            "max_retries": max_retries,
+            "cache_results": cache_results,
+            "running_concurrency": running_concurrency,
             "concurrency": concurrency,
             "key_arguments": key_arguments or [],
             "blocking": blocking,
@@ -306,6 +313,9 @@ class App:
         }
 
         def decorator(fn: Callable[..., Any]) -> TaskHandle:
+            if inspect.iscoroutinefunction(fn) or inspect.isasyncgenfunction(fn):
+                raise TypeError("Rustvello standalone tasks must be a synchronous callable")
+
             module = fn.__module__
             name = fn.__name__
 
@@ -393,14 +403,15 @@ class App:
                 concurrency_control=extra.get("concurrency", "unlimited"),
                 key_arguments=extra.get("key_arguments", []),
                 reroute_on_cc=extra.get("reroute_on_cc", False),
-                max_retries=0,
+                running_concurrency=extra.get("running_concurrency"),
+                max_retries=extra.get("max_retries", 0),
                 retry_for_errors=[],
                 registration_concurrency="unlimited",
-                cache_results=False,
+                cache_results=extra.get("cache_results", False),
                 disable_cache_args=[],
                 on_diff_non_key_args_raise=False,
                 parallel_batch_size=extra.get("parallel_batch_size", 100),
-                force_new_workflow=False,
+                is_workflow_task=False,
             )
 
         return builder.build()

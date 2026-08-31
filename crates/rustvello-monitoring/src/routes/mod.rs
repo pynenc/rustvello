@@ -4,6 +4,7 @@ pub mod atomic_service;
 pub mod broker;
 pub mod calls;
 pub mod client_data_store;
+pub mod events;
 pub mod family_tree;
 pub mod home;
 pub mod invocations;
@@ -12,6 +13,7 @@ pub mod orchestrator;
 pub mod runners;
 pub mod state_backend;
 pub mod tasks;
+pub mod trigger_runs;
 pub mod workflows;
 
 use axum::Router;
@@ -32,5 +34,7 @@ pub fn router() -> Router<AppState> {
         .nest("/invocations", invocations::router())
         .nest("/calls", calls::router())
         .nest("/workflows", workflows::router())
+        .nest("/events", events::router())
+        .nest("/trigger-runs", trigger_runs::router())
         .nest("/log-explorer", log_explorer::router())
 }

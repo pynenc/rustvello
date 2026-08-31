@@ -336,7 +336,6 @@ async fn full_typed_lifecycle_greet() {
     registration_concurrency = "argument",
     key_arguments = ["order_id"],
     cache_results = true,
-    force_new_workflow = true,
     reroute_on_cc = true,
     max_retries = 5,
 )]
@@ -361,7 +360,7 @@ fn macro_all_config_attributes() {
     );
     assert_eq!(config.key_arguments, vec!["order_id"]);
     assert!(config.cache_results);
-    assert!(config.force_new_workflow);
+    assert!(!config.is_workflow_task);
     assert!(config.reroute_on_cc);
 }
 
@@ -374,7 +373,7 @@ fn macro_concurrency_none() {
     assert_eq!(config.max_retries, 0);
     assert!(!config.cache_results);
     assert!(config.key_arguments.is_empty());
-    assert!(!config.force_new_workflow);
+    assert!(!config.is_workflow_task);
     assert!(!config.reroute_on_cc);
 }
 
@@ -388,6 +387,56 @@ fn macro_fully_configured_run() {
         })
         .unwrap();
     assert_eq!(result, "ORD-1:payload");
+}
+
+#[rustvello::task(concurrency = "task", registration_concurrency = "unlimited")]
+fn registration_unlimited(value: i32) -> i32 {
+    value
+}
+
+#[rustvello::task(concurrency = "task", registration_concurrency = "argument")]
+fn registration_by_argument(value: i32) -> i32 {
+    value
+}
+
+#[tokio::test]
+async fn registration_and_running_concurrency_are_independent() {
+    let mut app = RustvelloApp::new(AppConfig::new("independent-cc"));
+    let unlimited = RegistrationUnlimitedTask::new();
+    let by_argument = RegistrationByArgumentTask::new();
+    let unlimited_id = Task::task_id(&unlimited).clone();
+    let by_argument_id = Task::task_id(&by_argument).clone();
+    app.register(unlimited).unwrap();
+    app.register(by_argument).unwrap();
+
+    let mut args = SerializedArguments::new();
+    args.insert("value", "1");
+
+    let first = app
+        .submit_with_cc(&unlimited_id, args.clone(), Some(&args))
+        .await
+        .unwrap();
+    let second = app
+        .submit_with_cc(&unlimited_id, args.clone(), Some(&args))
+        .await
+        .unwrap();
+    assert_ne!(
+        first, second,
+        "running mode must not enable registration dedup"
+    );
+
+    let first = app
+        .submit_with_cc(&by_argument_id, args.clone(), Some(&args))
+        .await
+        .unwrap();
+    let second = app
+        .submit_with_cc(&by_argument_id, args.clone(), Some(&args))
+        .await
+        .unwrap();
+    assert_eq!(
+        first, second,
+        "registration mode must deduplicate matching calls"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1086,12 +1135,22 @@ async fn cds_sqlite_round_trip() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 5: Workflow assignment and context injection tests
+// Explicit workflow assignment and context injection tests
 // ---------------------------------------------------------------------------
 
-/// Verify that submit_call() creates a root workflow for top-level calls.
+#[rustvello::workflow]
+fn order_workflow(order_id: String) -> String {
+    order_id
+}
+
+#[rustvello::workflow(blocking = false)]
+fn child_workflow(name: String) -> String {
+    name
+}
+
+/// Ordinary top-level calls do not implicitly become workflow roots.
 #[tokio::test]
-async fn workflow_root_created_on_top_level_submit() {
+async fn ordinary_top_level_submit_has_no_workflow() {
     let mut app = RustvelloApp::new(AppConfig::new("test-wf"));
     app.register(AddTask::new()).unwrap();
 
@@ -1101,22 +1160,14 @@ async fn workflow_root_created_on_top_level_submit() {
         .unwrap();
     let inv_id = handle.invocation_id().clone();
 
-    // The invocation should have a workflow
     let inv_dto = app.state_backend().get_invocation(&inv_id).await.unwrap();
-    assert!(inv_dto.workflow.is_some());
-    let wf = inv_dto.workflow.unwrap();
-    // Root workflow: workflow_id == invocation_id, depth == 0, no parent
-    assert_eq!(wf.workflow_id, inv_id);
-    assert_eq!(wf.depth, 0);
-    assert!(wf.parent_id.is_none());
-    assert_eq!(wf.workflow_type, Task::task_id(&AddTask::new()).clone());
-    // No parent invocation for top-level
+    assert!(inv_dto.workflow.is_none());
     assert!(inv_dto.parent_invocation_id.is_none());
 }
 
-/// Verify that submit (untyped) also creates a root workflow.
+/// Untyped submission follows the same non-workflow default.
 #[tokio::test]
-async fn workflow_root_created_on_untyped_submit() {
+async fn ordinary_untyped_submit_has_no_workflow() {
     let mut app = RustvelloApp::new(AppConfig::new("test-wf-untyped"));
     app.register(AddTask::new()).unwrap();
 
@@ -1129,11 +1180,54 @@ async fn workflow_root_created_on_untyped_submit() {
         .unwrap();
 
     let inv_dto = app.state_backend().get_invocation(&inv_id).await.unwrap();
-    assert!(inv_dto.workflow.is_some());
-    let wf = inv_dto.workflow.unwrap();
-    assert_eq!(wf.workflow_id, inv_id);
-    assert_eq!(wf.depth, 0);
-    assert!(wf.parent_id.is_none());
+    assert!(inv_dto.workflow.is_none());
+}
+
+/// The workflow macro marks a task as a blocking, workflow-defining task.
+#[test]
+fn workflow_macro_sets_root_contract() {
+    let task = ChildWorkflowTask::new();
+    let config = Task::config(&task);
+    assert!(config.is_workflow_task);
+    assert!(
+        config.blocking,
+        "workflow tasks must run on the blocking path"
+    );
+}
+
+/// An explicit workflow task creates and persists a root identity.
+#[tokio::test]
+async fn explicit_workflow_creates_root() {
+    let mut app = RustvelloApp::new(AppConfig::new("test-explicit-wf"));
+    app.register(OrderWorkflowTask::new()).unwrap();
+
+    let handle = app
+        .submit_call(
+            &OrderWorkflowTask::new(),
+            OrderWorkflowParams {
+                order_id: "ORD-1".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let inv_id = handle.invocation_id().clone();
+    let inv_dto = app.state_backend().get_invocation(&inv_id).await.unwrap();
+    let workflow = inv_dto.workflow.unwrap();
+
+    assert_eq!(workflow.workflow_id, inv_id);
+    assert_eq!(
+        workflow.workflow_type,
+        Task::task_id(&OrderWorkflowTask::new()).clone()
+    );
+    assert_eq!(workflow.depth, 0);
+    assert!(workflow.parent_id.is_none());
+
+    let runs = app
+        .state_backend()
+        .get_workflow_runs(Task::task_id(&OrderWorkflowTask::new()))
+        .await
+        .unwrap();
+    assert_eq!(runs.len(), 1);
 }
 
 /// Verify that the runner sets InvocationContext during task execution.
@@ -1171,20 +1265,22 @@ async fn runner_sets_invocation_context() {
 #[tokio::test]
 async fn workflow_members_queryable() {
     let mut app = RustvelloApp::new(AppConfig::new("test-wf-query"));
-    app.register(AddTask::new()).unwrap();
-    app.register(GreetTask::new()).unwrap();
+    app.register(OrderWorkflowTask::new()).unwrap();
+    app.register(ChildWorkflowTask::new()).unwrap();
 
-    // Submit two tasks — they should each get their own root workflow
     let h1 = app
-        .submit_call(&AddTask::new(), AddParams { x: 1, y: 2 })
+        .submit_call(
+            &OrderWorkflowTask::new(),
+            OrderWorkflowParams {
+                order_id: "one".into(),
+            },
+        )
         .await
         .unwrap();
     let h2 = app
         .submit_call(
-            &GreetTask::new(),
-            GreetParams {
-                name: "Alice".into(),
-            },
+            &ChildWorkflowTask::new(),
+            ChildWorkflowParams { name: "two".into() },
         )
         .await
         .unwrap();
@@ -1192,7 +1288,6 @@ async fn workflow_members_queryable() {
     let inv1 = h1.invocation_id().clone();
     let inv2 = h2.invocation_id().clone();
 
-    // Each workflow should have exactly one member
     let wf1_members = app
         .state_backend()
         .get_workflow_invocations(&inv1)
@@ -1222,9 +1317,15 @@ async fn workflow_child_inherits_parent_workflow() {
     let mut app = RustvelloApp::new(AppConfig::new("test-wf-inherit"));
     app.register(AddTask::new()).unwrap();
 
-    // Submit a top-level parent task (creates root workflow)
+    app.register(OrderWorkflowTask::new()).unwrap();
+
     let parent_handle = app
-        .submit_call(&AddTask::new(), AddParams { x: 1, y: 2 })
+        .submit_call(
+            &OrderWorkflowTask::new(),
+            OrderWorkflowParams {
+                order_id: "parent".into(),
+            },
+        )
         .await
         .unwrap();
     let parent_inv_id = parent_handle.invocation_id().clone();
@@ -1239,8 +1340,10 @@ async fn workflow_child_inherits_parent_workflow() {
     // (this is what the runner does when it processes the parent)
     let parent_ctx = InvocationContext {
         invocation_id: parent_inv_id.clone(),
-        task_id: Task::task_id(&AddTask::new()).clone(),
-        workflow: parent_wf.clone(),
+        task_id: Task::task_id(&OrderWorkflowTask::new()).clone(),
+        workflow: Some(parent_wf.clone()),
+        is_workflow_defining: true,
+        state_backend: Some(app.state_backend()),
         parent_invocation_id: None,
         num_retries: 0,
     };
@@ -1282,10 +1385,15 @@ async fn workflow_chain_shares_identity() {
 
     let mut app = RustvelloApp::new(AppConfig::new("test-wf-chain"));
     app.register(AddTask::new()).unwrap();
+    app.register(OrderWorkflowTask::new()).unwrap();
 
-    // Level 0: root task
     let h0 = app
-        .submit_call(&AddTask::new(), AddParams { x: 0, y: 0 })
+        .submit_call(
+            &OrderWorkflowTask::new(),
+            OrderWorkflowParams {
+                order_id: "root".into(),
+            },
+        )
         .await
         .unwrap();
     let inv0 = h0.invocation_id().clone();
@@ -1295,8 +1403,10 @@ async fn workflow_chain_shares_identity() {
     // Level 1: child of root
     let ctx0 = InvocationContext {
         invocation_id: inv0.clone(),
-        task_id: Task::task_id(&AddTask::new()).clone(),
-        workflow: wf0.clone(),
+        task_id: Task::task_id(&OrderWorkflowTask::new()).clone(),
+        workflow: Some(wf0.clone()),
+        is_workflow_defining: true,
+        state_backend: Some(app.state_backend()),
         parent_invocation_id: None,
         num_retries: 0,
     };
@@ -1319,7 +1429,9 @@ async fn workflow_chain_shares_identity() {
     let ctx1 = InvocationContext {
         invocation_id: inv1.clone(),
         task_id: Task::task_id(&AddTask::new()).clone(),
-        workflow: wf1.clone(),
+        workflow: Some(wf1.clone()),
+        is_workflow_defining: false,
+        state_backend: Some(app.state_backend()),
         parent_invocation_id: Some(inv0.clone()),
         num_retries: 0,
     };
@@ -1355,18 +1467,23 @@ async fn workflow_chain_shares_identity() {
     assert_eq!(dto2.parent_invocation_id, Some(inv1));
 }
 
-/// Verify that `force_new_workflow = true` creates a sub-workflow.
+/// An explicit workflow submitted by a workflow creates a sub-workflow.
 #[tokio::test]
-async fn workflow_force_new_creates_sub_workflow() {
+async fn explicit_child_workflow_creates_sub_workflow() {
     use rustvello_core::context::{InvocationContext, INVOCATION_CTX};
 
     let mut app = RustvelloApp::new(AppConfig::new("test-wf-sub"));
-    app.register(AddTask::new()).unwrap();
-    app.register(GreetTask::new()).unwrap();
+    app.register(OrderWorkflowTask::new()).unwrap();
+    app.register(ChildWorkflowTask::new()).unwrap();
 
     // Submit parent task (root workflow)
     let parent_handle = app
-        .submit_call(&AddTask::new(), AddParams { x: 1, y: 1 })
+        .submit_call(
+            &OrderWorkflowTask::new(),
+            OrderWorkflowParams {
+                order_id: "parent".into(),
+            },
+        )
         .await
         .unwrap();
     let parent_inv_id = parent_handle.invocation_id().clone();
@@ -1380,29 +1497,19 @@ async fn workflow_force_new_creates_sub_workflow() {
     // Simulate parent context
     let parent_ctx = InvocationContext {
         invocation_id: parent_inv_id.clone(),
-        task_id: Task::task_id(&AddTask::new()).clone(),
-        workflow: parent_wf.clone(),
+        task_id: Task::task_id(&OrderWorkflowTask::new()).clone(),
+        workflow: Some(parent_wf.clone()),
+        is_workflow_defining: true,
+        state_backend: Some(app.state_backend()),
         parent_invocation_id: None,
         num_retries: 0,
     };
-
-    // Submit a child with force_new_workflow via config override
-    use rustvello::task_config::TaskConfigOverride;
-    let mut overrides = std::collections::HashMap::new();
-    overrides.insert(
-        Task::task_id(&GreetTask::new()).name().to_string(),
-        TaskConfigOverride {
-            force_new_workflow: Some(true),
-            ..Default::default()
-        },
-    );
-    app.set_task_config_overrides(overrides, TaskConfigOverride::default());
 
     let child_inv_id = INVOCATION_CTX
         .scope(parent_ctx, async {
             let mut args = SerializedArguments::new();
             args.insert("name", "Alice");
-            app.submit(&Task::task_id(&GreetTask::new()).clone(), args)
+            app.submit(&Task::task_id(&ChildWorkflowTask::new()).clone(), args)
                 .await
                 .unwrap()
         })
@@ -1420,7 +1527,7 @@ async fn workflow_force_new_creates_sub_workflow() {
     // Sub-workflow type == the new task's type
     assert_eq!(
         child_wf.workflow_type,
-        Task::task_id(&GreetTask::new()).clone()
+        Task::task_id(&ChildWorkflowTask::new()).clone()
     );
     // parent_id points back to the parent workflow
     assert_eq!(child_wf.parent_id, Some(parent_wf.workflow_id));

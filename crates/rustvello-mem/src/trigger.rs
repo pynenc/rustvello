@@ -10,8 +10,8 @@ use rustvello_core::error::RustvelloResult;
 use rustvello_core::trigger::TriggerStore;
 use rustvello_proto::identifiers::TaskId;
 use rustvello_proto::trigger::{
-    ConditionId, TriggerCondition, TriggerDefinitionDTO, TriggerDefinitionId, TriggerRunId,
-    ValidCondition,
+    ConditionId, EventQuery, EventRecord, TriggerCondition, TriggerDefinitionDTO,
+    TriggerDefinitionId, TriggerRunId, TriggerRunQuery, TriggerRunRecord, ValidCondition,
 };
 
 struct TriggerState {
@@ -28,6 +28,8 @@ struct TriggerState {
     valid_conditions: HashMap<String, ValidCondition>,
     cron_executions: HashMap<String, DateTime<Utc>>,
     trigger_run_claims: HashMap<String, DateTime<Utc>>,
+    events: HashMap<String, EventRecord>,
+    trigger_runs: HashMap<String, TriggerRunRecord>,
 }
 
 /// In-memory trigger store for testing and development.
@@ -48,6 +50,8 @@ impl MemTriggerStore {
                 valid_conditions: HashMap::new(),
                 cron_executions: HashMap::new(),
                 trigger_run_claims: HashMap::new(),
+                events: HashMap::new(),
+                trigger_runs: HashMap::new(),
             }),
         }
     }
@@ -289,6 +293,100 @@ impl TriggerStore for MemTriggerStore {
         }
     }
 
+    async fn store_event(&self, event: &EventRecord) -> RustvelloResult<()> {
+        self.state
+            .lock()
+            .await
+            .events
+            .insert(event.event_id.clone(), event.clone());
+        Ok(())
+    }
+
+    async fn get_event(&self, event_id: &str) -> RustvelloResult<Option<EventRecord>> {
+        Ok(self.state.lock().await.events.get(event_id).cloned())
+    }
+
+    async fn get_events(&self, query: &EventQuery) -> RustvelloResult<Vec<EventRecord>> {
+        let state = self.state.lock().await;
+        let mut events: Vec<EventRecord> = state
+            .events
+            .values()
+            .filter(|event| {
+                query
+                    .event_code
+                    .as_ref()
+                    .is_none_or(|code| &event.event_code == code)
+                    && query
+                        .emitted_by_invocation_id
+                        .as_ref()
+                        .is_none_or(|id| event.emitted_by_invocation_id.as_ref() == Some(id))
+                    && query.start.is_none_or(|start| event.timestamp >= start)
+                    && query.end.is_none_or(|end| event.timestamp <= end)
+            })
+            .cloned()
+            .collect();
+        events.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+        if let Some(limit) = query.limit {
+            events.truncate(limit);
+        }
+        Ok(events)
+    }
+
+    async fn store_trigger_run(&self, run: &TriggerRunRecord) -> RustvelloResult<()> {
+        self.state
+            .lock()
+            .await
+            .trigger_runs
+            .insert(run.trigger_run_id.to_string(), run.clone());
+        Ok(())
+    }
+
+    async fn get_trigger_run(
+        &self,
+        run_id: &TriggerRunId,
+    ) -> RustvelloResult<Option<TriggerRunRecord>> {
+        Ok(self
+            .state
+            .lock()
+            .await
+            .trigger_runs
+            .get(run_id.as_str())
+            .cloned())
+    }
+
+    async fn get_trigger_runs(
+        &self,
+        query: &TriggerRunQuery,
+    ) -> RustvelloResult<Vec<TriggerRunRecord>> {
+        let state = self.state.lock().await;
+        let mut runs: Vec<TriggerRunRecord> = state
+            .trigger_runs
+            .values()
+            .filter(|run| {
+                query
+                    .event_id
+                    .as_deref()
+                    .is_none_or(|id| run.event_ids().contains(&id))
+                    && query
+                        .source_invocation_id
+                        .as_ref()
+                        .is_none_or(|id| run.source_invocation_ids().contains(&id))
+                    && query
+                        .triggered_invocation_id
+                        .as_ref()
+                        .is_none_or(|id| run.triggered_invocation_id.as_ref() == Some(id))
+                    && query.start.is_none_or(|start| run.claimed_at >= start)
+                    && query.end.is_none_or(|end| run.claimed_at <= end)
+            })
+            .cloned()
+            .collect();
+        runs.sort_by(|left, right| right.claimed_at.cmp(&left.claimed_at));
+        if let Some(limit) = query.limit {
+            runs.truncate(limit);
+        }
+        Ok(runs)
+    }
+
     async fn purge(&self) -> RustvelloResult<()> {
         let mut state = self.state.lock().await;
         state.conditions.clear();
@@ -300,6 +398,8 @@ impl TriggerStore for MemTriggerStore {
         state.valid_conditions.clear();
         state.cron_executions.clear();
         state.trigger_run_claims.clear();
+        state.events.clear();
+        state.trigger_runs.clear();
         Ok(())
     }
 

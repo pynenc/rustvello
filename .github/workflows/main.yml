@@ -8,6 +8,24 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
+  python-compatibility:
+    name: Read supported Python versions
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.versions.outputs.versions }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read package metadata
+        id: versions
+        run: echo "versions=$(python scripts/python_compatibility.py --format json)" >> "$GITHUB_OUTPUT"
+
   quality:
     name: Code quality (lint, format, clippy)
     runs-on: ubuntu-latest
@@ -48,10 +66,11 @@ jobs:
   tests-and-type-check:
     name: Tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    needs: python-compatibility
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.12", "3.13"]
+        python-version: ${{ fromJSON(needs.python-compatibility.outputs.versions) }}
         rust-version: ["stable"]
       fail-fast: false
     steps:

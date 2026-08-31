@@ -81,7 +81,7 @@ impl Broker for MongoBroker {
         let col = db.collection::<mongodb::bson::Document>(COLLECTION);
         let filter = match task_id {
             Some(tid) => doc! { "task_id": tid.to_string() },
-            None => doc! { "task_id": mongodb::bson::Bson::Null },
+            None => doc! {},
         };
         let result = col
             .find_one_and_delete(filter)
@@ -104,7 +104,7 @@ impl Broker for MongoBroker {
         let col = db.collection::<mongodb::bson::Document>(COLLECTION);
         let filter = match task_id {
             Some(tid) => doc! { "task_id": tid.to_string() },
-            None => doc! { "task_id": mongodb::bson::Bson::Null },
+            None => doc! {},
         };
         let count = col.count_documents(filter).await.map_err(mongo_err)?;
         Ok(usize::try_from(count).unwrap_or(usize::MAX))
@@ -127,13 +127,25 @@ impl Broker for MongoBroker {
     ) -> RustvelloResult<Option<InvocationId>> {
         let db = self.pool.db().await?;
         let col = db.collection::<mongodb::bson::Document>(COLLECTION);
-        let prefix = format!("^{language}::");
-        let filter = doc! { "task_id": { "$regex": &prefix } };
-        let result = col
-            .find_one_and_delete(filter)
+        let global = col
+            .find_one_and_delete(doc! { "task_id": mongodb::bson::Bson::Null })
             .sort(doc! { "_id": 1 })
             .await
             .map_err(mongo_err)?;
+        let filter = if language.is_empty() {
+            doc! { "task_id": { "$regex": "^[^:]+\\." } }
+        } else {
+            let prefix = format!("^{language}::");
+            doc! { "task_id": { "$regex": &prefix } }
+        };
+        let result = match global {
+            Some(document) => Some(document),
+            None => col
+                .find_one_and_delete(filter)
+                .sort(doc! { "_id": 1 })
+                .await
+                .map_err(mongo_err)?,
+        };
         match result {
             Some(d) => {
                 let inv_str = d.get_str("invocation_id").map_err(|e| {

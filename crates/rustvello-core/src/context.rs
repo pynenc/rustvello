@@ -26,6 +26,8 @@ use rustvello_proto::identifiers::{InvocationId, RunnerId, TaskId};
 use rustvello_proto::invocation::WorkflowIdentity;
 use serde::{Deserialize, Serialize};
 
+use crate::state_backend::StateBackend;
+
 /// Get a numeric thread identifier. Uses `ThreadId`'s debug representation
 /// since `as_u64()` is nightly-only (`thread_id_value` feature).
 /// If the `Debug` format changes in future Rust releases, falls back to 0.
@@ -51,18 +53,35 @@ fn current_thread_id() -> u64 {
 /// Stored in a `tokio::task_local!` variable so any code running inside the
 /// task's future can retrieve it without passing references through the
 /// call stack.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InvocationContext {
     /// The invocation being executed.
     pub invocation_id: InvocationId,
     /// The task that is being executed.
     pub task_id: TaskId,
-    /// The workflow this invocation belongs to.
-    pub workflow: WorkflowIdentity,
+    /// The workflow this invocation belongs to, if any.
+    pub workflow: Option<WorkflowIdentity>,
+    /// Whether this invocation defines the workflow identity.
+    pub is_workflow_defining: bool,
+    /// Persistence used by root-scoped deterministic workflow operations.
+    pub state_backend: Option<Arc<dyn StateBackend>>,
     /// The parent invocation that spawned this one (None for top-level).
     pub parent_invocation_id: Option<InvocationId>,
     /// The current retry attempt number (0 for first attempt).
     pub num_retries: u32,
+}
+
+impl std::fmt::Debug for InvocationContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InvocationContext")
+            .field("invocation_id", &self.invocation_id)
+            .field("task_id", &self.task_id)
+            .field("workflow", &self.workflow)
+            .field("is_workflow_defining", &self.is_workflow_defining)
+            .field("parent_invocation_id", &self.parent_invocation_id)
+            .field("num_retries", &self.num_retries)
+            .finish_non_exhaustive()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -331,7 +350,9 @@ mod tests {
         InvocationContext {
             invocation_id: inv_id.clone(),
             task_id: task_id.clone(),
-            workflow: WorkflowIdentity::root(inv_id, task_id),
+            workflow: Some(WorkflowIdentity::root(inv_id, task_id)),
+            is_workflow_defining: true,
+            state_backend: None,
             parent_invocation_id: None,
             num_retries: 0,
         }
@@ -383,6 +404,8 @@ mod tests {
             invocation_id: InvocationId::from_string("inv-inner"),
             task_id: TaskId::new("mod", "inner_task"),
             workflow: outer.workflow.clone(),
+            is_workflow_defining: false,
+            state_backend: outer.state_backend.clone(),
             parent_invocation_id: Some(outer.invocation_id.clone()),
             num_retries: 0,
         };

@@ -277,6 +277,9 @@ impl OrchestratorStatus for PostgresOrchestrator {
         tx.execute("DELETE FROM runner_heartbeats", &[])
             .await
             .map_err(pg_err)?;
+        tx.execute("DELETE FROM auto_purge_schedule", &[])
+            .await
+            .map_err(pg_err)?;
         tx.execute("DELETE FROM status_records", &[])
             .await
             .map_err(pg_err)?;
@@ -287,17 +290,50 @@ impl OrchestratorStatus for PostgresOrchestrator {
         Ok(())
     }
 
-    async fn schedule_auto_purge(&self, _invocation_id: &InvocationId) -> RustvelloResult<()> {
-        Err(RustvelloError::NotSupported {
-            backend: "Postgres".into(),
-            method: "schedule_auto_purge".into(),
-        })
+    async fn schedule_auto_purge(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
+        let client = self.db.conn().await?;
+        client
+            .execute(
+                "INSERT INTO auto_purge_schedule (invocation_id, scheduled_at)
+                 VALUES ($1, $2)
+                 ON CONFLICT (invocation_id) DO UPDATE SET scheduled_at = $2",
+                &[&invocation_id.as_str(), &Utc::now()],
+            )
+            .await
+            .map_err(pg_err)?;
+        Ok(())
     }
 
-    async fn run_auto_purge(&self, _max_age_secs: u64) -> RustvelloResult<Vec<InvocationId>> {
-        Err(RustvelloError::NotSupported {
-            backend: "Postgres".into(),
-            method: "run_auto_purge".into(),
-        })
+    async fn run_auto_purge(&self, max_age_secs: u64) -> RustvelloResult<Vec<InvocationId>> {
+        let threshold =
+            Utc::now() - chrono::Duration::seconds(i64::try_from(max_age_secs).unwrap_or(i64::MAX));
+        let mut client = self.db.conn().await?;
+        let tx = client.transaction().await.map_err(pg_err)?;
+        let rows = tx
+            .query(
+                "SELECT invocation_id FROM auto_purge_schedule WHERE scheduled_at <= $1",
+                &[&threshold],
+            )
+            .await
+            .map_err(pg_err)?;
+        let expired: Vec<InvocationId> = rows
+            .iter()
+            .map(|row| InvocationId::from_string(row.get::<_, String>(0)))
+            .collect();
+        tx.execute(
+            "DELETE FROM auto_purge_schedule WHERE scheduled_at <= $1",
+            &[&threshold],
+        )
+        .await
+        .map_err(pg_err)?;
+        tx.commit().await.map_err(pg_err)?;
+
+        let mut purged = Vec::new();
+        for invocation_id in expired {
+            if self.remove_invocation(&invocation_id).await.is_ok() {
+                purged.push(invocation_id);
+            }
+        }
+        Ok(purged)
     }
 }

@@ -223,11 +223,13 @@ impl OrchestratorCoordinator {
         let _ = tm.evaluate_cron_conditions().await?;
 
         // 2. Evaluate all pending valid conditions → determine triggers to fire
-        let to_invoke = tm.evaluate_triggers().await?;
+        let to_invoke = tm.evaluate_trigger_runs().await?;
 
         // 3. For each fired trigger: create invocation + route
         let mut created_ids = Vec::new();
-        for (trigger_def, args_value) in &to_invoke {
+        for execution in &to_invoke {
+            let trigger_def = &execution.trigger;
+            let args_value = &execution.arguments;
             // Convert JSON argument_template → SerializedArguments
             let args = json_value_to_serialized_args(args_value);
             let call_dto = CallDTO::new(trigger_def.task_id.clone(), args);
@@ -256,6 +258,10 @@ impl OrchestratorCoordinator {
             }
 
             self.broker.route_invocation(&inv_id).await?;
+
+            if let Err(error) = tm.complete_trigger_run(&execution.run_id, &inv_id).await {
+                tracing::debug!(%error, trigger_run_id = %execution.run_id, "trigger-run completion unavailable");
+            }
 
             created_ids.push(inv_id);
         }

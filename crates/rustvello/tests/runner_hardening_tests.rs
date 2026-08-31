@@ -3,6 +3,7 @@
 //! Exercises graceful shutdown, multi-runner concurrency, and recovery
 //! under real-world conditions.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,6 +23,15 @@ fn runner_add(x: i32, y: i32) -> i32 {
 fn slow_task(ms: u64) -> String {
     std::thread::sleep(Duration::from_millis(ms));
     "done".to_string()
+}
+
+static ACTIVE_TASK_STARTED: AtomicBool = AtomicBool::new(false);
+
+#[rustvello::task]
+fn shutdown_active_task() -> String {
+    ACTIVE_TASK_STARTED.store(true, Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(100));
+    "completed".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +124,37 @@ async fn graceful_shutdown_processes_pending_work() {
 
     let result: i32 = handle.result().await.unwrap();
     assert_eq!(result, 30);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn graceful_shutdown_drains_an_active_invocation() {
+    ACTIVE_TASK_STARTED.store(false, Ordering::SeqCst);
+    let mut app = RustvelloApp::new(AppConfig::new("shutdown-active"));
+    app.register(ShutdownActiveTaskTask::new()).unwrap();
+    let handle = app
+        .submit_call(&ShutdownActiveTaskTask::new(), ())
+        .await
+        .unwrap();
+
+    let runner = make_runner(
+        "shutdown-active",
+        &app,
+        make_registry(ShutdownActiveTaskTask::new()),
+    )
+    .with_num_workers(1);
+
+    runner
+        .with_graceful_shutdown(async {
+            while !ACTIVE_TASK_STARTED.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(handle.status().await.unwrap(), InvocationStatus::Success);
+    let result: String = handle.result().await.unwrap();
+    assert_eq!(result, "completed");
 }
 
 // ===========================================================================

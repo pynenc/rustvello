@@ -8,8 +8,8 @@ use rustvello_core::error::{RustvelloError, RustvelloResult};
 use rustvello_core::trigger::TriggerStore;
 use rustvello_proto::identifiers::TaskId;
 use rustvello_proto::trigger::{
-    ConditionContext, ConditionId, TriggerCondition, TriggerDefinitionDTO, TriggerDefinitionId,
-    TriggerRunId, ValidCondition,
+    ConditionContext, ConditionId, EventQuery, EventRecord, TriggerCondition, TriggerDefinitionDTO,
+    TriggerDefinitionId, TriggerRunId, TriggerRunQuery, TriggerRunRecord, ValidCondition,
 };
 
 use crate::db::{blocking, lock_err, sql_err};
@@ -583,12 +583,240 @@ impl TriggerStore for SqliteTriggerStore {
         .await
     }
 
+    async fn store_event(&self, event: &EventRecord) -> RustvelloResult<()> {
+        let db = Arc::clone(&self.db);
+        let event = event.clone();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let json =
+                serde_json::to_string(&event).map_err(|error| RustvelloError::Serialization {
+                    message: error.to_string(),
+                })?;
+            conn.execute(
+                "INSERT OR REPLACE INTO trg_events
+                 (event_id, event_code, event_timestamp, emitted_by_invocation_id, event_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    event.event_id,
+                    event.event_code,
+                    event.timestamp.to_rfc3339(),
+                    event
+                        .emitted_by_invocation_id
+                        .as_ref()
+                        .map(ToString::to_string),
+                    json,
+                ],
+            )
+            .map_err(sql_err)?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn get_event(&self, event_id: &str) -> RustvelloResult<Option<EventRecord>> {
+        let db = Arc::clone(&self.db);
+        let event_id = event_id.to_owned();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let json: Option<String> = conn
+                .query_row(
+                    "SELECT event_json FROM trg_events WHERE event_id = ?1",
+                    rusqlite::params![event_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sql_err)?;
+            json.map(|value| {
+                serde_json::from_str(&value).map_err(|error| RustvelloError::Serialization {
+                    message: error.to_string(),
+                })
+            })
+            .transpose()
+        })
+        .await
+    }
+
+    async fn get_events(&self, query: &EventQuery) -> RustvelloResult<Vec<EventRecord>> {
+        let db = Arc::clone(&self.db);
+        let query = query.clone();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT event_json FROM trg_events
+                     WHERE (?1 IS NULL OR event_code = ?1)
+                       AND (?2 IS NULL OR emitted_by_invocation_id = ?2)
+                       AND (?3 IS NULL OR event_timestamp >= ?3)
+                       AND (?4 IS NULL OR event_timestamp <= ?4)
+                     ORDER BY event_timestamp DESC LIMIT ?5",
+                )
+                .map_err(sql_err)?;
+            let emitter = query
+                .emitted_by_invocation_id
+                .as_ref()
+                .map(ToString::to_string);
+            let start = query.start.map(|value| value.to_rfc3339());
+            let end = query.end.map(|value| value.to_rfc3339());
+            let limit = i64::try_from(query.limit.unwrap_or(1000)).unwrap_or(i64::MAX);
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![query.event_code, emitter, start, end, limit],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(sql_err)?;
+            rows.map(|row| {
+                let json = row.map_err(sql_err)?;
+                serde_json::from_str(&json).map_err(|error| RustvelloError::Serialization {
+                    message: error.to_string(),
+                })
+            })
+            .collect()
+        })
+        .await
+    }
+
+    async fn store_trigger_run(&self, run: &TriggerRunRecord) -> RustvelloResult<()> {
+        let db = Arc::clone(&self.db);
+        let run = run.clone();
+        blocking(move || {
+            let mut conn = db.conn.lock().map_err(lock_err)?;
+            let transaction = conn.transaction().map_err(sql_err)?;
+            let json = serde_json::to_string(&run).map_err(|error| {
+                RustvelloError::Serialization {
+                    message: error.to_string(),
+                }
+            })?;
+            transaction
+                .execute(
+                    "INSERT OR REPLACE INTO trg_trigger_runs
+                     (trigger_run_id, claimed_at, triggered_invocation_id, run_json)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        run.trigger_run_id.as_str(),
+                        run.claimed_at.to_rfc3339(),
+                        run.triggered_invocation_id.as_ref().map(ToString::to_string),
+                        json,
+                    ],
+                )
+                .map_err(sql_err)?;
+            transaction
+                .execute(
+                    "DELETE FROM trg_trigger_run_events WHERE trigger_run_id = ?1",
+                    rusqlite::params![run.trigger_run_id.as_str()],
+                )
+                .map_err(sql_err)?;
+            transaction
+                .execute(
+                    "DELETE FROM trg_trigger_run_sources WHERE trigger_run_id = ?1",
+                    rusqlite::params![run.trigger_run_id.as_str()],
+                )
+                .map_err(sql_err)?;
+            for event_id in run.event_ids() {
+                transaction
+                    .execute(
+                        "INSERT OR IGNORE INTO trg_trigger_run_events (trigger_run_id, event_id) VALUES (?1, ?2)",
+                        rusqlite::params![run.trigger_run_id.as_str(), event_id],
+                    )
+                    .map_err(sql_err)?;
+            }
+            for invocation_id in run.source_invocation_ids() {
+                transaction
+                    .execute(
+                        "INSERT OR IGNORE INTO trg_trigger_run_sources (trigger_run_id, invocation_id) VALUES (?1, ?2)",
+                        rusqlite::params![run.trigger_run_id.as_str(), invocation_id.to_string()],
+                    )
+                    .map_err(sql_err)?;
+            }
+            transaction.commit().map_err(sql_err)?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn get_trigger_run(
+        &self,
+        run_id: &TriggerRunId,
+    ) -> RustvelloResult<Option<TriggerRunRecord>> {
+        let db = Arc::clone(&self.db);
+        let run_id = run_id.clone();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let json: Option<String> = conn
+                .query_row(
+                    "SELECT run_json FROM trg_trigger_runs WHERE trigger_run_id = ?1",
+                    rusqlite::params![run_id.as_str()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sql_err)?;
+            json.map(|value| {
+                serde_json::from_str(&value).map_err(|error| RustvelloError::Serialization {
+                    message: error.to_string(),
+                })
+            })
+            .transpose()
+        })
+        .await
+    }
+
+    async fn get_trigger_runs(
+        &self,
+        query: &TriggerRunQuery,
+    ) -> RustvelloResult<Vec<TriggerRunRecord>> {
+        let db = Arc::clone(&self.db);
+        let query = query.clone();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT r.run_json FROM trg_trigger_runs r
+                     WHERE (?1 IS NULL OR EXISTS (
+                         SELECT 1 FROM trg_trigger_run_events e
+                         WHERE e.trigger_run_id = r.trigger_run_id AND e.event_id = ?1))
+                       AND (?2 IS NULL OR EXISTS (
+                         SELECT 1 FROM trg_trigger_run_sources s
+                         WHERE s.trigger_run_id = r.trigger_run_id AND s.invocation_id = ?2))
+                       AND (?3 IS NULL OR r.triggered_invocation_id = ?3)
+                       AND (?4 IS NULL OR r.claimed_at >= ?4)
+                       AND (?5 IS NULL OR r.claimed_at <= ?5)
+                     ORDER BY r.claimed_at DESC LIMIT ?6",
+                )
+                .map_err(sql_err)?;
+            let source = query.source_invocation_id.as_ref().map(ToString::to_string);
+            let triggered = query
+                .triggered_invocation_id
+                .as_ref()
+                .map(ToString::to_string);
+            let start = query.start.map(|value| value.to_rfc3339());
+            let end = query.end.map(|value| value.to_rfc3339());
+            let limit = i64::try_from(query.limit.unwrap_or(1000)).unwrap_or(i64::MAX);
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![query.event_id, source, triggered, start, end, limit],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(sql_err)?;
+            rows.map(|row| {
+                let json = row.map_err(sql_err)?;
+                serde_json::from_str(&json).map_err(|error| RustvelloError::Serialization {
+                    message: error.to_string(),
+                })
+            })
+            .collect()
+        })
+        .await
+    }
+
     async fn purge(&self) -> RustvelloResult<()> {
         let db = Arc::clone(&self.db);
         blocking(move || {
             let conn = db.conn.lock().map_err(lock_err)?;
             conn.execute_batch(
-                "DELETE FROM trg_trigger_run_claims;
+                "DELETE FROM trg_trigger_run_sources;
+                 DELETE FROM trg_trigger_run_events;
+                 DELETE FROM trg_trigger_runs;
+                 DELETE FROM trg_events;
+                 DELETE FROM trg_trigger_run_claims;
                  DELETE FROM trg_cron_executions;
                  DELETE FROM trg_valid_conditions;
                  DELETE FROM trg_source_task_conditions;

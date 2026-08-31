@@ -7,8 +7,20 @@
 use std::sync::Arc;
 
 use rustvello::prelude::*;
+use rustvello_core::context::{InvocationContext, INVOCATION_CTX};
 use rustvello_core::state_backend::{StateBackend, StateBackendCore, StateBackendQuery};
-use rustvello_core::workflow::DeterministicExecutor;
+use rustvello_core::workflow::WorkflowRoot;
+
+#[rustvello::workflow]
+fn deterministic_root_values() -> RustvelloResult<String> {
+    let mut root = WorkflowRoot::current()?;
+    Ok(format!(
+        "{}|{}|{}",
+        root.random()?,
+        root.utc_now()?.to_rfc3339(),
+        root.uuid()?
+    ))
+}
 
 // ===========================================================================
 // 1. Workflow Data Persistence (via state backend directly)
@@ -147,16 +159,74 @@ async fn workflow_invocations_tracked() {
 // 3. Deterministic Operations
 // ===========================================================================
 
-/// DeterministicExecutor produces deterministic random values.
+#[tokio::test]
+async fn workflow_root_operations_run_through_task_runner() {
+    let mut app = RustvelloApp::new(AppConfig::new("workflow-root-runner"));
+    app.register(DeterministicRootValuesTask::new()).unwrap();
+    let handle = app
+        .submit_call(&DeterministicRootValuesTask::new(), ())
+        .await
+        .unwrap();
+    let runner = TaskRunner::new(
+        "workflow-test".to_string(),
+        AppConfig::default(),
+        app.broker(),
+        app.orchestrator(),
+        app.state_backend(),
+        Arc::new({
+            let mut registry = TaskRegistry::new();
+            registry
+                .register_typed(DeterministicRootValuesTask::new())
+                .unwrap();
+            registry
+        }),
+        None,
+    );
+
+    runner.run_one().await.unwrap();
+    let result: String = handle.result().await.unwrap();
+    let values: Vec<&str> = result.split('|').collect();
+    assert_eq!(values.len(), 3);
+    assert!(values[0].parse::<f64>().is_ok());
+    assert!(chrono::DateTime::parse_from_rfc3339(values[1]).is_ok());
+    assert!(uuid::Uuid::parse_str(values[2]).is_ok());
+}
+
+fn workflow_context(
+    sb: Arc<dyn StateBackend>,
+    workflow_id: InvocationId,
+    invocation_id: InvocationId,
+    is_workflow_defining: bool,
+) -> InvocationContext {
+    InvocationContext {
+        invocation_id,
+        task_id: TaskId::new("tests", "workflow"),
+        workflow: Some(WorkflowIdentity::root(
+            workflow_id,
+            TaskId::new("tests", "workflow"),
+        )),
+        is_workflow_defining,
+        state_backend: Some(sb),
+        parent_invocation_id: None,
+        num_retries: 0,
+    }
+}
+
+/// WorkflowRoot produces deterministic random values.
 #[tokio::test]
 async fn deterministic_random_is_seeded() {
     let sb: Arc<dyn StateBackend> = Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
     let wf_id = InvocationId::new();
-
-    let mut exec = DeterministicExecutor::new(wf_id.clone(), Arc::clone(&sb));
-
-    let r1 = exec.random().await.unwrap();
-    let r2 = exec.random().await.unwrap();
+    let ctx = workflow_context(Arc::clone(&sb), wf_id.clone(), wf_id, true);
+    let (r1, r2) = INVOCATION_CTX
+        .scope(ctx, async {
+            let mut root = WorkflowRoot::current().unwrap();
+            (
+                root.random_async().await.unwrap(),
+                root.random_async().await.unwrap(),
+            )
+        })
+        .await;
 
     // Both should be in [0, 1) range
     assert!((0.0..1.0).contains(&r1));
@@ -166,32 +236,44 @@ async fn deterministic_random_is_seeded() {
     assert_ne!(r1, r2);
 }
 
-/// DeterministicExecutor utc_now produces ascending timestamps.
+/// WorkflowRoot utc_now produces ascending timestamps.
 #[tokio::test]
 async fn deterministic_time_ascending() {
     let sb: Arc<dyn StateBackend> = Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
     let wf_id = InvocationId::new();
 
-    let mut exec = DeterministicExecutor::new(wf_id, Arc::clone(&sb));
-
-    let t1 = exec.utc_now().await.unwrap();
-    let t2 = exec.utc_now().await.unwrap();
-    let t3 = exec.utc_now().await.unwrap();
+    let ctx = workflow_context(Arc::clone(&sb), wf_id.clone(), wf_id, true);
+    let (t1, t2, t3) = INVOCATION_CTX
+        .scope(ctx, async {
+            let mut root = WorkflowRoot::current().unwrap();
+            (
+                root.utc_now_async().await.unwrap(),
+                root.utc_now_async().await.unwrap(),
+                root.utc_now_async().await.unwrap(),
+            )
+        })
+        .await;
 
     assert!(t1 < t2, "Timestamps should be ascending");
     assert!(t2 < t3, "Timestamps should be ascending");
 }
 
-/// DeterministicExecutor uuid produces valid UUIDs.
+/// WorkflowRoot uuid produces valid UUIDs.
 #[tokio::test]
 async fn deterministic_uuid_valid() {
     let sb: Arc<dyn StateBackend> = Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
     let wf_id = InvocationId::new();
 
-    let mut exec = DeterministicExecutor::new(wf_id, Arc::clone(&sb));
-
-    let u1 = exec.uuid().await.unwrap();
-    let u2 = exec.uuid().await.unwrap();
+    let ctx = workflow_context(Arc::clone(&sb), wf_id.clone(), wf_id, true);
+    let (u1, u2) = INVOCATION_CTX
+        .scope(ctx, async {
+            let mut root = WorkflowRoot::current().unwrap();
+            (
+                root.uuid_async().await.unwrap(),
+                root.uuid_async().await.unwrap(),
+            )
+        })
+        .await;
 
     // Should be valid UUID format (36 chars with hyphens)
     assert_eq!(u1.len(), 36);
@@ -205,21 +287,29 @@ async fn deterministic_replay_consistency() {
     let sb: Arc<dyn StateBackend> = Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
     let wf_id = InvocationId::new();
 
-    // First execution
-    let mut exec1 = DeterministicExecutor::new(wf_id.clone(), Arc::clone(&sb));
-    let r1 = exec1.random().await.unwrap();
-    let t1 = exec1.utc_now().await.unwrap();
-    let u1 = exec1.uuid().await.unwrap();
+    let ctx = workflow_context(Arc::clone(&sb), wf_id.clone(), wf_id, true);
+    let first = INVOCATION_CTX
+        .scope(ctx.clone(), async {
+            let mut root = WorkflowRoot::current().unwrap();
+            (
+                root.random_async().await.unwrap(),
+                root.utc_now_async().await.unwrap(),
+                root.uuid_async().await.unwrap(),
+            )
+        })
+        .await;
+    let second = INVOCATION_CTX
+        .scope(ctx, async {
+            let mut root = WorkflowRoot::current().unwrap();
+            (
+                root.random_async().await.unwrap(),
+                root.utc_now_async().await.unwrap(),
+                root.uuid_async().await.unwrap(),
+            )
+        })
+        .await;
 
-    // Second execution (replay — should get same values from state backend)
-    let mut exec2 = DeterministicExecutor::new(wf_id, Arc::clone(&sb));
-    let r2 = exec2.random().await.unwrap();
-    let t2 = exec2.utc_now().await.unwrap();
-    let u2 = exec2.uuid().await.unwrap();
-
-    assert_eq!(r1, r2, "Replayed random should match");
-    assert_eq!(t1, t2, "Replayed time should match");
-    assert_eq!(u1, u2, "Replayed UUID should match");
+    assert_eq!(first, second, "replay should reuse all recorded values");
 }
 
 /// Mixed deterministic operations produce isolated sequences.
@@ -228,12 +318,18 @@ async fn deterministic_mixed_operations() {
     let sb: Arc<dyn StateBackend> = Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
     let wf_id = InvocationId::new();
 
-    let mut exec = DeterministicExecutor::new(wf_id, Arc::clone(&sb));
-
-    let r = exec.random().await.unwrap();
-    let t = exec.utc_now().await.unwrap();
-    let u = exec.uuid().await.unwrap();
-    let r2 = exec.random().await.unwrap();
+    let ctx = workflow_context(Arc::clone(&sb), wf_id.clone(), wf_id, true);
+    let (r, t, u, r2) = INVOCATION_CTX
+        .scope(ctx, async {
+            let mut root = WorkflowRoot::current().unwrap();
+            (
+                root.random_async().await.unwrap(),
+                root.utc_now_async().await.unwrap(),
+                root.uuid_async().await.unwrap(),
+                root.random_async().await.unwrap(),
+            )
+        })
+        .await;
 
     // All should produce distinct values
     assert!((0.0..1.0).contains(&r));
@@ -241,6 +337,54 @@ async fn deterministic_mixed_operations() {
     assert_ne!(r, r2);
     assert_eq!(u.len(), 36);
     assert!(t.timestamp() > 0);
+}
+
+#[test]
+fn workflow_root_requires_running_context() {
+    assert!(matches!(
+        WorkflowRoot::current(),
+        Err(RustvelloError::WorkflowContextUnavailable)
+    ));
+}
+
+#[tokio::test]
+async fn workflow_root_rejects_ordinary_task() {
+    let sb: Arc<dyn StateBackend> = Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
+    let inv_id = InvocationId::new();
+    let ctx = InvocationContext {
+        invocation_id: inv_id.clone(),
+        task_id: TaskId::new("tests", "ordinary"),
+        workflow: None,
+        is_workflow_defining: false,
+        state_backend: Some(sb),
+        parent_invocation_id: None,
+        num_retries: 0,
+    };
+
+    let error = INVOCATION_CTX
+        .scope(ctx, async { WorkflowRoot::current().err().unwrap() })
+        .await;
+    assert!(matches!(
+        error,
+        RustvelloError::WorkflowMembershipRequired { invocation_id } if invocation_id == inv_id
+    ));
+}
+
+#[tokio::test]
+async fn workflow_root_rejects_child_member() {
+    let sb: Arc<dyn StateBackend> = Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
+    let workflow_id = InvocationId::new();
+    let child_id = InvocationId::new();
+    let ctx = workflow_context(sb, workflow_id.clone(), child_id.clone(), false);
+
+    let error = INVOCATION_CTX
+        .scope(ctx, async { WorkflowRoot::current().err().unwrap() })
+        .await;
+    assert!(matches!(
+        error,
+        RustvelloError::WorkflowRootRequired { invocation_id, workflow_id: actual }
+            if invocation_id == child_id && actual == workflow_id
+    ));
 }
 
 // ===========================================================================

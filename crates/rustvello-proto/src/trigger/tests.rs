@@ -252,6 +252,57 @@ fn trigger_definition_id_order_independent() {
 }
 
 #[test]
+fn event_record_round_trip_preserves_monitoring_links() {
+    let record = EventRecord {
+        event_id: "event-1".into(),
+        event_code: "payment".into(),
+        payload: serde_json::json!({"order_id": 42}),
+        timestamp: chrono::Utc::now(),
+        matched_condition_ids: vec![ConditionId::from("condition-1")],
+        valid_condition_ids: vec!["valid-1".into()],
+        triggered_invocation_ids: vec![InvocationId::from_string("inv-2")],
+        emitted_by_invocation_id: Some(InvocationId::from_string("inv-1")),
+        emitted_by_task_id: Some(TaskId::new("mod", "source")),
+        emitted_by_runner_id: Some(crate::identifiers::RunnerId::from_string("runner-1")),
+    };
+
+    let json = serde_json::to_string(&record).unwrap();
+    let decoded: EventRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded, record);
+    assert!(decoded.is_matched());
+    assert!(decoded.is_triggered());
+}
+
+#[test]
+fn trigger_run_round_trip_preserves_participant_mapping() {
+    let record = TriggerRunRecord {
+        trigger_run_id: TriggerRunId::from("run-1"),
+        trigger_id: TriggerDefinitionId::from("trigger-1"),
+        task_id: TaskId::new("mod", "target"),
+        logic: TriggerLogic::And,
+        arguments: serde_json::json!({"order_id": 42}),
+        participants: vec![TriggerRunParticipant {
+            context_type: "event".into(),
+            condition_id: ConditionId::from("condition-1"),
+            valid_condition_id: "valid-1".into(),
+            event_id: Some("event-1".into()),
+            source_invocation_id: None,
+            context_summary: "payment".into(),
+        }],
+        claimed_at: chrono::Utc::now(),
+        executed_at: None,
+        triggered_invocation_id: None,
+        atomic_service_run_id: None,
+        atomic_service_runner_id: None,
+    };
+
+    let json = serde_json::to_string(&record).unwrap();
+    let decoded: TriggerRunRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded, record);
+    assert_eq!(decoded.event_ids(), vec!["event-1"]);
+}
+
+#[test]
 fn valid_condition_id_format() {
     let cond_id = ConditionId("abc123".to_string());
     let ctx = ConditionContext::Event(EventContext {

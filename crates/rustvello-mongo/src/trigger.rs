@@ -9,8 +9,8 @@ use rustvello_core::error::{RustvelloError, RustvelloResult};
 use rustvello_core::trigger::TriggerStore;
 use rustvello_proto::identifiers::TaskId;
 use rustvello_proto::trigger::{
-    ConditionId, TriggerCondition, TriggerDefinitionDTO, TriggerDefinitionId, TriggerRunId,
-    ValidCondition,
+    ConditionId, EventQuery, EventRecord, TriggerCondition, TriggerDefinitionDTO,
+    TriggerDefinitionId, TriggerRunId, TriggerRunQuery, TriggerRunRecord, ValidCondition,
 };
 
 use crate::connection::{mongo_err, MongoPool};
@@ -20,6 +20,8 @@ const TRIGGER_COL: &str = "trg_definitions";
 const VALID_COL: &str = "trg_valid_conditions";
 const CRON_EXEC_COL: &str = "trg_cron_executions";
 const RUN_COL: &str = "trg_runs";
+const EVENT_RECORD_COL: &str = "trg_event_records";
+const TRIGGER_RUN_RECORD_COL: &str = "trg_trigger_run_records";
 
 /// MongoDB-backed trigger store.
 #[non_exhaustive]
@@ -391,9 +393,188 @@ impl TriggerStore for MongoTriggerStore {
         }
     }
 
+    async fn store_event(&self, event: &EventRecord) -> RustvelloResult<()> {
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(EVENT_RECORD_COL);
+        let json = serde_json::to_string(event).map_err(|e| RustvelloError::Serialization {
+            message: e.to_string(),
+        })?;
+        col.update_one(
+            doc! { "_id": &event.event_id },
+            doc! {
+                "$set": {
+                    "data": json,
+                    "event_code": &event.event_code,
+                    "timestamp": event.timestamp.to_rfc3339(),
+                    "emitted_by_invocation_id": event.emitted_by_invocation_id.as_ref().map(ToString::to_string),
+                }
+            },
+        )
+        .upsert(true)
+        .await
+        .map_err(mongo_err)?;
+        Ok(())
+    }
+
+    async fn get_event(&self, event_id: &str) -> RustvelloResult<Option<EventRecord>> {
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(EVENT_RECORD_COL);
+        let record = col
+            .find_one(doc! { "_id": event_id })
+            .await
+            .map_err(mongo_err)?;
+        record
+            .map(|value| {
+                let json = value
+                    .get_str("data")
+                    .map_err(|e| RustvelloError::state_backend(e.to_string()))?;
+                serde_json::from_str(json).map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })
+            })
+            .transpose()
+    }
+
+    async fn get_events(&self, query: &EventQuery) -> RustvelloResult<Vec<EventRecord>> {
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(EVENT_RECORD_COL);
+        let mut cursor = col.find(doc! {}).await.map_err(mongo_err)?;
+        let mut events = Vec::new();
+        use futures_util::StreamExt;
+        while let Some(item) = StreamExt::next(&mut cursor).await {
+            let document = item.map_err(mongo_err)?;
+            let json = document
+                .get_str("data")
+                .map_err(|e| RustvelloError::state_backend(e.to_string()))?;
+            let event: EventRecord =
+                serde_json::from_str(json).map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })?;
+            if query
+                .event_code
+                .as_ref()
+                .is_some_and(|code| code != &event.event_code)
+                || query
+                    .emitted_by_invocation_id
+                    .as_ref()
+                    .is_some_and(|id| event.emitted_by_invocation_id.as_ref() != Some(id))
+                || query.start.is_some_and(|start| event.timestamp < start)
+                || query.end.is_some_and(|end| event.timestamp > end)
+            {
+                continue;
+            }
+            events.push(event);
+        }
+        events.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+        if let Some(limit) = query.limit {
+            events.truncate(limit);
+        }
+        Ok(events)
+    }
+
+    async fn store_trigger_run(&self, run: &TriggerRunRecord) -> RustvelloResult<()> {
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(TRIGGER_RUN_RECORD_COL);
+        let json = serde_json::to_string(run).map_err(|e| RustvelloError::Serialization {
+            message: e.to_string(),
+        })?;
+        col.update_one(
+            doc! { "_id": run.trigger_run_id.as_str() },
+            doc! {
+                "$set": {
+                    "data": json,
+                    "claimed_at": run.claimed_at.to_rfc3339(),
+                    "triggered_invocation_id": run.triggered_invocation_id.as_ref().map(ToString::to_string),
+                }
+            },
+        )
+        .upsert(true)
+        .await
+        .map_err(mongo_err)?;
+        Ok(())
+    }
+
+    async fn get_trigger_run(
+        &self,
+        run_id: &TriggerRunId,
+    ) -> RustvelloResult<Option<TriggerRunRecord>> {
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(TRIGGER_RUN_RECORD_COL);
+        let record = col
+            .find_one(doc! { "_id": run_id.as_str() })
+            .await
+            .map_err(mongo_err)?;
+        record
+            .map(|value| {
+                let json = value
+                    .get_str("data")
+                    .map_err(|e| RustvelloError::state_backend(e.to_string()))?;
+                serde_json::from_str(json).map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })
+            })
+            .transpose()
+    }
+
+    async fn get_trigger_runs(
+        &self,
+        query: &TriggerRunQuery,
+    ) -> RustvelloResult<Vec<TriggerRunRecord>> {
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(TRIGGER_RUN_RECORD_COL);
+        let mut cursor = col.find(doc! {}).await.map_err(mongo_err)?;
+        let mut runs = Vec::new();
+        use futures_util::StreamExt;
+        while let Some(item) = StreamExt::next(&mut cursor).await {
+            let document = item.map_err(mongo_err)?;
+            let json = document
+                .get_str("data")
+                .map_err(|e| RustvelloError::state_backend(e.to_string()))?;
+            let run: TriggerRunRecord =
+                serde_json::from_str(json).map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })?;
+            if query
+                .event_id
+                .as_ref()
+                .is_some_and(|event_id| !run.event_ids().contains(&event_id.as_str()))
+                || query
+                    .source_invocation_id
+                    .as_ref()
+                    .is_some_and(|invocation_id| {
+                        !run.source_invocation_ids().contains(&invocation_id)
+                    })
+                || query
+                    .triggered_invocation_id
+                    .as_ref()
+                    .is_some_and(|invocation_id| {
+                        run.triggered_invocation_id.as_ref() != Some(invocation_id)
+                    })
+                || query.start.is_some_and(|start| run.claimed_at < start)
+                || query.end.is_some_and(|end| run.claimed_at > end)
+            {
+                continue;
+            }
+            runs.push(run);
+        }
+        runs.sort_by(|left, right| right.claimed_at.cmp(&left.claimed_at));
+        if let Some(limit) = query.limit {
+            runs.truncate(limit);
+        }
+        Ok(runs)
+    }
+
     async fn purge(&self) -> RustvelloResult<()> {
         let db = self.pool.db().await?;
-        for col_name in [COND_COL, TRIGGER_COL, VALID_COL, CRON_EXEC_COL, RUN_COL] {
+        for col_name in [
+            COND_COL,
+            TRIGGER_COL,
+            VALID_COL,
+            CRON_EXEC_COL,
+            RUN_COL,
+            EVENT_RECORD_COL,
+            TRIGGER_RUN_RECORD_COL,
+        ] {
             let col = db.collection::<mongodb::bson::Document>(col_name);
             col.delete_many(doc! {}).await.map_err(mongo_err)?;
         }

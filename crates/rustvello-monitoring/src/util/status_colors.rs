@@ -13,12 +13,11 @@ pub fn hex_color(status: &InvocationStatus) -> &'static str {
         InvocationStatus::Failed => "#e74c3c",
         InvocationStatus::Retry => "#9b59b6",
         InvocationStatus::ConcurrencyControlled => "#e67e22",
-        InvocationStatus::ConcurrencyControlledFinal => "#d35400",
+        InvocationStatus::ConcurrencyControlledFinal => "#e74c3c",
         InvocationStatus::Rerouted => "#16a085",
         InvocationStatus::PendingRecovery => "#e67e22",
         InvocationStatus::RunningRecovery => "#e67e22",
         InvocationStatus::Paused => "#1abc9c",
-        InvocationStatus::Resumed => "#2980b9",
         InvocationStatus::Killed => "#c0392b",
         _ => "#95a5a6",
     }
@@ -34,12 +33,11 @@ pub fn badge_class(status: &InvocationStatus) -> &'static str {
         InvocationStatus::Failed => "bg-danger",
         InvocationStatus::Retry => "bg-warning",
         InvocationStatus::ConcurrencyControlled => "bg-info",
-        InvocationStatus::ConcurrencyControlledFinal => "bg-info",
+        InvocationStatus::ConcurrencyControlledFinal => "bg-danger",
         InvocationStatus::Rerouted => "bg-secondary",
         InvocationStatus::PendingRecovery => "bg-warning text-dark",
         InvocationStatus::RunningRecovery => "bg-primary",
         InvocationStatus::Paused => "bg-secondary",
-        InvocationStatus::Resumed => "bg-primary",
         InvocationStatus::Killed => "bg-danger",
         _ => "bg-secondary",
     }
@@ -50,7 +48,6 @@ pub const SEGMENT_STATUSES: &[InvocationStatus] = &[
     InvocationStatus::Pending,
     InvocationStatus::Running,
     InvocationStatus::Paused,
-    InvocationStatus::Resumed,
 ];
 
 /// Statuses that represent terminal outcomes.
@@ -84,13 +81,12 @@ mod tests {
         );
         assert_eq!(
             hex_color(&InvocationStatus::ConcurrencyControlledFinal),
-            "#d35400"
+            "#e74c3c"
         );
         assert_eq!(hex_color(&InvocationStatus::Rerouted), "#16a085");
         assert_eq!(hex_color(&InvocationStatus::PendingRecovery), "#e67e22");
         assert_eq!(hex_color(&InvocationStatus::RunningRecovery), "#e67e22");
         assert_eq!(hex_color(&InvocationStatus::Paused), "#1abc9c");
-        assert_eq!(hex_color(&InvocationStatus::Resumed), "#2980b9");
         assert_eq!(hex_color(&InvocationStatus::Killed), "#c0392b");
     }
 
@@ -100,11 +96,18 @@ mod tests {
     }
 
     #[test]
+    fn terminal_concurrency_status_uses_failure_badge() {
+        assert_eq!(
+            badge_class(&InvocationStatus::ConcurrencyControlledFinal),
+            "bg-danger"
+        );
+    }
+
+    #[test]
     fn test_segment_statuses_are_duration_statuses() {
         assert!(SEGMENT_STATUSES.contains(&InvocationStatus::Pending));
         assert!(SEGMENT_STATUSES.contains(&InvocationStatus::Running));
         assert!(SEGMENT_STATUSES.contains(&InvocationStatus::Paused));
-        assert!(SEGMENT_STATUSES.contains(&InvocationStatus::Resumed));
         // Points-only statuses should NOT be in SEGMENT_STATUSES
         assert!(!SEGMENT_STATUSES.contains(&InvocationStatus::Success));
         assert!(!SEGMENT_STATUSES.contains(&InvocationStatus::Failed));

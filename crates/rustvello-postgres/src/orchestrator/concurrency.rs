@@ -16,8 +16,8 @@ impl OrchestratorConcurrency for PostgresOrchestrator {
     /// TOCTOU races in multi-node PostgreSQL deployments. Two concurrent
     /// callers may both read the same count and both admit a new invocation,
     /// briefly exceeding the concurrency limit. An advisory lock or
-    /// `INSERT … WHERE (SELECT COUNT …) < limit` would be needed for
-    /// strict enforcement, which is a trait-level design change.
+    /// strict enforcement. Runners use `try_acquire_concurrency_slot`, which
+    /// serializes reservations with a transaction-scoped advisory lock.
     async fn check_running_concurrency(
         &self,
         task_id: &TaskId,
@@ -163,6 +163,12 @@ impl OrchestratorConcurrency for PostgresOrchestrator {
         let n_pairs = pairs.len();
         let limit = task_config.running_concurrency.unwrap_or(1) as i64;
 
+        // Serialize reservations for a task. The pair-level predicate below
+        // still decides whether unrelated argument keys may proceed.
+        tx.query_one("SELECT pg_advisory_xact_lock(hashtext($1))", &[&task_key])
+            .await
+            .map_err(pg_err)?;
+
         // Build the per-pair count check
         let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
         let mut idx = 1;
@@ -187,9 +193,7 @@ impl OrchestratorConcurrency for PostgresOrchestrator {
         let check_sql = format!(
             "SELECT (SELECT COUNT(*) FROM (
                  SELECT cp.invocation_id FROM cc_arg_pairs cp
-                 JOIN invocations i ON cp.invocation_id = i.invocation_id
                  WHERE cp.task_id = {task_p} AND ({where_pairs})
-                   AND i.status IN ('PENDING', 'RUNNING')
                  GROUP BY cp.invocation_id
                  HAVING COUNT(*) = {n_pairs}
              ) sub) < {limit_p}"

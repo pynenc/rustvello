@@ -133,7 +133,6 @@ pub fn render_legend(buf: &mut String, config: &TimelineConfig, total_height: f6
         InvocationStatus::Running,
         InvocationStatus::RunningRecovery,
         InvocationStatus::Paused,
-        InvocationStatus::Resumed,
         InvocationStatus::Killed,
         InvocationStatus::Success,
         InvocationStatus::Failed,
@@ -222,11 +221,11 @@ mod tests {
     }
 
     #[test]
-    fn test_legend_contains_all_14_statuses() {
+    fn test_legend_contains_all_13_statuses() {
         let config = TimelineConfig::default();
         let mut buf = String::new();
         render_legend(&mut buf, &config, 500.0);
-        // All 14 statuses should appear in legend
+        // All 13 statuses should appear in legend
         assert!(buf.contains("Registered"));
         assert!(buf.contains("ConcurrencyControlled"));
         assert!(buf.contains("ConcurrencyControlledFinal"));
@@ -236,7 +235,6 @@ mod tests {
         assert!(buf.contains("Running"));
         assert!(buf.contains("RunningRecovery"));
         assert!(buf.contains("Paused"));
-        assert!(buf.contains("Resumed"));
         assert!(buf.contains("Killed"));
         assert!(buf.contains("Success"));
         assert!(buf.contains("Failed"));

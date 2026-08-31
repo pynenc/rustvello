@@ -218,6 +218,7 @@ class RustTaskRunnerBuilder:
         func: Any,
         *,
         concurrency_control: str = "Unlimited",
+        running_concurrency: int | None = None,
         key_arguments: list[str] = ...,
         reroute_on_cc: bool = False,
         max_retries: int = 0,
@@ -227,7 +228,7 @@ class RustTaskRunnerBuilder:
         disable_cache_args: list[str] = ...,
         on_diff_non_key_args_raise: bool = False,
         parallel_batch_size: int = 100,
-        force_new_workflow: bool = False,
+        is_workflow_task: bool = False,
     ) -> None: ...
     def build(self) -> RustTaskRunner: ...
 

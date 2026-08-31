@@ -201,24 +201,11 @@ impl OrchestratorConcurrency for RedisOrchestrator {
                 end
             end
 
-            -- Count active (Pending/Running) from intersection
+            -- Every indexed member owns or reserves one execution slot.
             local active = 0
             if intersection then
-                local keys_to_check = {}
-                local inv_ids = {}
                 for id, _ in pairs(intersection) do
-                    keys_to_check[#keys_to_check + 1] = status_prefix .. id
-                    inv_ids[#inv_ids + 1] = id
-                end
-                if #keys_to_check > 0 then
-                    local statuses = redis.call('MGET', unpack(keys_to_check))
-                    for i, s in ipairs(statuses) do
-                        if s then
-                            if string.find(s, '"Pending"') or string.find(s, '"Running"') then
-                                active = active + 1
-                            end
-                        end
-                    end
+                    active = active + 1
                 end
             end
 

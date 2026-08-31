@@ -157,11 +157,13 @@ synthetic data, and assert on HTML/JSON responses.
 For manual browser inspection:
 
 ```bash
-KEEP_ALIVE=1 cargo test -p rustvello-monitoring --test monitoring_dashboard -- --nocapture
+KEEP_ALIVE=1 cargo test -p rustvello-monitoring \
+  --test monitoring_dashboard test_hierarchical_timeline -- --nocapture
 ```
 
-This keeps the server running after tests complete so you can open the dashboard
-in a browser.
+This keeps the server running after the selected test completes so you can open
+the printed dashboard URL in a browser. `RUSTVELLO_MONITOR_KEEP_ALIVE=1` is also
+accepted when you want the longer namespaced variable.
 
 ## Prometheus Tests
 

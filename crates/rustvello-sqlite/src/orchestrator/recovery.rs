@@ -218,24 +218,59 @@ impl OrchestratorRecovery for SqliteOrchestrator {
         let db = Arc::clone(&self.db);
         let runner_id = runner_id.clone();
         blocking(move || {
-
             let conn = db.conn.lock().map_err(lock_err)?;
             let start_str = start.to_rfc3339();
             let end_str = end.to_rfc3339();
 
             conn.execute(
-                "UPDATE runner_heartbeats SET last_service_start = ?1, last_service_end = ?2 WHERE runner_id = ?3",
-                rusqlite::params![&start_str, &end_str, runner_id.as_str()],
+                "INSERT INTO runner_heartbeats (
+                     runner_id, creation_time, last_heartbeat,
+                     can_run_atomic_service, last_service_start, last_service_end
+                 ) VALUES (?1, ?2, ?3, 1, ?2, ?3)
+                 ON CONFLICT(runner_id) DO UPDATE SET
+                     last_service_start = excluded.last_service_start,
+                     last_service_end = excluded.last_service_end",
+                rusqlite::params![runner_id.as_str(), &start_str, &end_str],
             )
             .map_err(sql_err)?;
 
             Ok(())
-
         })
         .await
     }
 
     async fn get_atomic_service_timeline(&self) -> RustvelloResult<Vec<AtomicServiceExecution>> {
-        Ok(Vec::new())
+        let db = Arc::clone(&self.db);
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT runner_id, last_service_start, last_service_end
+                     FROM runner_heartbeats
+                     WHERE last_service_start IS NOT NULL AND last_service_end IS NOT NULL
+                     ORDER BY last_service_start DESC",
+                )
+                .map_err(sql_err)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(sql_err)?;
+
+            rows.map(|row| {
+                let (runner_id, start, end) = row.map_err(sql_err)?;
+                Ok(AtomicServiceExecution {
+                    runner_id,
+                    start: parse_timestamp(&start)?,
+                    end: parse_timestamp(&end)?,
+                })
+            })
+            .collect()
+        })
+        .await
     }
 }

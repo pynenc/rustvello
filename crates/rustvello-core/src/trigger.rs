@@ -12,11 +12,14 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use croner::Cron;
 
+use crate::context::{get_invocation_context, get_or_create_runner_context};
 use crate::error::RustvelloResult;
+use rustvello_proto::identifiers::InvocationId;
 use rustvello_proto::identifiers::TaskId;
 use rustvello_proto::trigger::{
-    ConditionContext, ConditionId, TriggerCondition, TriggerDefinitionDTO, TriggerDefinitionId,
-    TriggerLogic, TriggerRunId, ValidCondition,
+    ConditionContext, ConditionId, EventQuery, EventRecord, TriggerCondition, TriggerDefinitionDTO,
+    TriggerDefinitionId, TriggerLogic, TriggerRunId, TriggerRunParticipant, TriggerRunQuery,
+    TriggerRunRecord, ValidCondition,
 };
 
 // ---------------------------------------------------------------------------
@@ -108,6 +111,32 @@ pub trait TriggerStore: Send + Sync {
     /// Attempt to claim a trigger run. Returns `true` if this is first claim.
     async fn claim_trigger_run(&self, run_id: &TriggerRunId) -> RustvelloResult<bool>;
 
+    // -- Monitoring records --
+
+    /// Persist an emitted event, including events that matched no condition.
+    async fn store_event(&self, event: &EventRecord) -> RustvelloResult<()>;
+
+    /// Look up one persisted event by ID.
+    async fn get_event(&self, event_id: &str) -> RustvelloResult<Option<EventRecord>>;
+
+    /// Query persisted events using the supplied filters.
+    async fn get_events(&self, query: &EventQuery) -> RustvelloResult<Vec<EventRecord>>;
+
+    /// Persist one claimed trigger run and its participants.
+    async fn store_trigger_run(&self, run: &TriggerRunRecord) -> RustvelloResult<()>;
+
+    /// Look up one persisted trigger run by ID.
+    async fn get_trigger_run(
+        &self,
+        run_id: &TriggerRunId,
+    ) -> RustvelloResult<Option<TriggerRunRecord>>;
+
+    /// Query persisted trigger runs using the supplied filters.
+    async fn get_trigger_runs(
+        &self,
+        query: &TriggerRunQuery,
+    ) -> RustvelloResult<Vec<TriggerRunRecord>>;
+
     /// Purge all trigger data.
     async fn purge(&self) -> RustvelloResult<()>;
 
@@ -130,6 +159,14 @@ pub trait TriggerStore: Send + Sync {
 #[derive(Clone)]
 pub struct TriggerManager {
     store: Arc<dyn TriggerStore>,
+}
+
+/// A claimed trigger execution ready for invocation creation.
+#[derive(Debug, Clone)]
+pub struct TriggerExecution {
+    pub run_id: TriggerRunId,
+    pub trigger: TriggerDefinitionDTO,
+    pub arguments: serde_json::Value,
 }
 
 impl TriggerManager {
@@ -202,19 +239,49 @@ impl TriggerManager {
         let event_ctx = rustvello_proto::trigger::EventContext {
             event_id: event_id.clone(),
             event_code: event_code.to_string(),
-            payload,
+            payload: payload.clone(),
         };
         let condition_ctx = ConditionContext::Event(event_ctx);
+
+        let invocation_ctx = get_invocation_context();
+        let runner_ctx = get_or_create_runner_context();
+        let mut event_record = EventRecord {
+            event_id: event_id.clone(),
+            event_code: event_code.to_string(),
+            payload,
+            timestamp: Utc::now(),
+            matched_condition_ids: Vec::new(),
+            valid_condition_ids: Vec::new(),
+            triggered_invocation_ids: Vec::new(),
+            emitted_by_invocation_id: invocation_ctx
+                .as_ref()
+                .map(|context| context.invocation_id.clone()),
+            emitted_by_task_id: invocation_ctx.map(|context| context.task_id),
+            emitted_by_runner_id: Some(runner_ctx.runner_id),
+        };
+        self.store_event_for_monitoring(&event_record).await;
 
         let conditions = self.store.get_event_conditions(event_code).await?;
         for (cond_id, cond) in &conditions {
             if cond.is_satisfied_by(&condition_ctx) {
                 let vc = ValidCondition::new(cond_id.clone(), condition_ctx.clone());
                 self.store.record_valid_condition(&vc).await?;
+                event_record.matched_condition_ids.push(cond_id.clone());
+                event_record.valid_condition_ids.push(vc.valid_condition_id);
             }
         }
 
+        if event_record.is_matched() {
+            self.store_event_for_monitoring(&event_record).await;
+        }
+
         Ok(event_id)
+    }
+
+    async fn store_event_for_monitoring(&self, event: &EventRecord) {
+        if let Err(error) = self.store.store_event(event).await {
+            tracing::debug!(%error, event_id = %event.event_id, "event monitoring record unavailable");
+        }
     }
 
     // -- Cron evaluation --
@@ -303,9 +370,7 @@ impl TriggerManager {
     /// Process all pending valid conditions and determine which triggers should fire.
     ///
     /// Returns a list of (trigger definition, arguments) pairs ready for invocation.
-    pub async fn evaluate_triggers(
-        &self,
-    ) -> RustvelloResult<Vec<(TriggerDefinitionDTO, serde_json::Value)>> {
+    pub async fn evaluate_trigger_runs(&self) -> RustvelloResult<Vec<TriggerExecution>> {
         let valid_conditions = self.store.get_valid_conditions().await?;
         if valid_conditions.is_empty() {
             return Ok(vec![]);
@@ -364,7 +429,20 @@ impl TriggerManager {
                                 .argument_template
                                 .clone()
                                 .unwrap_or(serde_json::Value::Object(Default::default()));
-                            to_invoke.push((trigger.clone(), args));
+                            let selected: Vec<ValidCondition> = trigger
+                                .condition_ids
+                                .iter()
+                                .filter_map(|cid| {
+                                    by_condition.get(cid)?.first().map(|vc| (*vc).clone())
+                                })
+                                .collect();
+                            self.record_claimed_run(&run_id, trigger, &args, &selected)
+                                .await;
+                            to_invoke.push(TriggerExecution {
+                                run_id,
+                                trigger: trigger.clone(),
+                                arguments: args,
+                            });
 
                             // Mark all valid conditions used in this trigger for clearing
                             for cid in &trigger.condition_ids {
@@ -393,7 +471,18 @@ impl TriggerManager {
                                         .argument_template
                                         .clone()
                                         .unwrap_or(serde_json::Value::Object(Default::default()));
-                                    to_invoke.push((trigger.clone(), args));
+                                    self.record_claimed_run(
+                                        &run_id,
+                                        trigger,
+                                        &args,
+                                        &[(*vc).clone()],
+                                    )
+                                    .await;
+                                    to_invoke.push(TriggerExecution {
+                                        run_id,
+                                        trigger: trigger.clone(),
+                                        arguments: args,
+                                    });
                                     to_clear.push(vc.valid_condition_id.clone());
                                 }
                             }
@@ -420,7 +509,18 @@ impl TriggerManager {
                                         .argument_template
                                         .clone()
                                         .unwrap_or(serde_json::Value::Object(Default::default()));
-                                    to_invoke.push((trigger.clone(), args));
+                                    self.record_claimed_run(
+                                        &run_id,
+                                        trigger,
+                                        &args,
+                                        &[(*vc).clone()],
+                                    )
+                                    .await;
+                                    to_invoke.push(TriggerExecution {
+                                        run_id,
+                                        trigger: trigger.clone(),
+                                        arguments: args,
+                                    });
                                     to_clear.push(vc.valid_condition_id.clone());
                                 }
                             }
@@ -436,6 +536,110 @@ impl TriggerManager {
         }
 
         Ok(to_invoke)
+    }
+
+    /// Compatibility projection for callers that do not need run attribution.
+    pub async fn evaluate_triggers(
+        &self,
+    ) -> RustvelloResult<Vec<(TriggerDefinitionDTO, serde_json::Value)>> {
+        Ok(self
+            .evaluate_trigger_runs()
+            .await?
+            .into_iter()
+            .map(|execution| (execution.trigger, execution.arguments))
+            .collect())
+    }
+
+    async fn record_claimed_run(
+        &self,
+        run_id: &TriggerRunId,
+        trigger: &TriggerDefinitionDTO,
+        arguments: &serde_json::Value,
+        valid_conditions: &[ValidCondition],
+    ) {
+        let participants = valid_conditions
+            .iter()
+            .map(participant_from_valid_condition)
+            .collect();
+        let record = TriggerRunRecord {
+            trigger_run_id: run_id.clone(),
+            trigger_id: trigger.trigger_id.clone(),
+            task_id: trigger.task_id.clone(),
+            logic: trigger.logic,
+            arguments: arguments.clone(),
+            participants,
+            claimed_at: Utc::now(),
+            executed_at: None,
+            triggered_invocation_id: None,
+            atomic_service_run_id: None,
+            atomic_service_runner_id: None,
+        };
+        if let Err(error) = self.store.store_trigger_run(&record).await {
+            tracing::debug!(%error, trigger_run_id = %run_id, "trigger-run monitoring record unavailable");
+        }
+    }
+
+    /// Attach the invocation created for a previously claimed trigger run.
+    pub async fn complete_trigger_run(
+        &self,
+        run_id: &TriggerRunId,
+        invocation_id: &InvocationId,
+    ) -> RustvelloResult<()> {
+        let Some(mut run) = self.store.get_trigger_run(run_id).await? else {
+            return Ok(());
+        };
+        run.triggered_invocation_id = Some(invocation_id.clone());
+        run.executed_at = Some(Utc::now());
+        self.store.store_trigger_run(&run).await?;
+
+        for event_id in run.event_ids() {
+            if let Some(mut event) = self.store.get_event(event_id).await? {
+                if !event.triggered_invocation_ids.contains(invocation_id) {
+                    event.triggered_invocation_ids.push(invocation_id.clone());
+                    self.store.store_event(&event).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn participant_from_valid_condition(vc: &ValidCondition) -> TriggerRunParticipant {
+    let (context_type, event_id, source_invocation_id, context_summary) = match &vc.context {
+        ConditionContext::Event(context) => (
+            "event",
+            Some(context.event_id.clone()),
+            None,
+            context.event_code.clone(),
+        ),
+        ConditionContext::Status(context) => (
+            "status",
+            None,
+            Some(context.invocation_id.clone()),
+            format!("{} {:?}", context.task_id, context.status),
+        ),
+        ConditionContext::Result(context) => (
+            "result",
+            None,
+            Some(context.invocation_id.clone()),
+            context.task_id.to_string(),
+        ),
+        ConditionContext::Exception(context) => (
+            "exception",
+            None,
+            Some(context.invocation_id.clone()),
+            format!("{} {}", context.task_id, context.error_type),
+        ),
+        ConditionContext::Cron(context) => ("cron", None, None, context.timestamp.to_rfc3339()),
+        _ => ("unknown", None, None, String::new()),
+    };
+    TriggerRunParticipant {
+        context_type: context_type.into(),
+        condition_id: vc.condition_id.clone(),
+        valid_condition_id: vc.valid_condition_id.clone(),
+        event_id,
+        source_invocation_id,
+        context_summary,
     }
 }
 

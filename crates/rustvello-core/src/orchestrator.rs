@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use rustvello_proto::call::{CallDTO, SerializedArguments};
@@ -10,7 +11,7 @@ use rustvello_proto::status::{InvocationStatus, InvocationStatusRecord};
 use crate::error::RustvelloResult;
 
 /// A recorded execution of the atomic global service by a specific runner.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AtomicServiceExecution {
     pub runner_id: String,
     pub start: DateTime<Utc>,
@@ -224,11 +225,9 @@ pub trait OrchestratorConcurrency: Send + Sync {
     /// Returns `true` if the slot was acquired (invocation indexed),
     /// `false` if the task is already at its concurrency limit.
     ///
-    /// The default implementation calls `check_running_concurrency` then
-    /// `index_for_concurrency_control` — non-atomic but correct for
-    /// single-process backends (Mem, SQLite). Distributed backends
-    /// (Redis, Postgres, MongoDB) should override this with an atomic
-    /// implementation to prevent TOCTOU races.
+    /// The default implementation is a compatibility fallback. Production
+    /// backends must override it with one atomic check-and-index operation;
+    /// runner correctness relies on the index representing reserved slots.
     #[instrument(skip(self, task_config, cc_args), fields(%invocation_id, %task_id))]
     async fn try_acquire_concurrency_slot(
         &self,

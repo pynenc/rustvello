@@ -189,8 +189,11 @@ async fn build_log_timeline(
     lines: &[LineAnalysis],
     app: &AppInstance,
 ) -> (String, String, std::collections::HashMap<String, String>) {
-    // Collect invocation IDs from entity refs
-    let inv_ids: HashSet<String> = all_refs
+    // Collect invocation IDs from entity refs and parsed context fields. The
+    // latter keeps the mini-timeline independent from message-body reference
+    // extraction when a production log carries its invocation only in the
+    // structured bracket/span context.
+    let mut inv_ids: HashSet<String> = all_refs
         .iter()
         .filter(|r| {
             matches!(
@@ -200,6 +203,11 @@ async fn build_log_timeline(
         })
         .map(|r| r.value.clone())
         .collect();
+    inv_ids.extend(
+        lines
+            .iter()
+            .filter_map(|line| line.parsed.invocation_id.clone()),
+    );
 
     if inv_ids.is_empty() {
         return (

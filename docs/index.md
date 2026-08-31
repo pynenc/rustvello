@@ -13,6 +13,7 @@
 installation
 getting_started
 architecture
+workflows
 configuration/index
 monitoring/index
 migration-0.2
@@ -131,7 +132,7 @@ See the [pynenc documentation](https://docs.pynenc.org) for the full Python API.
 :gutter: 3
 
 ::::{grid-item-card} Invocation Lifecycle
-Every task call becomes a tracked **invocation** through an 11-state FSM:
+Every task call becomes a tracked **invocation** through a 13-state FSM:
 `Registered → Pending → Running → Success/Failed/Retry`. Ownership is
 recorded per runner, and recovery re-queues stale invocations automatically.
 

@@ -94,10 +94,13 @@ impl Database {
             CREATE TABLE IF NOT EXISTS broker_queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 invocation_id TEXT NOT NULL,
+                task_id TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_broker_queue_created
                 ON broker_queue(created_at);
+            CREATE INDEX IF NOT EXISTS idx_broker_queue_task
+                ON broker_queue(task_id, id);
 
             -- Invocations
             CREATE TABLE IF NOT EXISTS invocations (
@@ -265,6 +268,43 @@ impl Database {
                 claimed_at TEXT NOT NULL
             );
 
+            -- Durable trigger monitoring records
+            CREATE TABLE IF NOT EXISTS trg_events (
+                event_id TEXT PRIMARY KEY,
+                event_code TEXT NOT NULL,
+                event_timestamp TEXT NOT NULL,
+                emitted_by_invocation_id TEXT,
+                event_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_trg_events_code_time
+                ON trg_events(event_code, event_timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_trg_events_emitter
+                ON trg_events(emitted_by_invocation_id, event_timestamp DESC);
+            CREATE TABLE IF NOT EXISTS trg_trigger_runs (
+                trigger_run_id TEXT PRIMARY KEY,
+                claimed_at TEXT NOT NULL,
+                triggered_invocation_id TEXT,
+                run_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_trg_runs_claimed
+                ON trg_trigger_runs(claimed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_trg_runs_triggered_invocation
+                ON trg_trigger_runs(triggered_invocation_id);
+            CREATE TABLE IF NOT EXISTS trg_trigger_run_events (
+                trigger_run_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                PRIMARY KEY (trigger_run_id, event_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_trg_run_events_event
+                ON trg_trigger_run_events(event_id);
+            CREATE TABLE IF NOT EXISTS trg_trigger_run_sources (
+                trigger_run_id TEXT NOT NULL,
+                invocation_id TEXT NOT NULL,
+                PRIMARY KEY (trigger_run_id, invocation_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_trg_run_sources_invocation
+                ON trg_trigger_run_sources(invocation_id);
+
             -- Workflow runs (discovery + tracking)
             CREATE TABLE IF NOT EXISTS workflow_runs (
                 workflow_id TEXT PRIMARY KEY,
@@ -329,6 +369,13 @@ impl Database {
         // ALTER TABLE … ADD COLUMN is a no-op if the column already exists in
         // SQLite (returns error which we ignore).
         let _ = conn.execute_batch("ALTER TABLE trg_conditions ADD COLUMN event_code TEXT");
+        // Migration: retain task-aware routing for databases created before the
+        // queue stored the task ID. Legacy rows remain global and can still be
+        // matched through the invocations table.
+        let _ = conn.execute_batch("ALTER TABLE broker_queue ADD COLUMN task_id TEXT");
+        let _ = conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_broker_queue_task ON broker_queue(task_id, id)",
+        );
 
         Ok(())
     }

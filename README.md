@@ -65,14 +65,14 @@ For the full architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Key Features
 
 - **Typed Task System**: proc-macro `#[rustvello::task]` generates serializable params, deterministic call IDs, and compile-time auto-discovery via `inventory`
-- **Invocation State Machine**: 14-state FSM with guarded transitions, ownership tracking, and automatic recovery
+- **Invocation State Machine**: 13-state FSM with guarded transitions, ownership tracking, and automatic recovery
 - **Pluggable Backends**: Swap between in-memory, SQLite, Redis, PostgreSQL, MongoDB, and RabbitMQ backends via feature flags
 - **Concurrency Control**: Four levels (Unlimited, Task, Argument, None) enforced at both registration and execution time
-- **Trigger System**: Event-driven and cron-scheduled task execution with AND/OR condition composition
+- **Trigger System**: Event-driven and cron-scheduled task execution with durable event/run evidence in memory and SQLite
 - **Client Data Store**: SHA-256 content-addressed external storage for large arguments/results with LRU caching
-- **Workflow System**: Parent-child invocation tracking with `WorkflowIdentity` and `tokio::task_local!` context propagation
+- **Workflow System**: Explicit `#[rustvello::workflow]` roots, child identity propagation, and root-scoped deterministic replay
 - **Recovery & Heartbeat**: Automatic detection and re-routing of stale invocations from crashed runners
-- **Monitoring Dashboard**: Browser-based UI for inspecting invocations, runners, workflows, and timelines (Axum + Askama + HTMX)
+- **Monitoring Dashboard**: Browser-based UI for invocations, runners, workflows, trigger evidence, and timelines (Axum + Askama + HTMX)
 - **Cross-Language Support**: Language-tagged `TaskId`, `ForeignTask` trait, and broker language-aware routing for Python ↔ Rust interop
 - **Builder Pattern**: Fluent configuration with env var overrides (`RUSTVELLO__*`), TOML file support, and `.memory()`/`.sqlite()` presets
 - **Python Bindings**: Full PyO3 bridge for standalone Python usage and optional pynenc integration
@@ -101,7 +101,7 @@ Feature flags:
 
 ```toml
 [dependencies]
-rustvello = { version = "0.1.0", features = ["full"] }
+rustvello = { version = "0.3.1", features = ["full"] }
 ```
 
 ### Python

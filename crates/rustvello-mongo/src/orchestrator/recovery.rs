@@ -8,7 +8,9 @@ use rustvello_core::orchestrator::{
 };
 use rustvello_proto::identifiers::{InvocationId, RunnerId};
 
-use super::{deserialize_record, MongoOrchestrator, HEARTBEAT_COL, STATUS_COL};
+use super::{
+    deserialize_record, MongoOrchestrator, ATOMIC_TIMELINE_COL, HEARTBEAT_COL, STATUS_COL,
+};
 use crate::connection::mongo_err;
 
 #[async_trait]
@@ -168,14 +170,93 @@ impl OrchestratorRecovery for MongoOrchestrator {
 
     async fn record_atomic_service_execution(
         &self,
-        _runner_id: &RunnerId,
-        _start: DateTime<Utc>,
-        _end: DateTime<Utc>,
+        runner_id: &RunnerId,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
     ) -> RustvelloResult<()> {
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(ATOMIC_TIMELINE_COL);
+        col.insert_one(doc! {
+            "runner_id": runner_id.to_string(),
+            "start": mongodb::bson::DateTime::from_millis(start.timestamp_millis()),
+            "end": mongodb::bson::DateTime::from_millis(end.timestamp_millis()),
+        })
+        .await
+        .map_err(mongo_err)?;
+
+        // Keep monitoring storage bounded. The retention cleanup is best effort
+        // under concurrent writers; the read contract remains newest 200.
+        let options = mongodb::options::FindOptions::builder()
+            .sort(doc! { "start": -1, "_id": -1 })
+            .skip(Some(200))
+            .build();
+        let mut cursor = col
+            .find(doc! {})
+            .with_options(options)
+            .await
+            .map_err(mongo_err)?;
+        let mut stale_ids = Vec::new();
+        use futures_util::StreamExt;
+        while let Some(doc_result) = StreamExt::next(&mut cursor).await {
+            let d = doc_result.map_err(mongo_err)?;
+            if let Some(id) = d.get("_id") {
+                stale_ids.push(id.clone());
+            }
+        }
+        if !stale_ids.is_empty() {
+            col.delete_many(doc! { "_id": { "$in": stale_ids } })
+                .await
+                .map_err(mongo_err)?;
+        }
         Ok(())
     }
 
     async fn get_atomic_service_timeline(&self) -> RustvelloResult<Vec<AtomicServiceExecution>> {
-        Ok(Vec::new())
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(ATOMIC_TIMELINE_COL);
+        let options = mongodb::options::FindOptions::builder()
+            .sort(doc! { "start": -1, "_id": -1 })
+            .limit(Some(200))
+            .build();
+        let mut cursor = col
+            .find(doc! {})
+            .with_options(options)
+            .await
+            .map_err(mongo_err)?;
+        let mut result = Vec::new();
+        use futures_util::StreamExt;
+        while let Some(doc_result) = StreamExt::next(&mut cursor).await {
+            let d = doc_result.map_err(mongo_err)?;
+            let start = d
+                .get_datetime("start")
+                .map_err(|e| rustvello_core::error::RustvelloError::state_backend(e.to_string()))?;
+            let end = d
+                .get_datetime("end")
+                .map_err(|e| rustvello_core::error::RustvelloError::state_backend(e.to_string()))?;
+            let start = DateTime::<Utc>::from_timestamp_millis(start.timestamp_millis())
+                .ok_or_else(|| {
+                    rustvello_core::error::RustvelloError::state_backend(
+                        "invalid atomic service start timestamp",
+                    )
+                })?;
+            let end = DateTime::<Utc>::from_timestamp_millis(end.timestamp_millis()).ok_or_else(
+                || {
+                    rustvello_core::error::RustvelloError::state_backend(
+                        "invalid atomic service end timestamp",
+                    )
+                },
+            )?;
+            result.push(AtomicServiceExecution {
+                runner_id: d
+                    .get_str("runner_id")
+                    .map_err(|e| {
+                        rustvello_core::error::RustvelloError::state_backend(e.to_string())
+                    })?
+                    .to_string(),
+                start,
+                end,
+            });
+        }
+        Ok(result)
     }
 }

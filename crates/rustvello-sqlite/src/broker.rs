@@ -38,6 +38,26 @@ impl Broker for SqliteBroker {
         .await
     }
 
+    async fn route_invocation_for_task(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: &TaskId,
+    ) -> RustvelloResult<()> {
+        let db = Arc::clone(&self.db);
+        let id = invocation_id.clone();
+        let task_id = task_id.clone();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            conn.execute(
+                "INSERT INTO broker_queue (invocation_id, task_id) VALUES (?1, ?2)",
+                rusqlite::params![id.as_str(), task_id.to_string()],
+            )
+            .map_err(sql_err)?;
+            Ok(())
+        })
+        .await
+    }
+
     async fn retrieve_invocation(
         &self,
         task_id: Option<&TaskId>,
@@ -52,8 +72,8 @@ impl Broker for SqliteBroker {
             let result: Option<(i64, String)> = if let Some(ref tid) = task_id {
                 tx.query_row(
                     "SELECT bq.id, bq.invocation_id FROM broker_queue bq \
-                     JOIN invocations inv ON bq.invocation_id = inv.invocation_id \
-                     WHERE inv.task_id = ?1 \
+                     LEFT JOIN invocations inv ON bq.invocation_id = inv.invocation_id \
+                     WHERE (bq.task_id = ?1 OR (bq.task_id IS NULL AND inv.task_id = ?1)) \
                      ORDER BY bq.id ASC LIMIT 1",
                     [&tid.to_string()],
                     |row| Ok((row.get(0)?, row.get(1)?)),
@@ -88,8 +108,8 @@ impl Broker for SqliteBroker {
             let count: i64 = if let Some(ref tid) = task_id {
                 conn.query_row(
                     "SELECT COUNT(*) FROM broker_queue bq \
-                     JOIN invocations inv ON bq.invocation_id = inv.invocation_id \
-                     WHERE inv.task_id = ?1",
+                     LEFT JOIN invocations inv ON bq.invocation_id = inv.invocation_id \
+                     WHERE (bq.task_id = ?1 OR (bq.task_id IS NULL AND inv.task_id = ?1))",
                     [&tid.to_string()],
                     |row| row.get(0),
                 )
@@ -110,10 +130,8 @@ impl Broker for SqliteBroker {
             let conn = db.conn.lock().map_err(lock_err)?;
             if let Some(ref tid) = task_id {
                 conn.execute(
-                    "DELETE FROM broker_queue WHERE invocation_id IN (\
-                     SELECT bq.invocation_id FROM broker_queue bq \
-                     JOIN invocations inv ON bq.invocation_id = inv.invocation_id \
-                     WHERE inv.task_id = ?1)",
+                    "DELETE FROM broker_queue WHERE task_id = ?1 OR (task_id IS NULL AND invocation_id IN (\
+                     SELECT inv.invocation_id FROM invocations inv WHERE inv.task_id = ?1))",
                     [&tid.to_string()],
                 )
                 .map_err(sql_err)?;
@@ -136,13 +154,11 @@ impl Broker for SqliteBroker {
             let conn = db.conn.lock().map_err(lock_err)?;
             let tx = conn.unchecked_transaction().map_err(sql_err)?;
 
-            // First check the global queue: items without an invocations table entry
-            // (routed via route_invocation without task context).
+            // Global routing is available to every language worker.
             let global: Option<(i64, String)> = tx
                 .query_row(
                     "SELECT bq.id, bq.invocation_id FROM broker_queue bq \
-                     LEFT JOIN invocations inv ON bq.invocation_id = inv.invocation_id \
-                     WHERE inv.invocation_id IS NULL \
+                     WHERE bq.task_id IS NULL \
                      ORDER BY bq.id ASC LIMIT 1",
                     [],
                     |row| Ok((row.get(0)?, row.get(1)?)),
@@ -151,14 +167,21 @@ impl Broker for SqliteBroker {
 
             let result = if global.is_some() {
                 global
+            } else if language.is_empty() {
+                tx.query_row(
+                    "SELECT id, invocation_id FROM broker_queue \
+                     WHERE task_id IS NOT NULL AND task_id NOT LIKE '%::%' \
+                     ORDER BY id ASC LIMIT 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok()
             } else {
-                // Fall back to language-specific items.
                 let prefix = format!("{language}::");
                 tx.query_row(
-                    "SELECT bq.id, bq.invocation_id FROM broker_queue bq \
-                     JOIN invocations inv ON bq.invocation_id = inv.invocation_id \
-                     WHERE inv.task_id LIKE ?1 || '%' \
-                     ORDER BY bq.id ASC LIMIT 1",
+                    "SELECT id, invocation_id FROM broker_queue \
+                     WHERE task_id LIKE ?1 || '%' \
+                     ORDER BY id ASC LIMIT 1",
                     [&prefix],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )

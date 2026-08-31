@@ -8,9 +8,10 @@ use rustvello_core::trigger::TriggerStore;
 use rustvello_proto::identifiers::TaskId;
 use rustvello_proto::status::InvocationStatus;
 use rustvello_proto::trigger::{
-    ConditionContext, ConditionId, CronCondition, EventCondition, EventContext, ExceptionCondition,
-    ResultCondition, StatusCondition, TriggerCondition, TriggerDefinitionDTO, TriggerDefinitionId,
-    TriggerLogic, TriggerRunId, ValidCondition,
+    ConditionContext, ConditionId, CronCondition, EventCondition, EventContext, EventQuery,
+    EventRecord, ExceptionCondition, ResultCondition, StatusCondition, TriggerCondition,
+    TriggerDefinitionDTO, TriggerDefinitionId, TriggerLogic, TriggerRunId, TriggerRunParticipant,
+    TriggerRunQuery, TriggerRunRecord, ValidCondition,
 };
 
 use crate::helpers::test_task_id;
@@ -395,6 +396,65 @@ pub async fn test_get_all_conditions(store: &dyn TriggerStore) {
     );
 }
 
+/// Monitoring-capable stores preserve and query event/run relationships.
+pub async fn test_monitoring_records(store: &dyn TriggerStore) {
+    let event = EventRecord {
+        event_id: "suite-event".into(),
+        event_code: "suite-code".into(),
+        payload: serde_json::json!({"value": 1}),
+        timestamp: Utc::now(),
+        matched_condition_ids: vec![ConditionId::from("suite-condition")],
+        valid_condition_ids: vec!["suite-valid".into()],
+        triggered_invocation_ids: Vec::new(),
+        emitted_by_invocation_id: None,
+        emitted_by_task_id: None,
+        emitted_by_runner_id: None,
+    };
+    store.store_event(&event).await.unwrap();
+    let run = TriggerRunRecord {
+        trigger_run_id: TriggerRunId::from("suite-run"),
+        trigger_id: TriggerDefinitionId::from("suite-trigger"),
+        task_id: test_task_id("suite-target"),
+        logic: TriggerLogic::Or,
+        arguments: serde_json::json!({}),
+        participants: vec![TriggerRunParticipant {
+            context_type: "event".into(),
+            condition_id: ConditionId::from("suite-condition"),
+            valid_condition_id: "suite-valid".into(),
+            event_id: Some(event.event_id.clone()),
+            source_invocation_id: None,
+            context_summary: "suite-code".into(),
+        }],
+        claimed_at: Utc::now(),
+        executed_at: None,
+        triggered_invocation_id: None,
+        atomic_service_run_id: None,
+        atomic_service_runner_id: None,
+    };
+    store.store_trigger_run(&run).await.unwrap();
+
+    assert_eq!(
+        store
+            .get_events(&EventQuery {
+                event_code: Some("suite-code".into()),
+                ..EventQuery::default()
+            })
+            .await
+            .unwrap(),
+        vec![event]
+    );
+    assert_eq!(
+        store
+            .get_trigger_runs(&TriggerRunQuery {
+                event_id: Some("suite-event".into()),
+                ..TriggerRunQuery::default()
+            })
+            .await
+            .unwrap(),
+        vec![run]
+    );
+}
+
 /// Macro to generate all trigger suite tests for a given setup expression.
 ///
 /// # Example
@@ -502,6 +562,12 @@ macro_rules! trigger_suite {
         async fn suite_trigger_get_all_conditions() {
             let store = $setup;
             $crate::trigger::test_get_all_conditions(&store).await;
+        }
+
+        #[tokio::test]
+        async fn suite_trigger_monitoring_records() {
+            let store = $setup;
+            $crate::trigger::test_monitoring_records(&store).await;
         }
     };
 }
@@ -623,6 +689,13 @@ macro_rules! async_trigger_suite {
         async fn suite_trigger_get_all_conditions() {
             let (_c, store) = $setup.await;
             $crate::trigger::test_get_all_conditions(&store).await;
+        }
+
+        #[tokio::test]
+        #[ignore = "requires Docker"]
+        async fn suite_trigger_monitoring_records() {
+            let (_c, store) = $setup.await;
+            $crate::trigger::test_monitoring_records(&store).await;
         }
     };
 }

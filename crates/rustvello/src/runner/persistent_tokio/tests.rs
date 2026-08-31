@@ -10,6 +10,7 @@ use rustvello_proto::config::{AppConfig, TaskConfig};
 use rustvello_proto::identifiers::{InvocationId, RunnerId, TaskId};
 use rustvello_proto::invocation::InvocationDTO;
 use rustvello_proto::status::{ConcurrencyControlType, InvocationStatus};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -819,4 +820,107 @@ async fn test_cc_index_cleanup_on_success() {
         let status = orchestrator.get_invocation_status(&inv).await.unwrap();
         assert_eq!(status.status, InvocationStatus::Success);
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_cc_slot_is_atomic_across_runner_instances() {
+    let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
+    let orchestrator: Arc<dyn Orchestrator> =
+        Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
+    let state_backend: Arc<dyn StateBackend> =
+        Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+
+    let mut config = TaskConfig::default();
+    config.concurrency_control = ConcurrencyControlType::Task;
+    config.running_concurrency = Some(1);
+
+    let mut registry = TaskRegistry::new();
+    let active_for_task = Arc::clone(&active);
+    let peak_for_task = Arc::clone(&peak);
+    registry
+        .register(TaskDefinition::new(
+            TaskId::new("test", "contended"),
+            config,
+            Arc::new(move |_args: String| {
+                let now = active_for_task.fetch_add(1, Ordering::SeqCst) + 1;
+                peak_for_task.fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(100));
+                active_for_task.fetch_sub(1, Ordering::SeqCst);
+                Ok("null".to_string())
+            }),
+        ))
+        .unwrap();
+
+    let registry = Arc::new(registry);
+    let runner_a = PersistentTokioRunner::new(
+        "atomic-cc".to_string(),
+        AppConfig::default(),
+        Arc::clone(&broker),
+        Arc::clone(&orchestrator),
+        Arc::clone(&state_backend),
+        Arc::clone(&registry),
+        None,
+    );
+    let runner_b = PersistentTokioRunner::new(
+        "atomic-cc".to_string(),
+        AppConfig::default(),
+        Arc::clone(&broker),
+        Arc::clone(&orchestrator),
+        Arc::clone(&state_backend),
+        registry,
+        None,
+    );
+
+    let task_id = TaskId::new("test", "contended");
+    let first = submit_invocation(
+        &*orchestrator,
+        &*state_backend,
+        &*broker,
+        &task_id,
+        SerializedArguments::new(),
+    )
+    .await;
+    let second = submit_invocation(
+        &*orchestrator,
+        &*state_backend,
+        &*broker,
+        &task_id,
+        SerializedArguments::new(),
+    )
+    .await;
+
+    let a = tokio::spawn(async move { runner_a.run_one().await });
+    let b = tokio::spawn(async move { runner_b.run_one().await });
+    a.await.unwrap().unwrap();
+    b.await.unwrap().unwrap();
+
+    let statuses = [
+        orchestrator
+            .get_invocation_status(&first)
+            .await
+            .unwrap()
+            .status,
+        orchestrator
+            .get_invocation_status(&second)
+            .await
+            .unwrap()
+            .status,
+    ];
+    assert_eq!(peak.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == InvocationStatus::Success)
+            .count(),
+        1
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == InvocationStatus::ConcurrencyControlledFinal)
+            .count(),
+        1
+    );
 }

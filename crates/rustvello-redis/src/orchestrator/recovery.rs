@@ -201,14 +201,68 @@ impl OrchestratorRecovery for RedisOrchestrator {
 
     async fn record_atomic_service_execution(
         &self,
-        _runner_id: &RunnerId,
-        _start: DateTime<Utc>,
-        _end: DateTime<Utc>,
+        runner_id: &RunnerId,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
     ) -> RustvelloResult<()> {
-        Ok(())
+        let execution = AtomicServiceExecution {
+            runner_id: runner_id.to_string(),
+            start,
+            end,
+        };
+        let value = serde_json::to_string(&execution).map_err(|e| {
+            rustvello_core::error::RustvelloError::Serialization {
+                message: format!("atomic service execution: {e}"),
+            }
+        })?;
+
+        let mut conn = self.pool.conn().await?;
+        // The sequence suffix keeps identical executions distinct. The score
+        // gives reads deterministic newest-first ordering by execution start.
+        let sequence: i64 = conn
+            .incr(&self.atomic_timeline_sequence_key, 1i64)
+            .await
+            .map_err(redis_err)?;
+        let member = format!("{sequence}:{value}");
+        let score = start.timestamp_millis();
+
+        // ZADD + ZREMRANGEBYRANK is one transaction so concurrent runners
+        // cannot leave the bounded timeline over its retention limit.
+        redis::pipe()
+            .atomic()
+            .cmd("ZADD")
+            .arg(&self.atomic_timeline_key)
+            .arg(score)
+            .arg(member)
+            .cmd("ZREMRANGEBYRANK")
+            .arg(&self.atomic_timeline_key)
+            .arg(0)
+            .arg(-201)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(redis_err)
     }
 
     async fn get_atomic_service_timeline(&self) -> RustvelloResult<Vec<AtomicServiceExecution>> {
-        Ok(Vec::new())
+        let mut conn = self.pool.conn().await?;
+        let values: Vec<String> = conn
+            .zrevrange(&self.atomic_timeline_key, 0, 199)
+            .await
+            .map_err(redis_err)?;
+        values
+            .iter()
+            .map(|member| {
+                let (_, value) = member.split_once(':').ok_or_else(|| {
+                    rustvello_core::error::RustvelloError::Serialization {
+                        message: "invalid atomic service timeline member".into(),
+                    }
+                })?;
+                serde_json::from_str(value).map_err(|e| {
+                    rustvello_core::error::RustvelloError::Serialization {
+                        message: format!("atomic service execution: {e}"),
+                    }
+                })
+            })
+            .collect()
     }
 }

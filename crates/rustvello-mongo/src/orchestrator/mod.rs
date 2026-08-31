@@ -23,6 +23,8 @@ const STATUS_COL: &str = "orch_status";
 const WAITERS_COL: &str = "orch_waiters";
 const CC_COL: &str = "orch_concurrency";
 const HEARTBEAT_COL: &str = "orch_heartbeat";
+pub(crate) const ATOMIC_TIMELINE_COL: &str = "orch_atomic_service_timeline";
+pub(crate) const AUTO_PURGE_COL: &str = "orch_auto_purge";
 
 /// MongoDB-backed orchestrator for distributed invocation lifecycle management.
 #[non_exhaustive]

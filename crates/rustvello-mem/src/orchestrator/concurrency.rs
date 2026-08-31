@@ -127,6 +127,57 @@ impl OrchestratorConcurrency for MemOrchestrator {
         Ok(())
     }
 
+    async fn try_acquire_concurrency_slot(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: &TaskId,
+        task_config: &TaskConfig,
+        cc_args: Option<&SerializedArguments>,
+    ) -> RustvelloResult<bool> {
+        if task_config.concurrency_control == ConcurrencyControlType::Unlimited {
+            return Ok(true);
+        }
+
+        let mut state = self.state.lock().await;
+        let task_key = task_id.to_string();
+        let pairs = cc_args.cloned().unwrap_or_default().cc_arg_pairs();
+        let mut intersection: Option<HashSet<Arc<str>>> = None;
+        for (key, value) in &pairs {
+            let indexed = state
+                .cc_index
+                .get(&(task_key.clone(), key.clone(), value.clone()))
+                .cloned()
+                .unwrap_or_default();
+            intersection = Some(match intersection {
+                Some(previous) => previous.intersection(&indexed).cloned().collect(),
+                None => indexed,
+            });
+        }
+
+        let reserved = intersection.map_or(0, |members| members.len());
+        let limit = task_config.running_concurrency.unwrap_or(1) as usize;
+        if reserved >= limit {
+            return Ok(false);
+        }
+
+        let mut triples = Vec::with_capacity(pairs.len());
+        for (key, value) in pairs {
+            let triple = (task_key.clone(), key, value);
+            state
+                .cc_index
+                .entry(triple.clone())
+                .or_default()
+                .insert(Arc::from(invocation_id.as_str()));
+            triples.push(triple);
+        }
+        state
+            .cc_reverse
+            .entry(Arc::from(invocation_id.as_str()))
+            .or_default()
+            .extend(triples);
+        Ok(true)
+    }
+
     async fn remove_from_concurrency_index(
         &self,
         invocation_id: &InvocationId,

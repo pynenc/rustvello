@@ -48,7 +48,6 @@ fn status_hex_color(status: &str) -> Option<&'static str> {
         "RUNNING" => Some("#084298"),
         "RUNNING_RECOVERY" => Some("#6a3d9a"),
         "PAUSED" => Some("#3d0a91"),
-        "RESUMED" => Some("#1565c0"),
         "KILLED" => Some("#6c757d"),
         "SUCCESS" => Some("#0f5132"),
         "FAILED" => Some("#842029"),
