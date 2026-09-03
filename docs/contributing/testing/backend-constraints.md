@@ -16,15 +16,15 @@ store.
 
 These are deployment and storage facts, not Rustvello feature switches:
 
-| Backend     | Constraint                                                                                                                                                                                           |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Memory      | Process-local and non-durable. Useful for tests and local development.                                                                                                                               |
-| SQLite      | Local single-node storage. It still implements the complete Rustvello contracts, including task-aware and language-aware broker routing.                                                             |
-| Redis       | Requires a reachable Redis service. Atomic Redis commands and scripts provide the coordination primitives used by Rustvello.                                                                         |
-| PostgreSQL  | Requires a reachable PostgreSQL service. Transactions and indexes provide durable multi-record coordination.                                                                                         |
-| MongoDB     | Requires a MongoDB deployment. Atomic single-document operations are always available; multi-document transactions depend on the server deployment.                                                  |
-| MongoDB 3.6 | Legacy server/driver path. It has atomic single-document operations but no multi-document transactions; implementations must use conditional single-document updates and explicit consistency logic. |
-| RabbitMQ    | Broker-only message transport. It is suitable when queue delivery is the required component, not as a replacement for the other backend contracts.                                                   |
+| Backend     | Constraint                                                                                                                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Memory      | Process-local and non-durable. Useful for tests and local development.                                                                                                                            |
+| SQLite      | Local single-node storage. It still implements the complete Rustvello contracts, including task-aware and language-aware broker routing.                                                          |
+| Redis       | Requires a reachable Redis service. Atomic Redis commands and scripts provide the coordination primitives used by Rustvello.                                                                      |
+| PostgreSQL  | Requires a reachable PostgreSQL service. Transactions and indexes provide durable multi-record coordination.                                                                                      |
+| MongoDB     | Requires a MongoDB deployment. Rustvello uses a short atomic-document mutex for concurrency admission, so full concurrency control works on standalone servers as well as replica sets.           |
+| MongoDB 3.6 | Legacy server/driver path. It has atomic single-document operations but no multi-document transactions; Rustvello uses conditional updates and the same mutex coordination for its full contract. |
+| RabbitMQ    | Broker-only message transport. It is suitable when queue delivery is the required component, not as a replacement for the other backend contracts.                                                |
 
 A storage limitation must be handled in the implementation and documented as a
 backend fact. It must not silently remove a required Rustvello operation.

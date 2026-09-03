@@ -541,6 +541,10 @@ async fn test_invocations_timeline() {
         body.contains("data-timeline-start=") && body.contains("data-timeline-end="),
         "should expose SVG time bounds for drag-to-zoom"
     );
+    let timeline_position = body.find("id=\"timeline-container\"").unwrap();
+    let histogram_position = body.find("data-histogram-panel").unwrap();
+    let details_position = body.find("id=\"invocation-details-panel\"").unwrap();
+    assert!(timeline_position < histogram_position && histogram_position < details_position);
     assert!(body.contains("Apply"), "should have filter Apply button");
 
     handle_keep_alive(server).await;
@@ -591,6 +595,36 @@ async fn test_timeline_renders_complete_invocation_history() {
             "timeline should render {status} for the complete invocation history"
         );
     }
+    assert!(
+        body.contains("data-histogram-start=") && body.contains("data-bucket-start="),
+        "should render an aligned occupancy histogram"
+    );
+    assert!(
+        body.contains("data-timeline-left=\"320.0\"")
+            && body.contains("data-histogram-left=\"320\"")
+            && body.contains("data-histogram-right=\"1980\""),
+        "timeline and histogram should share the same plot bounds"
+    );
+    assert!(
+        body.contains("data-statuses=\"pending,running\"") && body.contains("stroke=\"#e9ecef\""),
+        "default occupancy should show pending/running with a visible scale"
+    );
+
+    let history_filtered = server
+        .client()
+        .get(format!(
+            "{}/invocations?inv_ids={inv_id}&status=Pending%2CRunning&status_mode=history",
+            server.url
+        ))
+        .send()
+        .await
+        .expect("history status filter request");
+    assert_eq!(history_filtered.status(), 200);
+    let history_body = history_filtered.text().await.expect("history filter body");
+    assert!(
+        history_body.contains(&inv_ids[0][..8]),
+        "historical pending/running status should match a completed invocation"
+    );
 
     handle_keep_alive(server).await;
 }

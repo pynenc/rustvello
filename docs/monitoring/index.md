@@ -71,6 +71,23 @@ loads complete histories only for invocations that intersect the visible range.
 This preserves status transitions that cross the left edge while avoiding an
 unbounded scan of old invocation histories.
 
+### Task Occupancy Histograms
+
+The timeline histogram counts invocations that occupied registered, pending,
+or running states during each bucket. It is aligned to the timeline's UTC bounds
+and plot margins, so each bar sits below the corresponding execution period.
+Bars are stacked by task type with a stable task legend shared across selected
+workflow runs. Status checkboxes update the URL; hovering shows exact bounds,
+category counts, and task counts; selecting a bar opens the invocation list with
+matching custom time, status, workflow, task, and invocation filters.
+
+Workflow detail pages render the latest three run histograms by default and
+allow up to ten selected runs. The Log Explorer uses the same model for the
+invocations resolved from a pasted log block. All three surfaces use complete
+status histories and half-open occupancy intervals rather than counting starts
+or completions. Bars are capped at the timeline marker diameter and show up to
+12 task types before aggregating the tail as neutral-grey `Other`.
+
 Rustvello does not expose Pynenc's system-task or atomic-service visibility
 toggles in this view because those are not separate invocation categories in
 the Rustvello monitoring model. Atomic-service execution has its own dedicated
@@ -132,7 +149,7 @@ Open a browser at `http://localhost:8000` to view the dashboard.
 
 ```toml
 [dependencies]
-rustvello-monitoring = "0.3.1"
+rustvello-monitoring = "0.4.0"
 ```
 
 The monitoring crate does **not** require `rustvello`'s feature flags — it depends
@@ -147,9 +164,9 @@ to wire Prometheus metrics alongside the dashboard:
 
 ```toml
 [dependencies]
-rustvello = { version = "0.3.1", features = ["prometheus"] }
-rustvello-prometheus = "0.3.1"
-rustvello-monitoring = "0.3.1"
+rustvello = { version = "0.4.0", features = ["prometheus"] }
+rustvello-prometheus = "0.4.0"
+rustvello-monitoring = "0.4.0"
 ```
 
 The dashboard automatically serves the `/metrics` endpoint when the Prometheus

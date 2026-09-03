@@ -72,6 +72,8 @@ use syn::{
 /// | `parallel_batch_size` | `usize` | Batch size for parallelize()                   |
 /// | `reroute_on_cc` | `bool`     | Reroute when hitting concurrency limits          |
 /// | `blocking`      | `bool`     | Run on a blocking thread                         |
+/// | `queue`         | `&str`     | Logical broker queue                             |
+/// | `priority`      | `f64`      | Broker priority from -100.0 through 100.0       |
 #[proc_macro_attribute]
 pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attrs = parse_macro_input!(attr as TaskAttrs);
@@ -118,6 +120,8 @@ struct TaskAttrs {
     parallel_batch_size: Option<usize>,
     reroute_on_cc: Option<bool>,
     blocking: Option<bool>,
+    queue: Option<String>,
+    priority: Option<f64>,
 }
 
 impl Parse for TaskAttrs {
@@ -134,6 +138,8 @@ impl Parse for TaskAttrs {
         let mut parallel_batch_size = None;
         let mut reroute_on_cc = None;
         let mut blocking = None;
+        let mut queue = None;
+        let mut priority = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -198,6 +204,34 @@ impl Parse for TaskAttrs {
                     let lit: LitBool = input.parse()?;
                     blocking = Some(lit.value());
                 }
+                "queue" => {
+                    check_dup!(queue);
+                    let lit: LitStr = input.parse()?;
+                    queue = Some(lit.value());
+                }
+                "priority" => {
+                    check_dup!(priority);
+                    let negative = input.parse::<Option<Token![-]>>()?.is_some();
+                    let lit: syn::Lit = input.parse()?;
+                    let magnitude = match lit {
+                        syn::Lit::Float(lit) => lit.base10_parse::<f64>()?,
+                        syn::Lit::Int(lit) => lit.base10_parse::<f64>()?,
+                        other => {
+                            return Err(syn::Error::new_spanned(
+                                other,
+                                "priority must be a numeric literal",
+                            ));
+                        }
+                    };
+                    let value = if negative { -magnitude } else { magnitude };
+                    if !(-100.0..=100.0).contains(&value) {
+                        return Err(syn::Error::new(
+                            key.span(),
+                            "priority must be between -100.0 and 100.0",
+                        ));
+                    }
+                    priority = Some(value);
+                }
                 "disable_cache_args" => {
                     check_dup!(disable_cache_args);
                     let content;
@@ -238,6 +272,8 @@ impl Parse for TaskAttrs {
                         "parallel_batch_size",
                         "reroute_on_cc",
                         "blocking",
+                        "queue",
+                        "priority",
                     ];
                     let suggestion = known
                         .iter()
@@ -285,6 +321,8 @@ impl Parse for TaskAttrs {
             parallel_batch_size,
             reroute_on_cc,
             blocking,
+            queue,
+            priority,
         })
     }
 }
@@ -724,6 +762,14 @@ fn build_config(
 
     if let Some(blocking) = attrs.blocking {
         setters.push(quote! { config.blocking = #blocking; });
+    }
+
+    if let Some(ref queue) = attrs.queue {
+        setters.push(quote! { config.queue = #queue.to_string(); });
+    }
+
+    if let Some(priority) = attrs.priority {
+        setters.push(quote! { config.priority = #priority; });
     }
 
     if attrs.is_workflow_task {

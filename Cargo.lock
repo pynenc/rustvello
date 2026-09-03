@@ -3482,7 +3482,7 @@ dependencies = [
 
 [[package]]
 name = "py-rustvello"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "pyo3",
  "rustvello-python",
@@ -4077,15 +4077,17 @@ dependencies = [
 
 [[package]]
 name = "rustvello"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "chrono",
  "cistell-core",
  "criterion",
  "croner",
+ "glob",
  "inventory",
  "proptest",
+ "rand 0.8.5",
  "rayon",
  "rustvello-core",
  "rustvello-macros",
@@ -4111,7 +4113,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-cli"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -4126,7 +4128,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-core"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4146,7 +4148,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-macros"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4155,7 +4157,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-mem"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4170,7 +4172,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-mongo"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4189,7 +4191,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-mongo3"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4207,7 +4209,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-monitoring"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "askama",
  "async-trait",
@@ -4225,12 +4227,13 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
 [[package]]
 name = "rustvello-postgres"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4250,7 +4253,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-prometheus"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
@@ -4261,7 +4264,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-proto"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "cistell-core",
@@ -4275,9 +4278,10 @@ dependencies = [
 
 [[package]]
 name = "rustvello-python"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "chrono",
+ "glob",
  "pyo3",
  "rustvello",
  "rustvello-core",
@@ -4296,13 +4300,15 @@ dependencies = [
 
 [[package]]
 name = "rustvello-rabbitmq"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "lapin",
  "rustvello-core",
  "rustvello-proto",
  "rustvello-test-suite",
+ "serde",
+ "serde_json",
  "testcontainers",
  "testcontainers-modules",
  "tokio",
@@ -4311,7 +4317,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-redis"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4329,7 +4335,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-sqlite"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4346,7 +4352,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-test-suite"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "chrono",

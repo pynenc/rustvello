@@ -22,6 +22,7 @@ all-backends = ["sqlite", "postgres", "redis", "mongodb", "mongodb3", "rabbitmq"
 
 [dependencies]
 rustvello = { workspace = true }
+glob = { workspace = true }
 rustvello-core = { workspace = true }
 rustvello-mem = { workspace = true }
 rustvello-proto = { workspace = true }

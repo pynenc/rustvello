@@ -179,9 +179,13 @@ impl OrchestratorCoordinator {
         &self,
         invocations: &[(InvocationDTO, CallDTO)],
         runner_id: &RunnerId,
+        routes: &[(String, f64)],
     ) -> RustvelloResult<()> {
-        let mut inv_ids = Vec::with_capacity(invocations.len());
-
+        if invocations.len() != routes.len() {
+            return Err(rustvello_core::error::RustvelloError::Internal {
+                message: "invocation and routing counts differ".to_owned(),
+            });
+        }
         for (inv_dto, call_dto) in invocations {
             self.state_backend
                 .upsert_invocation(inv_dto, call_dto)
@@ -206,11 +210,18 @@ impl OrchestratorCoordinator {
                 };
                 tm.report_status_change(&ctx).await?;
             }
-
-            inv_ids.push(inv_dto.invocation_id.clone());
         }
 
-        self.broker.route_invocations(&inv_ids).await?;
+        for ((invocation, _), (queue_name, priority)) in invocations.iter().zip(routes) {
+            self.broker
+                .route_invocation_with_options(
+                    &invocation.invocation_id,
+                    Some(&invocation.task_id),
+                    queue_name,
+                    *priority,
+                )
+                .await?;
+        }
         Ok(())
     }
 
@@ -371,14 +382,24 @@ impl OrchestratorCoordinator {
         &self,
         invocation_id: &InvocationId,
         runner_id: &RunnerId,
+        queue_name: &str,
+        priority: f64,
     ) -> RustvelloResult<()> {
-        let (task_id, arguments) = if self.trigger_manager.is_some() {
-            self.get_trigger_context(invocation_id).await
-        } else {
-            (TaskId::new("_", "_"), BTreeMap::new())
-        };
-        self.set_invocation_retry_with_context(invocation_id, runner_id, &task_id, arguments)
-            .await
+        let task_id = self
+            .state_backend
+            .get_invocation(invocation_id)
+            .await?
+            .task_id;
+        let arguments = self.get_invocation_arguments(invocation_id).await;
+        self.set_invocation_retry_with_context(
+            invocation_id,
+            runner_id,
+            &task_id,
+            arguments,
+            queue_name,
+            priority,
+        )
+        .await
     }
 
     /// Set an invocation for retry with explicit context.
@@ -392,6 +413,8 @@ impl OrchestratorCoordinator {
         runner_id: &RunnerId,
         task_id: &TaskId,
         arguments: BTreeMap<String, String>,
+        queue_name: &str,
+        priority: f64,
     ) -> RustvelloResult<()> {
         self.set_invocation_status_with_context(
             invocation_id,
@@ -406,7 +429,9 @@ impl OrchestratorCoordinator {
             .increment_invocation_retries(invocation_id)
             .await?;
 
-        self.broker.route_invocation(invocation_id).await?;
+        self.broker
+            .route_invocation_with_options(invocation_id, Some(task_id), queue_name, priority)
+            .await?;
         Ok(())
     }
 

@@ -1,5 +1,4 @@
-# Keep PyO3's test interpreter aligned with the Python environment used by
-# maturin. This avoids accidentally linking Rust tests against macOS system Python.
+# Interpreter used by the Python compatibility metadata helper.
 PYTHON_BIN ?= $(CURDIR)/.venv/bin/python
 
 .PHONY: install
@@ -43,20 +42,7 @@ python-versions: ## Print Python versions supported by py-rustvello metadata
 .PHONY: test-rust
 test-rust: ## Run Rust tests
 	@echo "🚀 Testing Rust: Running cargo test"
-	@PYTHON_BIN="$(PYTHON_BIN)"; \
-	if [ ! -x "$$PYTHON_BIN" ]; then \
-		echo "Python environment not found at $$PYTHON_BIN; run 'make install' first."; \
-		exit 1; \
-	fi; \
-	PYTHON_PREFIX="$$("$$PYTHON_BIN" -c 'from pathlib import Path; import sys; print(Path(sys.executable).resolve().parent.parent)')"; \
-	PYTHON_LIB_DIR="$$PYTHON_PREFIX/lib"; \
-	echo "   Using Python: $$PYTHON_BIN"; \
-	PYTHONHOME="$$PYTHON_PREFIX" \
-	DYLD_FALLBACK_LIBRARY_PATH="$$PYTHON_LIB_DIR$${DYLD_FALLBACK_LIBRARY_PATH:+:$$DYLD_FALLBACK_LIBRARY_PATH}" \
-	LD_LIBRARY_PATH="$$PYTHON_LIB_DIR$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}" \
-	LIBRARY_PATH="$$PYTHON_LIB_DIR$${LIBRARY_PATH:+:$$LIBRARY_PATH}" \
-	PYO3_PYTHON="$$PYTHON_BIN" \
-	cargo test --workspace --exclude py-rustvello
+	@cargo test --workspace --exclude py-rustvello --exclude rustvello-python
 
 .PHONY: test
 test: test-rust test-python ## Run all tests (Rust + Python)

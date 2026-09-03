@@ -208,30 +208,19 @@ impl RustvelloApp {
         let env_override = self.get_or_load_env_override(task_id.name());
         env_override.apply_to(&mut config);
 
-        config
-    }
+        config.priority = self
+            .config
+            .priority_rules
+            .iter()
+            .filter(|rule| {
+                glob::Pattern::new(&rule.task_id)
+                    .is_ok_and(|pattern| pattern.matches(&task_id.to_string()))
+            })
+            .map(|rule| rule.priority)
+            .max_by(f64::total_cmp)
+            .unwrap_or(config.priority);
 
-    /// Resolve whether the task explicitly defines a workflow root.
-    ///
-    /// Priority: env > per-task override > global defaults > base config
-    /// (matching `resolve_task_config` layering order).
-    fn resolve_is_workflow_task(&self, task_id: &TaskId, base: &TaskConfig) -> bool {
-        // Highest priority: env override
-        let env_override = self.get_or_load_env_override(task_id.name());
-        if let Some(v) = env_override.is_workflow_task {
-            return v;
-        }
-        // Then per-task config override
-        if let Some(per_task) = self.task_config_overrides.get(task_id.name()) {
-            if let Some(v) = per_task.is_workflow_task {
-                return v;
-            }
-        }
-        // Then global defaults
-        if let Some(v) = self.task_defaults_override.is_workflow_task {
-            return v;
-        }
-        base.is_workflow_task
+        config
     }
 
     /// Get or lazily load the env-based config override for a task name.
@@ -250,6 +239,8 @@ impl RustvelloApp {
 
         // Build an override from only the fields that changed
         let env_override = Arc::new(TaskConfigOverride {
+            queue: (config.queue != base.queue).then_some(config.queue),
+            priority: (config.priority != base.priority).then_some(config.priority),
             max_retries: (config.max_retries != base.max_retries).then_some(config.max_retries),
             concurrency_control: (config.concurrency_control != base.concurrency_control)
                 .then_some(config.concurrency_control),

@@ -5,6 +5,7 @@
 
 pub mod data;
 pub mod family_tree;
+pub mod histogram;
 pub mod log_explorer;
 pub mod routes;
 pub mod server;

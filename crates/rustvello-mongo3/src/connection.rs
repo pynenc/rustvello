@@ -88,6 +88,33 @@ impl MongoPool {
 async fn ensure_indexes(db: &Database) -> Result<(), mongodb::error::Error> {
     use mongodb::IndexModel;
 
+    let broker_col = db.collection::<mongodb::bson::Document>("broker_queue");
+    broker_col
+        .create_index(
+            IndexModel::builder()
+                .keys(mongodb::bson::doc! {
+                    "queue_name": 1,
+                    "priority": -1,
+                    "_id": 1,
+                })
+                .build(),
+            None,
+        )
+        .await?;
+    broker_col
+        .create_index(
+            IndexModel::builder()
+                .keys(mongodb::bson::doc! {
+                    "queue_name": 1,
+                    "task_id": 1,
+                    "priority": -1,
+                    "_id": 1,
+                })
+                .build(),
+            None,
+        )
+        .await?;
+
     let status_col = db.collection::<mongodb::bson::Document>("orch_status");
     status_col
         .create_index(

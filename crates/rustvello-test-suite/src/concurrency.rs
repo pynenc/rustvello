@@ -229,6 +229,33 @@ pub async fn test_sentinel_empty_args(orch: &dyn Orchestrator) {
     );
 }
 
+/// Empty task-level arguments reserve one atomic slot just like populated arguments.
+pub async fn test_atomic_sentinel_empty_args(orch: &dyn Orchestrator) {
+    let task_id = test_task_id("cc_atomic_sentinel");
+    let mut config = TaskConfig::default();
+    config.concurrency_control = ConcurrencyControlType::Task;
+    config.running_concurrency = Some(1);
+    let args = SerializedArguments::new();
+
+    let first = orch
+        .register_invocation(&CallDTO::new(task_id.clone(), args.clone()))
+        .await
+        .unwrap();
+    let second = orch
+        .register_invocation(&CallDTO::new(task_id.clone(), args.clone()))
+        .await
+        .unwrap();
+
+    assert!(orch
+        .try_acquire_concurrency_slot(&first, &task_id, &config, Some(&args))
+        .await
+        .unwrap());
+    assert!(!orch
+        .try_acquire_concurrency_slot(&second, &task_id, &config, Some(&args))
+        .await
+        .unwrap());
+}
+
 /// Macro to generate all concurrency control suite tests.
 ///
 /// # Example
@@ -277,6 +304,12 @@ macro_rules! concurrency_suite {
             let orch = $setup;
             $crate::concurrency::test_sentinel_empty_args(&orch).await;
         }
+
+        #[tokio::test]
+        async fn suite_cc_atomic_sentinel_empty_args() {
+            let orch = $setup;
+            $crate::concurrency::test_atomic_sentinel_empty_args(&orch).await;
+        }
     };
 }
 
@@ -324,6 +357,13 @@ macro_rules! async_concurrency_suite {
         async fn suite_cc_sentinel_empty_args() {
             let (_c, orch) = $setup.await;
             $crate::concurrency::test_sentinel_empty_args(&orch).await;
+        }
+
+        #[tokio::test]
+        #[ignore = "requires Docker"]
+        async fn suite_cc_atomic_sentinel_empty_args() {
+            let (_c, orch) = $setup.await;
+            $crate::concurrency::test_atomic_sentinel_empty_args(&orch).await;
         }
     };
 }

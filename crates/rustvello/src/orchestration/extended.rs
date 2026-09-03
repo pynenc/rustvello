@@ -3,6 +3,8 @@
 //! Adds `route_call`, `reroute_invocations`, `trigger_loop_iteration`,
 //! and `check_atomic_services` to `OrchestratorCoordinator`.
 
+use std::collections::HashMap;
+
 use chrono::Utc;
 use rustvello_core::error::{RustvelloError, RustvelloResult};
 use rustvello_core::orchestrator::ActiveRunnerInfo;
@@ -44,6 +46,7 @@ impl OrchestratorCoordinator {
     ///    - Match with different `call_id` → return `ReusedDifferentCall`
     ///      so the caller can decide (raise error or reuse).
     /// 3. For new invocations: register + persist + index CC + route.
+    #[allow(clippy::too_many_arguments)]
     pub async fn route_call(
         &self,
         new_invocation_id: &InvocationId,
@@ -52,6 +55,8 @@ impl OrchestratorCoordinator {
         registration_cc: ConcurrencyControlType,
         index_cc: bool,
         runner_id: &RunnerId,
+        queue_name: &str,
+        priority: f64,
     ) -> RustvelloResult<RouteCallResult> {
         // Fast path: no registration CC → always create new
         if registration_cc == ConcurrencyControlType::Unlimited {
@@ -62,6 +67,8 @@ impl OrchestratorCoordinator {
                     cc_args,
                     index_cc,
                     runner_id,
+                    queue_name,
+                    priority,
                 )
                 .await
                 .map(RouteCallResult::New);
@@ -87,12 +94,21 @@ impl OrchestratorCoordinator {
         }
 
         // No existing match — create new invocation
-        self.create_and_route_invocation(new_invocation_id, call_dto, cc_args, index_cc, runner_id)
-            .await
-            .map(RouteCallResult::New)
+        self.create_and_route_invocation(
+            new_invocation_id,
+            call_dto,
+            cc_args,
+            index_cc,
+            runner_id,
+            queue_name,
+            priority,
+        )
+        .await
+        .map(RouteCallResult::New)
     }
 
     /// Internal: Create, register, persist, index CC, and route an invocation.
+    #[allow(clippy::too_many_arguments)]
     async fn create_and_route_invocation(
         &self,
         invocation_id: &InvocationId,
@@ -100,6 +116,8 @@ impl OrchestratorCoordinator {
         cc_args: Option<&SerializedArguments>,
         index_cc: bool,
         runner_id: &RunnerId,
+        queue_name: &str,
+        priority: f64,
     ) -> RustvelloResult<InvocationId> {
         let inv_dto = InvocationDTO::new(
             invocation_id.clone(),
@@ -142,7 +160,14 @@ impl OrchestratorCoordinator {
         }
 
         // 6. Route through broker
-        self.broker.route_invocation(invocation_id).await?;
+        self.broker
+            .route_invocation_with_options(
+                invocation_id,
+                Some(&call_dto.task_id),
+                queue_name,
+                priority,
+            )
+            .await?;
 
         Ok(invocation_id.clone())
     }
@@ -160,6 +185,7 @@ impl OrchestratorCoordinator {
         &self,
         invocation_ids: &[InvocationId],
         runner_id: &RunnerId,
+        routes: &HashMap<InvocationId, (String, f64)>,
     ) -> RustvelloResult<()> {
         for inv_id in invocation_ids {
             match self
@@ -187,7 +213,19 @@ impl OrchestratorCoordinator {
 
                     // Re-enqueue in broker — propagate errors since a
                     // failed re-enqueue leaves the invocation permanently stuck.
-                    self.broker.route_invocation(inv_id).await?
+                    let invocation = self.state_backend.get_invocation(inv_id).await?;
+                    let (queue_name, priority) =
+                        routes.get(inv_id).ok_or_else(|| RustvelloError::Internal {
+                            message: format!("missing routing for invocation {inv_id}"),
+                        })?;
+                    self.broker
+                        .route_invocation_with_options(
+                            inv_id,
+                            Some(&invocation.task_id),
+                            queue_name,
+                            *priority,
+                        )
+                        .await?
                 }
                 Err(RustvelloError::InvalidStatusTransition { .. }) => {
                     // Race: invocation was already transitioned — skip
@@ -213,6 +251,7 @@ impl OrchestratorCoordinator {
     pub async fn trigger_loop_iteration(
         &self,
         runner_id: &RunnerId,
+        routes: &HashMap<rustvello_proto::identifiers::TaskId, (String, f64)>,
     ) -> RustvelloResult<Vec<InvocationId>> {
         let tm = match self.trigger_manager {
             Some(ref tm) => tm,
@@ -257,7 +296,19 @@ impl OrchestratorCoordinator {
                 tracing::warn!("trigger_loop_iteration: failed to record history: {e}");
             }
 
-            self.broker.route_invocation(&inv_id).await?;
+            let (queue_name, priority) = routes.get(&trigger_def.task_id).ok_or_else(|| {
+                RustvelloError::TaskNotRegistered {
+                    task_id: trigger_def.task_id.clone(),
+                }
+            })?;
+            self.broker
+                .route_invocation_with_options(
+                    &inv_id,
+                    Some(&trigger_def.task_id),
+                    queue_name,
+                    *priority,
+                )
+                .await?;
 
             if let Err(error) = tm.complete_trigger_run(&execution.run_id, &inv_id).await {
                 tracing::debug!(%error, trigger_run_id = %execution.run_id, "trigger-run completion unavailable");
@@ -287,6 +338,7 @@ impl OrchestratorCoordinator {
         service_interval_minutes: f64,
         spread_margin_minutes: f64,
         runner_timeout_seconds: f64,
+        routes: &HashMap<rustvello_proto::identifiers::TaskId, (String, f64)>,
     ) -> RustvelloResult<Option<Vec<InvocationId>>> {
         // 1. Register heartbeat
         self.orchestrator
@@ -315,7 +367,7 @@ impl OrchestratorCoordinator {
 
         // 4. Run trigger loop
         let start = Utc::now();
-        let created_ids = self.trigger_loop_iteration(runner_id).await?;
+        let created_ids = self.trigger_loop_iteration(runner_id, routes).await?;
         let end = Utc::now();
 
         // 5. Record execution

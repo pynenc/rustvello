@@ -10,7 +10,7 @@ Add the main library crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustvello = "0.3.1"
+rustvello = "0.4.0"
 ```
 
 Or via Cargo:
@@ -41,13 +41,13 @@ Examples:
 
 ```toml
 # SQLite for single-host persistence
-rustvello = { version = "0.3.1", features = ["sqlite"] }
+rustvello = { version = "0.4.0", features = ["sqlite"] }
 
 # Redis for distributed production
-rustvello = { version = "0.3.1", features = ["redis"] }
+rustvello = { version = "0.4.0", features = ["redis"] }
 
 # Everything
-rustvello = { version = "0.3.1", features = ["full"] }
+rustvello = { version = "0.4.0", features = ["full"] }
 ```
 
 ---
@@ -78,7 +78,7 @@ For finer-grained control, depend on individual crates directly:
 
 ## Python (`rustvello` wheel)
 
-The `rustvello` Python package ships pre-compiled wheels (Python 3.12+) and exposes
+The `rustvello` Python package ships pre-compiled wheels for Python 3.9 through 3.13 and exposes
 the Rust backends to Python. It can be used standalone or as a backend for
 [pynenc](https://docs.pynenc.org).
 

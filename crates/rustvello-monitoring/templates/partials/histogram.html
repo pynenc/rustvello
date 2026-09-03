@@ -1,0 +1,18 @@
+<section class="histogram-panel{% if histogram.compact %} histogram-panel-compact{% endif %}" data-histogram-panel{% if !histogram.form_id.is_empty() %} data-histogram-form="{{ histogram.form_id }}"{% endif %}>
+  <div class="histogram-toolbar">
+    <span class="histogram-title">Task occupancy</span>
+    <div class="histogram-status-selector" role="group" aria-label="Histogram statuses">
+      {% for category in &histogram.categories %}
+      <label class="histogram-status-option">
+        <input type="checkbox" value="{{ category.value }}" class="histogram-status-toggle"{% if category.selected %} checked{% endif %} />
+        <span>{{ category.label }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  {% if !histogram.svg.is_empty() %}
+  <div class="histogram-svg-container">{{ histogram.svg|safe }}</div>
+  {% else %}
+  <div class="histogram-empty">{{ histogram.empty_reason }}</div>
+  {% endif %}
+</section>

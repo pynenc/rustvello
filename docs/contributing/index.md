@@ -12,8 +12,8 @@ testing/index
 
 ## Prerequisites
 
-- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain, 1.78+)
-- [Python](https://www.python.org/downloads/) 3.11+
+- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain, 1.85+)
+- [Python](https://www.python.org/downloads/) 3.9+ for wheels; 3.12+ for development
 - [uv](https://docs.astral.sh/uv/) (Python package manager)
 - [maturin](https://www.maturin.rs/) (for building Python bindings)
 - [make](https://www.gnu.org/software/make/) (build automation)
@@ -35,20 +35,19 @@ make install
 
 ## Makefile Targets
 
-| Target              | Description                                   |
-| ------------------- | --------------------------------------------- |
-| `make install`      | Install all dependencies and pre-commit hooks |
-| `make develop`      | Build Python bindings with maturin            |
-| `make check`        | Run all lints and checks (Rust + Python)      |
-| `make check-rust`   | Run `cargo clippy` and `cargo fmt --check`    |
-| `make check-python` | Run `ruff check` and `ruff format --check`    |
-| `make test`         | Run all tests (Rust + Python)                 |
-| `make test-rust`    | Run Rust tests only                           |
-| `make test-python`  | Run Python tests with pytest                  |
-| `make build-rust`   | Build all Rust crates                         |
-| `make docs-build`   | Build Sphinx documentation                    |
-| `make docs-serve`   | Serve docs locally                            |
-| `make clean`        | Clean all build artifacts                     |
+| Target             | Description                                   |
+| ------------------ | --------------------------------------------- |
+| `make install`     | Install all dependencies and pre-commit hooks |
+| `make develop`     | Build Python bindings with maturin            |
+| `make check`       | Run all lints and checks (Rust + Python)      |
+| `make check`       | Run all Rust and Python quality checks        |
+| `make test`        | Run all tests (Rust + Python)                 |
+| `make test-rust`   | Run Rust tests only                           |
+| `make test-python` | Run Python tests with pytest                  |
+| `make build-rust`  | Build all Rust crates                         |
+| `make docs-build`  | Build Sphinx documentation                    |
+| `make docs-serve`  | Serve docs locally                            |
+| `make clean`       | Clean all build artifacts                     |
 
 Run `make help` to see all available targets.
 

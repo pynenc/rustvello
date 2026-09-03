@@ -126,7 +126,20 @@ impl PersistentTokioRunner {
         self.orchestrator
             .set_invocation_status(inv_id, InvocationStatus::Rerouted, Some(&self.runner_id))
             .await?;
-        self.broker.route_invocation(inv_id).await?;
+        let invocation = self.state_backend.get_invocation(inv_id).await?;
+        let config = self
+            .task_registry
+            .get_dyn(&invocation.task_id)
+            .map(|task| task.config().clone())
+            .unwrap_or_default();
+        self.broker
+            .route_invocation_with_options(
+                inv_id,
+                Some(&invocation.task_id),
+                &config.queue,
+                config.priority,
+            )
+            .await?;
         self.state_backend
             .add_history(
                 &InvocationHistory::new(

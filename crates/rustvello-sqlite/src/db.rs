@@ -95,12 +95,16 @@ impl Database {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 invocation_id TEXT NOT NULL,
                 task_id TEXT,
+                queue_name TEXT NOT NULL,
+                priority REAL NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_broker_queue_created
                 ON broker_queue(created_at);
+            CREATE INDEX IF NOT EXISTS idx_broker_queue_route
+                ON broker_queue(queue_name, priority DESC, id ASC);
             CREATE INDEX IF NOT EXISTS idx_broker_queue_task
-                ON broker_queue(task_id, id);
+                ON broker_queue(queue_name, task_id, priority DESC, id ASC);
 
             -- Invocations
             CREATE TABLE IF NOT EXISTS invocations (

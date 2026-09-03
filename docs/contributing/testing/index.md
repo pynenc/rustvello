@@ -14,35 +14,35 @@ inventory
 
 ## Quick Reference
 
-| Command                                         | What it runs                          |
-| ----------------------------------------------- | ------------------------------------- |
-| `cargo test --workspace --exclude py-rustvello` | All Rust tests (no Docker)            |
-| `cargo test -p rustvello`                       | Main crate unit + integration         |
-| `cargo test -p rustvello-core`                  | Core trait + type tests               |
-| `cargo test -p rustvello-mem`                   | In-memory backend suite               |
-| `cargo test -p rustvello-sqlite`                | SQLite backend suite                  |
-| `cargo test -p rustvello-redis -- --ignored`    | Redis Docker tests only               |
-| `cargo test -p rustvello-mongo -- --ignored`    | MongoDB Docker tests only             |
-| `cargo test -p rustvello-mongo3 -- --ignored`   | MongoDB (v2) Docker tests             |
-| `cargo test -p rustvello-postgres -- --ignored` | PostgreSQL Docker tests only          |
-| `cargo test -p rustvello-rabbitmq -- --ignored` | RabbitMQ Docker tests only            |
-| `cargo test -p rustvello-monitoring`            | Monitoring dashboard tests            |
-| `cargo test -p rustvello-prometheus`            | Prometheus sink tests                 |
-| `cargo test -p rustvello-proto`                 | Proto types + proptest                |
-| `cargo test -p rustvello-test-suite`            | Test-suite validator                  |
-| `make test-rust`                                | All Rust tests via Makefile           |
-| `make test-python`                              | Python binding tests                  |
-| `make test`                                     | All default tests (Rust + Python)     |
-| `make test-docker`                              | Ignored Docker backend suites         |
-| `make test-stress`                              | Fast contention tests                 |
-| `make test-soak`                                | Ignored high-volume/SQLite soak tests |
+| Command                                                                    | What it runs                          |
+| -------------------------------------------------------------------------- | ------------------------------------- |
+| `cargo test --workspace --exclude py-rustvello --exclude rustvello-python` | All Rust tests (no Docker)            |
+| `cargo test -p rustvello`                                                  | Main crate unit + integration         |
+| `cargo test -p rustvello-core`                                             | Core trait + type tests               |
+| `cargo test -p rustvello-mem`                                              | In-memory backend suite               |
+| `cargo test -p rustvello-sqlite`                                           | SQLite backend suite                  |
+| `cargo test -p rustvello-redis -- --ignored`                               | Redis Docker tests only               |
+| `cargo test -p rustvello-mongo -- --ignored`                               | MongoDB Docker tests only             |
+| `cargo test -p rustvello-mongo3 -- --ignored`                              | MongoDB 3.6 Docker tests              |
+| `cargo test -p rustvello-postgres -- --ignored`                            | PostgreSQL Docker tests only          |
+| `cargo test -p rustvello-rabbitmq -- --ignored`                            | RabbitMQ Docker tests only            |
+| `cargo test -p rustvello-monitoring`                                       | Monitoring dashboard tests            |
+| `cargo test -p rustvello-prometheus`                                       | Prometheus sink tests                 |
+| `cargo test -p rustvello-proto`                                            | Proto types + proptest                |
+| `cargo test -p rustvello-test-suite`                                       | Test-suite validator                  |
+| `make test-rust`                                                           | All Rust tests via Makefile           |
+| `make test-python`                                                         | Python binding tests                  |
+| `make test`                                                                | All default tests (Rust + Python)     |
+| `make test-docker`                                                         | Ignored Docker backend suites         |
+| `make test-stress`                                                         | Fast contention tests                 |
+| `make test-soak`                                                           | Ignored high-volume/SQLite soak tests |
 
 ## Running Tests
 
 ### All Rust Tests
 
 ```bash
-cargo test --workspace --exclude py-rustvello
+cargo test --workspace --exclude py-rustvello --exclude rustvello-python
 # Or:
 make test-rust
 ```
@@ -60,7 +60,7 @@ cargo test -p rustvello-redis -- --ignored
 cargo test -p rustvello-redis -- --include-ignored
 
 # Run Docker tests for all backends:
-cargo test --workspace --exclude py-rustvello -- --ignored
+cargo test --workspace --exclude py-rustvello --exclude rustvello-python -- --ignored
 ```
 
 ### Feature-Gated Tests

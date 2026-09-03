@@ -5,6 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use axum::Router;
 
+use crate::histogram::{build_histogram, parse_categories, HistogramEntry, HistogramPanel};
 use crate::state::AppState;
 use crate::util::status_colors;
 use crate::util::view_helpers::{get_active_app, AppResult, HtmlTemplate};
@@ -18,9 +19,14 @@ use rustvello_proto::status::InvocationStatus;
 #[derive(serde::Deserialize, Default)]
 pub struct InvocationListQuery {
     pub status: Option<String>,
+    pub status_mode: Option<String>,
     pub task_id: Option<String>,
     pub workflow_type: Option<String>,
     pub workflow_id: Option<String>,
+    pub time_range: Option<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub inv_ids: Option<String>,
     pub page: Option<usize>,
     pub limit: Option<usize>,
 }
@@ -40,15 +46,18 @@ struct InvocationRow {
 /// Current filter values echoed back to the template.
 struct CurrentFilters {
     statuses: Vec<String>,
+    status_mode: String,
     task_id: String,
     workflow_type: String,
     workflow_id: String,
+    start_date: String,
+    end_date: String,
+    inv_ids: String,
     limit: usize,
 }
 
 struct Pagination {
     page: usize,
-    limit: usize,
     total_count: usize,
     total_pages: usize,
     has_prev: bool,
@@ -69,6 +78,7 @@ struct InvocationListTemplate {
     current_filters: CurrentFilters,
     pagination: Pagination,
     status_query: String,
+    pagination_query: String,
 }
 
 #[derive(Template)]
@@ -122,6 +132,7 @@ pub struct TimelineQuery {
     pub limit: Option<String>,
     pub selected: Option<String>,
     pub inv_ids: Option<String>,
+    pub histogram_status: Option<String>,
 }
 
 fn parse_timeline_datetime(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -158,6 +169,7 @@ struct InvocationTimelineTemplate {
     app_ids: Vec<String>,
     nav_path: &'static str,
     svg_content: String,
+    histogram: HistogramPanel,
     all_task_ids: Vec<String>,
     all_workflow_types: Vec<String>,
     current_filters: TimelineFilters,
@@ -188,6 +200,17 @@ async fn list(
     let app = get_active_app(&state)?;
     let page = query.page.unwrap_or(1);
     let limit = query.limit.unwrap_or(50).min(200);
+    let history_status_mode = query.status_mode.as_deref() == Some("history");
+    let requested_ids = parse_invocation_scope(query.inv_ids.as_deref());
+    let time_window = if query.time_range.as_deref() == Some("custom") {
+        query
+            .start_date
+            .as_deref()
+            .and_then(parse_timeline_datetime)
+            .zip(query.end_date.as_deref().and_then(parse_timeline_datetime))
+    } else {
+        None
+    };
 
     let mut invocations = Vec::new();
 
@@ -217,6 +240,12 @@ async fn list(
             .await
             .unwrap_or_default();
         for inv_id in ids {
+            if requested_ids
+                .as_ref()
+                .is_some_and(|ids| !ids.contains(&inv_id.to_string()))
+            {
+                continue;
+            }
             let inv = app.state_backend.get_invocation(&inv_id).await.ok();
             // Use latest status from history if available, fall back to orchestrator
             let history_records = app
@@ -224,6 +253,38 @@ async fn list(
                 .get_history(&inv_id)
                 .await
                 .unwrap_or_default();
+            if requested_ids.is_none()
+                && time_window.is_some_and(|(start, end)| {
+                    !history_records.iter().any(|entry| {
+                        let timestamp = entry
+                            .history_timestamp
+                            .unwrap_or(entry.status_record.timestamp);
+                        start <= timestamp && timestamp < end
+                    })
+                })
+            {
+                continue;
+            }
+            if query.workflow_type.as_deref().is_some_and(|workflow_type| {
+                !workflow_type.is_empty()
+                    && inv.as_ref().is_none_or(|invocation| {
+                        invocation.workflow.as_ref().is_none_or(|workflow| {
+                            workflow.workflow_type.to_string() != workflow_type
+                        })
+                    })
+            }) {
+                continue;
+            }
+            if query.workflow_id.as_deref().is_some_and(|workflow_id| {
+                !workflow_id.is_empty()
+                    && inv.as_ref().is_none_or(|invocation| {
+                        invocation.workflow.as_ref().is_none_or(|workflow| {
+                            !workflow.workflow_id.to_string().contains(workflow_id)
+                        })
+                    })
+            }) {
+                continue;
+            }
             let status = if let Some(last) = history_records.last() {
                 last.status_record.status
             } else {
@@ -234,13 +295,27 @@ async fn list(
                     .unwrap_or(InvocationStatus::Registered)
             };
 
-            if let Some(status_filter) = &query.status {
-                if !status_filter.is_empty() {
-                    let selected: Vec<&str> = status_filter.split(',').collect();
+            let selected_statuses: Vec<&str> = query
+                .status
+                .as_deref()
+                .unwrap_or_default()
+                .split(',')
+                .filter(|value| !value.is_empty())
+                .collect();
+            if !selected_statuses.is_empty() {
+                let matches = if history_status_mode {
+                    history_records.iter().any(|entry| {
+                        let history_status = format!("{:?}", entry.status_record.status);
+                        selected_statuses
+                            .iter()
+                            .any(|candidate| *candidate == history_status)
+                    })
+                } else {
                     let status_str = format!("{status:?}");
-                    if !selected.iter().any(|s| *s == status_str) {
-                        continue;
-                    }
+                    selected_statuses.iter().any(|s| *s == status_str)
+                };
+                if !matches {
+                    continue;
                 }
             }
 
@@ -255,13 +330,7 @@ async fn list(
                 .is_some_and(rustvello_proto::invocation::InvocationDTO::is_workflow_defining);
             let badge = status_colors::badge_class(&status);
 
-            // Count retries from history
-            let history = app
-                .state_backend
-                .get_history(&inv_id)
-                .await
-                .unwrap_or_default();
-            let num_retries = history
+            let num_retries = history_records
                 .iter()
                 .filter(|h| h.status_record.status == InvocationStatus::Retry)
                 .count();
@@ -307,8 +376,14 @@ async fn list(
         .map(std::string::ToString::to_string)
         .collect();
 
-    // Workflow types: not yet stored per-invocation, so empty for now
-    let all_workflow_types: Vec<String> = Vec::new();
+    let all_workflow_types: Vec<String> = app
+        .state_backend
+        .get_all_workflow_types()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|workflow_type| workflow_type.to_string())
+        .collect();
 
     let status_raw = query.status.unwrap_or_default();
     let status_query = status_raw.clone();
@@ -317,6 +392,28 @@ async fn list(
         .filter(|s| !s.is_empty())
         .map(std::borrow::ToOwned::to_owned)
         .collect();
+    let invocation_scope = query.inv_ids.clone().unwrap_or_default();
+    let mut pagination_serializer = url::form_urlencoded::Serializer::new(String::new());
+    for (key, value) in [
+        ("status", Some(status_query.as_str())),
+        ("status_mode", query.status_mode.as_deref()),
+        ("task_id", query.task_id.as_deref()),
+        ("workflow_type", query.workflow_type.as_deref()),
+        ("workflow_id", query.workflow_id.as_deref()),
+        ("time_range", query.time_range.as_deref()),
+        ("start_date", query.start_date.as_deref()),
+        ("end_date", query.end_date.as_deref()),
+        (
+            "inv_ids",
+            (!invocation_scope.is_empty()).then_some(invocation_scope.as_str()),
+        ),
+    ] {
+        if let Some(value) = value.filter(|value| !value.is_empty()) {
+            pagination_serializer.append_pair(key, value);
+        }
+    }
+    pagination_serializer.append_pair("limit", &limit.to_string());
+    let pagination_query = pagination_serializer.finish();
 
     Ok(HtmlTemplate(InvocationListTemplate {
         app_id: app.app_id.clone(),
@@ -328,20 +425,28 @@ async fn list(
         all_workflow_types,
         current_filters: CurrentFilters {
             statuses: statuses_vec,
+            status_mode: if history_status_mode {
+                "history".to_owned()
+            } else {
+                "current".to_owned()
+            },
             task_id: query.task_id.unwrap_or_default(),
             workflow_type: query.workflow_type.unwrap_or_default(),
             workflow_id: query.workflow_id.unwrap_or_default(),
+            start_date: query.start_date.unwrap_or_default(),
+            end_date: query.end_date.unwrap_or_default(),
+            inv_ids: query.inv_ids.unwrap_or_default(),
             limit,
         },
         pagination: Pagination {
             page,
-            limit,
             total_count,
             total_pages,
             has_prev: page > 1,
             has_next: page < total_pages,
         },
         status_query,
+        pagination_query,
     }))
 }
 
@@ -672,6 +777,7 @@ async fn timeline(
 
     let mut inv_count = 0usize;
     let mut runner_ids_seen = std::collections::HashSet::new();
+    let mut histogram_entries = Vec::new();
     for inv_id in &candidate_ids {
         if limit.is_some_and(|maximum| inv_count >= maximum) {
             break;
@@ -719,6 +825,11 @@ async fn timeline(
             }
         }
         let task_id = invocation.task_id.to_string();
+        histogram_entries.extend(
+            history
+                .iter()
+                .map(|entry| HistogramEntry::from_history(entry, &task_id)),
+        );
         builder.add_history_batch_for_task(history, &task_id);
         inv_count += 1;
     }
@@ -734,6 +845,33 @@ async fn timeline(
 
     let data = builder.build();
     let svg_content = crate::svg::TimelineSvgRenderer::render(&data);
+    let selected_categories = parse_categories(query.histogram_status.as_deref());
+    let histogram_data = build_histogram(
+        &histogram_entries,
+        data.bounds.start,
+        data.bounds.end,
+        selected_categories,
+        None,
+    );
+    let mut histogram_params = Vec::new();
+    for (key, value) in [
+        ("task_id", query.task_id.as_deref()),
+        ("workflow_type", query.workflow_type.as_deref()),
+        ("workflow_id", query.workflow_id.as_deref()),
+    ] {
+        if let Some(value) = value.filter(|value| !value.is_empty()) {
+            histogram_params.push((key.to_owned(), value.to_owned()));
+        }
+    }
+    let histogram = HistogramPanel::from_data_with_y_axis_and_plot_bounds(
+        &histogram_data,
+        &histogram_params,
+        "/invocations",
+        false,
+        None,
+        Some(data.bounds.left_margin),
+        Some(data.bounds.left_margin + data.bounds.drawable_width),
+    );
 
     let all_task_ids: Vec<String> = app
         .task_ids
@@ -757,6 +895,7 @@ async fn timeline(
         app_ids: state.app_ids().unwrap_or_default(),
         nav_path: "timeline",
         svg_content,
+        histogram,
         all_task_ids,
         all_workflow_types,
         current_filters: TimelineFilters {
@@ -928,7 +1067,15 @@ async fn rerun(
             Ok(inv) => {
                 let call = app.state_backend.get_call(&inv.call_id).await;
                 if let Ok(_call) = call {
-                    if let Err(e) = app.broker.route_invocation(&inv.invocation_id).await {
+                    // Monitoring does not own the task registry, so it cannot
+                    // reconstruct per-task queue configuration. Preserve the
+                    // task identity at minimum; the broker uses its default
+                    // queue for this generic rerun path.
+                    if let Err(e) = app
+                        .broker
+                        .route_invocation_for_task(&inv.invocation_id, &inv.task_id)
+                        .await
+                    {
                         tracing::error!(error = %e, invocation_id = %inv.invocation_id, "rerun route failed");
                     }
                 }

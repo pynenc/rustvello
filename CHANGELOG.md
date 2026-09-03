@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.0 - 2026-09-01
+
+- Added monitoring occupancy histograms for invocation timelines, selected
+  workflow runs, and log-scoped invocations, including status selectors and
+  time-filtered drill-down links.
+- Added required named-queue and finite float-priority behavior to every broker,
+  with priority-first/FIFO-tie retrieval and shared backend contract tests.
+- Added task queue/priority macro attributes, app and Python configuration,
+  broker wildcard priority rules, and ordered, random, or round-robin runner
+  queue selection.
+- Kept the public priority model at `-100.0..100.0`; RabbitMQ alone maps it
+  lossily to AMQP's native `0..255` integer levels.
+- Made submission, retries, recovery, trigger execution, and coordinator
+  dispatch queue-aware, and changed monitoring to report configured queue
+  counts without dequeueing and reordering messages.
+- Hardened real backend behavior: MongoDB and MongoDB 3 now coordinate
+  concurrency slots on standalone deployments; Redis status CAS no longer
+  retries indefinitely; RabbitMQ confirms publishes and waits for selective
+  scan requeues before reporting task-specific counts.
+- Made the cross-runner concurrency test deterministic and expanded the shared
+  suite for atomic task-level empty-argument reservations.
+- Fixed fuzz CI by installing `cargo-fuzz` with the nightly toolchain already
+  used to run fuzz targets. Rust crates and the Python wheel now share `0.4.0`.
+
 ## 0.3.1 - 2026-08-31
 
 Rustvello is now version-aligned with Pynenc `v0.3.1` for the committed sync

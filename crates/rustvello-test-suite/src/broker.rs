@@ -35,6 +35,84 @@ pub async fn test_fifo_ordering(broker: &dyn Broker) {
     assert_eq!(broker.retrieve_invocation(None).await.unwrap(), None);
 }
 
+/// Logical queues are isolated and priorities apply only within one queue.
+pub async fn test_named_queues_and_priorities(broker: &dyn Broker) {
+    let task = test_task_id("priority_task");
+    let low = InvocationId::new();
+    let high_first = InvocationId::new();
+    let high_second = InvocationId::new();
+    let report = InvocationId::new();
+
+    broker
+        .route_invocation_with_options(&low, Some(&task), "payments", -99.5)
+        .await
+        .unwrap();
+    broker
+        .route_invocation_with_options(&high_first, Some(&task), "payments", 99.25)
+        .await
+        .unwrap();
+    broker
+        .route_invocation_with_options(&high_second, Some(&task), "payments", 99.25)
+        .await
+        .unwrap();
+    broker
+        .route_invocation_with_options(&report, Some(&task), "reports", 100.0)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        broker
+            .count_invocations_in_queues(&["payments".to_owned()], None)
+            .await
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        broker
+            .retrieve_invocation_from_queue("payments", None)
+            .await
+            .unwrap(),
+        Some(high_first)
+    );
+    assert_eq!(
+        broker
+            .retrieve_invocation_from_queue("payments", None)
+            .await
+            .unwrap(),
+        Some(high_second)
+    );
+    assert_eq!(
+        broker
+            .retrieve_invocation_from_queue("payments", None)
+            .await
+            .unwrap(),
+        Some(low)
+    );
+    assert_eq!(
+        broker
+            .retrieve_invocation_from_queue("reports", None)
+            .await
+            .unwrap(),
+        Some(report)
+    );
+}
+
+/// Invalid routing values fail before anything reaches backend storage.
+pub async fn test_queue_priority_validation(broker: &dyn Broker) {
+    let invocation_id = InvocationId::new();
+    for priority in [-100.1, 100.1, f64::INFINITY, f64::NAN] {
+        assert!(broker
+            .route_invocation_with_options(&invocation_id, None, "default", priority)
+            .await
+            .is_err());
+    }
+    assert!(broker
+        .route_invocation_with_options(&invocation_id, None, "invalid queue", 0.0)
+        .await
+        .is_err());
+    assert_eq!(broker.count_invocations(None).await.unwrap(), 0);
+}
+
 /// Per-task queue isolation: tasks don't interfere with each other.
 pub async fn test_per_task_isolation(broker: &dyn Broker) {
     let task_a = test_task_id("task_a");
@@ -211,6 +289,18 @@ macro_rules! broker_suite {
         }
 
         #[tokio::test]
+        async fn suite_broker_named_queues_and_priorities() {
+            let broker = $setup;
+            $crate::broker::test_named_queues_and_priorities(&broker).await;
+        }
+
+        #[tokio::test]
+        async fn suite_broker_queue_priority_validation() {
+            let broker = $setup;
+            $crate::broker::test_queue_priority_validation(&broker).await;
+        }
+
+        #[tokio::test]
         async fn suite_broker_per_task_isolation() {
             let broker = $setup;
             $crate::broker::test_per_task_isolation(&broker).await;
@@ -309,6 +399,20 @@ macro_rules! async_broker_suite {
         async fn suite_broker_fifo_ordering() {
             let (_c, broker) = $setup.await;
             $crate::broker::test_fifo_ordering(&broker).await;
+        }
+
+        #[tokio::test]
+        #[ignore = "requires Docker"]
+        async fn suite_broker_named_queues_and_priorities() {
+            let (_c, broker) = $setup.await;
+            $crate::broker::test_named_queues_and_priorities(&broker).await;
+        }
+
+        #[tokio::test]
+        #[ignore = "requires Docker"]
+        async fn suite_broker_queue_priority_validation() {
+            let (_c, broker) = $setup.await;
+            $crate::broker::test_queue_priority_validation(&broker).await;
         }
 
         #[tokio::test]

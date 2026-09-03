@@ -1,5 +1,5 @@
 error: unknown task attribute: `frobnicate`.
-       Valid attributes: max_retries, module, concurrency, registration_concurrency, key_arguments, cache_results, disable_cache_args, retry_for_errors, on_diff_non_key_args_raise, parallel_batch_size, reroute_on_cc, blocking
+       Valid attributes: max_retries, module, concurrency, registration_concurrency, key_arguments, cache_results, disable_cache_args, retry_for_errors, on_diff_non_key_args_raise, parallel_batch_size, reroute_on_cc, blocking, queue, priority
  --> tests/compile_fail/unknown_attribute.rs:1:19
   |
 1 | #[rustvello::task(frobnicate = true)]

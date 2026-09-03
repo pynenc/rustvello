@@ -167,6 +167,7 @@ impl PersistentTokioRunner {
             &*self.broker,
             Some(&*self.state_backend),
             Some(&*self.task_registry),
+            &self.config,
         )
         .await?
         {
@@ -297,10 +298,10 @@ impl PersistentTokioRunner {
                 args
             );
 
-            if self.task_registry.get_dyn(task_id).is_none() {
+            let Some(task) = self.task_registry.get_dyn(task_id) else {
                 tracing::error!("Triggered task:{} not found in registry, skipping", task_id);
                 continue;
-            }
+            };
 
             let mut ser_args = SerializedArguments::new();
             if let serde_json::Value::Object(map) = args {
@@ -334,7 +335,12 @@ impl PersistentTokioRunner {
             self.state_backend.add_history(&history).await?;
 
             self.broker
-                .route_invocation_for_task(&inv_id, task_id)
+                .route_invocation_with_options(
+                    &inv_id,
+                    Some(task_id),
+                    &task.config().queue,
+                    task.config().priority,
+                )
                 .await?;
 
             if let Err(error) = tm.complete_trigger_run(&execution.run_id, &inv_id).await {

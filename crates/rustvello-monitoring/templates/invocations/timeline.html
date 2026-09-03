@@ -145,6 +145,7 @@
           <div id="timeline-container" class="timeline-svg-container" style="overflow-x: auto; overflow-y: auto; width: 100%">
             {{ svg_content|safe }}
           </div>
+          {% include "partials/histogram.html" %}
         </div>
       </div>
 
@@ -402,6 +403,14 @@
         else el.classList.remove('invocation-highlight');
       });
     }
+    // Histogram buckets store their many invocation IDs as whitespace tokens.
+    document.querySelectorAll('.histogram-bucket').forEach(function(bucket) {
+      var ids = (bucket.getAttribute('data-invocation-ids') || '').split(/\s+/);
+      if (ids.indexOf(String(invId)) !== -1) {
+        if (on) bucket.classList.add('invocation-highlight');
+        else bucket.classList.remove('invocation-highlight');
+      }
+    });
     // Family tree
     var ftBody = document.getElementById('ft-body');
     if (ftBody) {

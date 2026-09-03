@@ -12,6 +12,8 @@ use rustvello_proto::status::ConcurrencyControlType;
 /// Applied in layers: global defaults → per-task TOML → per-task env vars.
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TaskConfigOverride {
+    pub queue: Option<String>,
+    pub priority: Option<f64>,
     pub max_retries: Option<u32>,
     pub concurrency_control: Option<ConcurrencyControlType>,
     pub running_concurrency: Option<Option<u32>>,
@@ -53,6 +55,12 @@ pub(crate) fn concurrency_arguments(
 impl TaskConfigOverride {
     /// Apply non-None fields of this override onto the given config.
     pub fn apply_to(&self, config: &mut TaskConfig) {
+        if let Some(ref v) = self.queue {
+            config.queue.clone_from(v);
+        }
+        if let Some(v) = self.priority {
+            config.priority = v;
+        }
         if let Some(v) = self.max_retries {
             config.max_retries = v;
         }
@@ -117,6 +125,14 @@ pub(crate) fn apply_task_env_overrides(prefix: &str, config: &mut TaskConfig) {
     if let Some(val) = env(prefix, "MAX_RETRIES") {
         if let Ok(n) = val.parse::<u32>() {
             config.max_retries = n;
+        }
+    }
+    if let Some(val) = env(prefix, "QUEUE") {
+        config.queue = val;
+    }
+    if let Some(val) = env(prefix, "PRIORITY") {
+        if let Ok(priority) = val.parse::<f64>() {
+            config.priority = priority;
         }
     }
     if let Some(val) = env(prefix, "CONCURRENCY_CONTROL") {

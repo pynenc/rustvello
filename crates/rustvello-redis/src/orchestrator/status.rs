@@ -80,7 +80,7 @@ impl OrchestratorStatus for RedisOrchestrator {
                 return 0
             end
             local current_status = string.match(current, '^{"status":"([^"]*)"')
-            if current_status ~= ARGV[1] then
+            if string.upper(current_status) ~= string.upper(ARGV[1]) then
                 return -1
             end
             redis.call('SET', KEYS[1], ARGV[2])

@@ -69,7 +69,7 @@ not add Python callback aggregation to the Rust runner.
 After migration, run:
 
 ```bash
-cargo test --workspace --exclude py-rustvello
+cargo test --workspace --exclude py-rustvello --exclude rustvello-python
 cargo clippy --workspace --all-targets -- -D warnings
 cd py-rustvello && uv run pytest
 make docs

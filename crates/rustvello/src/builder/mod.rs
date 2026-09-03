@@ -508,6 +508,15 @@ pub(super) fn parse_task_config_override(
 ) -> TaskConfigOverride {
     let mut o = TaskConfigOverride::default();
 
+    if let Some(toml::Value::String(v)) = table.get("queue") {
+        o.queue = Some(v.clone());
+    }
+    if let Some(value) = table.get("priority").and_then(toml::Value::as_float) {
+        o.priority = Some(value);
+    } else if let Some(toml::Value::Integer(value)) = table.get("priority") {
+        o.priority = Some(*value as f64);
+    }
+
     if let Some(toml::Value::Integer(v)) = table.get("max_retries") {
         if let Ok(n) = u32::try_from(*v) {
             o.max_retries = Some(n);

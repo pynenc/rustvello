@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use cistell_core::Resolver;
 use rustvello_core::broker::Broker;
+use rustvello_core::broker::{validate_routing, DEFAULT_QUEUE};
 use rustvello_core::client_data_store::{ClientDataStore, ClientDataStoreManager};
 use rustvello_core::error::{RustvelloError, RustvelloResult};
 use rustvello_core::orchestrator::Orchestrator;
@@ -43,7 +44,7 @@ impl RustvelloBuilder {
         // -----------------------------------------------------------------------
         // Resolve AppConfig via cistell (programmatic > [env >] file > pyproject > defaults)
         // -----------------------------------------------------------------------
-        let config: AppConfig = {
+        let mut config: AppConfig = {
             let mut builder = Resolver::builder().add_source(self.programmatic.clone());
 
             if self.use_env {
@@ -73,6 +74,15 @@ impl RustvelloBuilder {
             tracing::info!("Configuration loaded:\n{}", resolved.explain());
             resolved.value
         };
+
+        if !config
+            .broker_queues
+            .iter()
+            .any(|queue| queue == DEFAULT_QUEUE)
+        {
+            config.broker_queues.insert(0, DEFAULT_QUEUE.to_owned());
+        }
+        validate_queue_config(&config)?;
 
         // Validate timing configuration
         if config.heartbeat_interval_seconds == 0 {
@@ -386,4 +396,39 @@ impl RustvelloBuilder {
                 .into(),
         })
     }
+}
+
+fn validate_queue_config(config: &AppConfig) -> RustvelloResult<()> {
+    if config.broker_queues.is_empty() {
+        return Err(RustvelloError::Configuration {
+            message: "broker_queues cannot be empty".to_owned(),
+        });
+    }
+    for queue in config
+        .broker_queues
+        .iter()
+        .chain(config.runner_queues.iter())
+    {
+        validate_routing(queue, 0.0)?;
+    }
+    for queues in [&config.broker_queues, &config.runner_queues] {
+        let mut unique = std::collections::HashSet::new();
+        if queues.iter().any(|queue| !unique.insert(queue)) {
+            return Err(RustvelloError::Configuration {
+                message: "queue lists cannot contain duplicate names".to_owned(),
+            });
+        }
+    }
+    for rule in &config.priority_rules {
+        validate_routing(DEFAULT_QUEUE, rule.priority)?;
+        if rule.task_id.is_empty() {
+            return Err(RustvelloError::Configuration {
+                message: "priority rule task_id cannot be empty".to_owned(),
+            });
+        }
+        glob::Pattern::new(&rule.task_id).map_err(|error| RustvelloError::Configuration {
+            message: format!("invalid priority rule pattern {:?}: {error}", rule.task_id),
+        })?;
+    }
+    Ok(())
 }
