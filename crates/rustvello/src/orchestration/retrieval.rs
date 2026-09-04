@@ -29,6 +29,7 @@ impl OrchestratorCoordinator {
         &self,
         max_num_invocations: usize,
         runner_id: &RunnerId,
+        queue_names: &[String],
         config_for_task: &dyn Fn(&TaskId) -> Option<TaskConfig>,
     ) -> RustvelloResult<Vec<InvocationId>> {
         let mut result = Vec::new();
@@ -75,10 +76,18 @@ impl OrchestratorCoordinator {
         while result.len() < max_num_invocations && attempts < max_retries {
             attempts += 1;
 
-            let inv_id = match self.broker.retrieve_invocation(None).await? {
-                Some(id) => id,
-                None => break,
-            };
+            let mut candidate = None;
+            for queue_name in queue_names {
+                if let Some(invocation_id) = self
+                    .broker
+                    .retrieve_invocation_from_queue(queue_name, None)
+                    .await?
+                {
+                    candidate = Some(invocation_id);
+                    break;
+                }
+            }
+            let Some(inv_id) = candidate else { break };
 
             if result.contains(&inv_id) {
                 continue;
@@ -147,7 +156,19 @@ impl OrchestratorCoordinator {
                 .await
             {
                 Ok(_) => {
-                    let _ = self.broker.route_invocation(inv_id).await;
+                    if let Ok(invocation) = self.state_backend.get_invocation(inv_id).await {
+                        if let Some(config) = config_for_task(&invocation.task_id) {
+                            let _ = self
+                                .broker
+                                .route_invocation_with_options(
+                                    inv_id,
+                                    Some(&invocation.task_id),
+                                    &config.queue,
+                                    config.priority,
+                                )
+                                .await;
+                        }
+                    }
                 }
                 Err(RustvelloError::InvalidStatusTransition { .. }) => {}
                 Err(e) => return Err(e),

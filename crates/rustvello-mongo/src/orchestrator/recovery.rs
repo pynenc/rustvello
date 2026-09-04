@@ -42,7 +42,7 @@ impl OrchestratorRecovery for MongoOrchestrator {
         // Single query: fetch Pending invocations with their record.
         let db = self.pool.db().await?;
         let col = db.collection::<mongodb::bson::Document>(STATUS_COL);
-        let filter = doc! { "status_name": "Pending" };
+        let filter = doc! { "status_name": "PENDING" };
         let mut cursor = col.find(filter).await.map_err(mongo_err)?;
 
         let mut stale = Vec::new();
@@ -78,7 +78,7 @@ impl OrchestratorRecovery for MongoOrchestrator {
         let pipeline = vec![
             // Filter to Running invocations that have a runner_id
             doc! { "$match": {
-                "status_name": "Running",
+                "status_name": "RUNNING",
                 "runner_id": { "$exists": true, "$ne": mongodb::bson::Bson::Null },
             } },
             // Join with heartbeat collection on runner_id

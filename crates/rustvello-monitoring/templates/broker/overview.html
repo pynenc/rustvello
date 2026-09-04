@@ -36,7 +36,7 @@
     {% include "broker/partials/info.html" %}
   </div>
 
-  <!-- Queue Preview Section -->
+  <!-- Queue Status Section -->
   <div class="row mt-4">
     <div class="col-12">
       <div class="card">
@@ -47,56 +47,27 @@
             <span
               class="material-icons align-middle me-1"
               style="font-size: 18px"
-              >visibility</span
+              >view_list</span
             >
-            Queue Preview
+            Logical Queues
           </span>
-          <div class="d-inline-flex align-items-center gap-2">
-            <label for="queue-limit" class="form-label mb-0 small text-nowrap"
-              >Show:</label
-            >
-            <select
-              id="queue-limit"
-              class="form-select form-select-sm"
-              style="width: 65px; min-height: 31px"
-            >
-              <option value="1">1</option>
-              <option value="2">2</option>
-              <option value="5" selected>5</option>
-              <option value="10">10</option>
-              <option value="20">20</option>
-            </select>
-            <button
-              class="btn btn-sm btn-outline-primary text-nowrap"
-              id="load-queue-btn"
-              hx-get="/broker/queue?limit=5"
-              hx-target="#queue-content"
-              hx-swap="innerHTML"
-            >
+          <button
+            class="btn btn-sm btn-outline-primary text-nowrap"
+            hx-get="/broker/queue"
+            hx-target="#queue-content"
+            hx-swap="innerHTML"
+          >
               <span
                 class="material-icons align-middle me-1"
                 style="font-size: 16px"
-                >search</span
+                >refresh</span
               >
-              Peek
-            </button>
-          </div>
+              Refresh
+          </button>
         </div>
         <div class="card-body">
-          <div class="alert alert-warning small mb-3">
-            <span
-              class="material-icons align-middle me-1"
-              style="font-size: 16px"
-              >warning</span
-            >
-            <strong>Performance Warning:</strong> Previewing queue messages
-            involves retrieving and re-queueing them, which can cause overhead
-            on busy brokers.
-          </div>
-          <div id="queue-content">
-            <p class="text-muted text-center mb-0">
-              Click <strong>Peek</strong> to preview queue contents.
-            </p>
+          <div id="queue-content" hx-get="/broker/queue" hx-trigger="load, every 5s">
+            <p class="text-muted text-center mb-0">Loading queue status...</p>
           </div>
         </div>
       </div>
@@ -153,16 +124,4 @@
   </div>
 </div>
 
-<script>
-  document.addEventListener("DOMContentLoaded", function () {
-    var sel = document.getElementById("queue-limit");
-    var btn = document.getElementById("load-queue-btn");
-    if (sel && btn) {
-      sel.addEventListener("change", function () {
-        btn.setAttribute("hx-get", "/broker/queue?limit=" + sel.value);
-        htmx.process(btn);
-      });
-    }
-  });
-</script>
 {% endblock %}

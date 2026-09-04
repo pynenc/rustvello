@@ -63,18 +63,22 @@ PYNENC__CLIENT_DATA_STORE_CLS=RustSqliteClientDataStore
 
 Application-level settings that apply to the entire `RustvelloApp`.
 
-| Field                             | Type        | Default       | Description                                                                             |
-| --------------------------------- | ----------- | ------------- | --------------------------------------------------------------------------------------- |
-| `app_id`                          | `String`    | `"rustvello"` | Unique identifier for the application                                                   |
-| `dev_mode_force_sync`             | `bool`      | `false`       | Execute tasks synchronously in-process (for testing)                                    |
-| `max_pending_seconds`             | `f64`       | `300.0`       | Max seconds an invocation can stay `Pending` before recovery re-queues it               |
-| `heartbeat_interval_seconds`      | `f64`       | `30.0`        | How often a runner publishes its heartbeat                                              |
-| `runner_dead_after_seconds`       | `u64`       | `300`         | Heartbeat age threshold after which a runner is considered dead                         |
-| `recovery_check_interval_seconds` | `f64`       | `60.0`        | How often the management loop scans for stale invocations                               |
-| `num_workers`                     | `usize`     | CPU count     | Number of concurrent async workers per runner                                           |
-| `idle_sleep_ms`                   | `u64`       | `100`         | Milliseconds a worker sleeps when the broker queue is empty                             |
-| `logging_level`                   | `String`    | `"info"`      | Log level for both Rust and Python runtimes (`trace`, `debug`, `info`, `warn`, `error`) |
-| `log_format`                      | `LogFormat` | `Text`        | Log output format: `Text` (human-readable) or `Json` (NDJSON)                           |
+| Field                             | Type                      | Default       | Description                                                                             |
+| --------------------------------- | ------------------------- | ------------- | --------------------------------------------------------------------------------------- |
+| `app_id`                          | `String`                  | `"rustvello"` | Unique identifier for the application                                                   |
+| `broker_queues`                   | `Vec<String>`             | `["default"]` | Logical queues available for routing; `default` is inserted when omitted                |
+| `runner_queues`                   | `Vec<String>`             | `[]`          | Queues consumed by runners; empty consumes every broker queue                           |
+| `queue_selection_strategy`        | `enum`                    | `RoundRobin`  | Queue attempt order: `round_robin`, `random`, or `ordered`                              |
+| `priority_rules`                  | `Vec<BrokerPriorityRule>` | `[]`          | Task-ID wildcard rules; the highest matching priority overrides task priority           |
+| `dev_mode_force_sync`             | `bool`                    | `false`       | Execute tasks synchronously in-process (for testing)                                    |
+| `max_pending_seconds`             | `f64`                     | `300.0`       | Max seconds an invocation can stay `Pending` before recovery re-queues it               |
+| `heartbeat_interval_seconds`      | `f64`                     | `30.0`        | How often a runner publishes its heartbeat                                              |
+| `runner_dead_after_seconds`       | `u64`                     | `300`         | Heartbeat age threshold after which a runner is considered dead                         |
+| `recovery_check_interval_seconds` | `f64`                     | `60.0`        | How often the management loop scans for stale invocations                               |
+| `num_workers`                     | `usize`                   | CPU count     | Number of concurrent async workers per runner                                           |
+| `idle_sleep_ms`                   | `u64`                     | `100`         | Milliseconds a worker sleeps when the broker queue is empty                             |
+| `logging_level`                   | `String`                  | `"info"`      | Log level for both Rust and Python runtimes (`trace`, `debug`, `info`, `warn`, `error`) |
+| `log_format`                      | `LogFormat`               | `Text`        | Log output format: `Text` (human-readable) or `Json` (NDJSON)                           |
 
 See {doc}`../monitoring/logging` for details on the unified logging format.
 
@@ -88,6 +92,8 @@ in a TOML file, or via env vars.
 | Field                        | Type                     | Default            | Description                                                          |
 | ---------------------------- | ------------------------ | ------------------ | -------------------------------------------------------------------- |
 | `max_retries`                | `u32`                    | `0`                | Maximum retry attempts on failure                                    |
+| `queue`                      | `String`                 | `"default"`        | Logical queue used for this task                                     |
+| `priority`                   | `f64`                    | `0.0`              | Priority within the queue, from `-100.0` through `100.0`             |
 | `concurrency_control`        | `ConcurrencyControlType` | `Unlimited`        | Execution-time concurrency mode                                      |
 | `running_concurrency`        | `Option<u32>`            | `None` (unlimited) | Max simultaneous running instances                                   |
 | `registration_concurrency`   | `ConcurrencyControlType` | `Unlimited`        | Registration-time dedup mode                                         |
@@ -104,6 +110,46 @@ in a TOML file, or via env vars.
 Use `#[rustvello::workflow]` to define workflow roots. Do not toggle
 `is_workflow_task` on an ordinary Rust task; the macro sets the marker and the
 required blocking execution mode together. See {doc}`../workflows`.
+
+## Queues and priorities
+
+Queues isolate independent streams of work. Within one queue, the highest
+priority is retrieved first and equal priorities retain FIFO order. Priorities
+must be finite floats from `-100.0` through `100.0`; every task has the concrete
+default `0.0`.
+
+```rust
+#[rustvello::task(queue = "payments", priority = 25.5)]
+fn capture_payment(order_id: String) {
+    // ...
+}
+```
+
+Declare broker and runner queues in `AppConfig`. An empty `runner_queues` list
+means every broker queue. `ordered` always checks queues in declaration order
+and can starve later queues; `round_robin` and `random` distribute queue checks.
+
+Broker priority rules use shell-style task-ID patterns. Matching rules override
+the concrete task priority, and the highest matching rule wins. Environment
+configuration represents one rule as `task-pattern=priority`.
+
+```toml
+[app]
+broker_queues = ["default", "payments", "reports"]
+runner_queues = ["payments", "reports"]
+queue_selection_strategy = "round_robin"
+priority_rules = [
+  { task_id = "billing.*", priority = 50.0 },
+  { task_id = "reports.*", priority = -10.0 },
+]
+```
+
+All broker implementations satisfy the same named-queue, float-priority,
+task-filtering, language-filtering, count, and purge contract. RabbitMQ is the
+only representation adapter: AMQP exposes 256 unsigned integer priority levels,
+so Rustvello normalizes `-100.0..100.0` to `0..255` and rounds to the nearest
+level. Close float priorities may therefore tie on RabbitMQ and fall back to
+FIFO; other backends preserve the original float precision.
 
 ---
 

@@ -7,6 +7,9 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::Router;
 
+use crate::histogram::{
+    build_histogram, parse_categories, HistogramCategory, HistogramEntry, HistogramPanel,
+};
 use crate::log_explorer::parser::{self, EntityRef, ParsedLogLine};
 use crate::log_explorer::render;
 use crate::state::AppState;
@@ -19,6 +22,7 @@ use rustvello_proto::prelude::InvocationId;
 #[derive(serde::Deserialize, Default)]
 pub struct LogQuery {
     pub log_text: Option<String>,
+    pub histogram_status: Option<String>,
 }
 
 // ── Analysis data structures ──────────────────────────────────────────────────
@@ -57,6 +61,8 @@ pub struct MultiLogAnalysis {
     pub timeline_qs: String,
     /// Map of invocation ID → task key for cross-highlighting.
     pub inv_task_map: std::collections::HashMap<String, String>,
+    /// Occupancy histogram for the same invocation scope.
+    pub histogram: HistogramPanel,
 }
 
 // ── Template ──────────────────────────────────────────────────────────────────
@@ -98,11 +104,12 @@ async fn analyze(
     axum::Form(form): axum::Form<LogQuery>,
 ) -> AppResult<impl IntoResponse> {
     let app = get_active_app(&state)?;
+    let categories = parse_categories(form.histogram_status.as_deref());
     let log_text = form.log_text.unwrap_or_default();
     let analysis = if log_text.trim().is_empty() {
         None
     } else {
-        Some(analyse_logs(&log_text, &app).await)
+        Some(analyse_logs(&log_text, &app, categories).await)
     };
 
     Ok(HtmlTemplate(LogExplorerTemplate {
@@ -117,7 +124,11 @@ async fn analyze(
 
 // ── Analysis logic ────────────────────────────────────────────────────────────
 
-async fn analyse_logs(log_text: &str, app: &AppInstance) -> MultiLogAnalysis {
+async fn analyse_logs(
+    log_text: &str,
+    app: &AppInstance,
+    categories: std::collections::BTreeSet<HistogramCategory>,
+) -> MultiLogAnalysis {
     let mut parsed_lines = parser::parse_log_lines(log_text);
 
     // Resolve truncated runner/worker IDs to full UUIDs via state backend.
@@ -169,6 +180,7 @@ async fn analyse_logs(log_text: &str, app: &AppInstance) -> MultiLogAnalysis {
     // Build inline SVG timeline from referenced invocations
     let (svg_content, timeline_qs, inv_task_map) =
         build_log_timeline(&all_entity_refs, &lines, app).await;
+    let histogram = build_log_histogram(&all_entity_refs, &lines, app, categories).await;
 
     MultiLogAnalysis {
         lines,
@@ -180,6 +192,7 @@ async fn analyse_logs(log_text: &str, app: &AppInstance) -> MultiLogAnalysis {
         svg_content,
         timeline_qs,
         inv_task_map,
+        histogram,
     }
 }
 
@@ -241,23 +254,22 @@ async fn build_log_timeline(
         .collect();
 
     // Build timeline query string
-    let timeline_qs =
-        if let (Some(min_ts), Some(max_ts)) = (timestamps.iter().min(), timestamps.iter().max()) {
-            let duration = (*max_ts - *min_ts).num_milliseconds().max(1) as f64;
-            let pad = chrono::Duration::milliseconds((duration * 0.1).max(1000.0) as i64);
-            let start = *min_ts - pad;
-            let end = *max_ts + pad;
-            format!(
-                "time_range=custom&start_date={}&end_date={}",
-                start.format("%Y-%m-%dT%H:%M:%S"),
-                end.format("%Y-%m-%dT%H:%M:%S"),
-            )
-        } else {
-            "time_range=5m".to_owned()
-        };
+    let time_window = log_time_window(&timestamps);
+    let timeline_qs = if let Some((start, end)) = time_window {
+        format!(
+            "time_range=custom&start_date={}&end_date={}",
+            start.format("%Y-%m-%dT%H:%M:%S"),
+            end.format("%Y-%m-%dT%H:%M:%S"),
+        )
+    } else {
+        "time_range=5m".to_owned()
+    };
 
     // Fetch invocation history from state backend
     let mut builder = crate::svg::TimelineDataBuilder::new(crate::svg::TimelineConfig::default());
+    if let Some((start, end)) = time_window {
+        builder.set_time_bounds(start, end);
+    }
     let mut found_any = false;
     let mut runner_ids_seen = std::collections::HashSet::new();
 
@@ -310,6 +322,101 @@ async fn build_log_timeline(
     let data = builder.build();
     let svg = crate::svg::TimelineSvgRenderer::render(&data);
     (svg, timeline_qs, inv_task_map)
+}
+
+fn log_time_window(
+    timestamps: &[chrono::DateTime<chrono::Utc>],
+) -> Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
+    let (min_ts, max_ts) = (timestamps.iter().min()?, timestamps.iter().max()?);
+    let duration = (*max_ts - *min_ts).num_milliseconds().max(1) as f64;
+    let pad = chrono::Duration::milliseconds((duration * 0.1).max(1000.0) as i64);
+    Some((*min_ts - pad, *max_ts + pad))
+}
+
+async fn build_log_histogram(
+    all_refs: &[EntityRef],
+    lines: &[LineAnalysis],
+    app: &AppInstance,
+    categories: std::collections::BTreeSet<HistogramCategory>,
+) -> HistogramPanel {
+    let mut invocation_ids: HashSet<String> = all_refs
+        .iter()
+        .filter(|reference| {
+            matches!(
+                reference.kind.as_str(),
+                "invocation" | "parent-invocation" | "child-invocation" | "new-invocation"
+            )
+        })
+        .map(|reference| reference.value.clone())
+        .collect();
+    invocation_ids.extend(
+        lines
+            .iter()
+            .filter_map(|line| line.parsed.invocation_id.clone()),
+    );
+
+    let timestamps: Vec<chrono::DateTime<chrono::Utc>> = lines
+        .iter()
+        .filter_map(|line| {
+            line.parsed.timestamp.as_deref().and_then(|timestamp| {
+                chrono::DateTime::parse_from_rfc3339(timestamp)
+                    .ok()
+                    .map(|value| value.with_timezone(&chrono::Utc))
+                    .or_else(|| {
+                        chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S%.f")
+                            .ok()
+                            .map(|value| value.and_utc())
+                    })
+            })
+        })
+        .collect();
+    let mut entries = Vec::new();
+    for invocation_id in &invocation_ids {
+        let typed_id = InvocationId::from_string(invocation_id.clone());
+        let Ok(invocation) = app.state_backend.get_invocation(&typed_id).await else {
+            continue;
+        };
+        let history = app
+            .state_backend
+            .get_history(&typed_id)
+            .await
+            .unwrap_or_default();
+        let task_id = invocation.task_id.to_string();
+        entries.extend(
+            history
+                .iter()
+                .map(|entry| HistogramEntry::from_history(entry, &task_id)),
+        );
+    }
+    let history_window = || {
+        let start = entries.iter().map(|entry| entry.timestamp).min()?;
+        let mut end = entries.iter().map(|entry| entry.timestamp).max()?;
+        if end <= start {
+            end = start + chrono::Duration::seconds(1);
+        }
+        Some((start, end))
+    };
+    let (start, end) = log_time_window(&timestamps)
+        .or_else(history_window)
+        .unwrap_or_else(|| {
+            let end = chrono::Utc::now();
+            (end - chrono::Duration::seconds(5), end)
+        });
+    let data = build_histogram(&entries, start, end, categories, None);
+    let mut scoped_ids = invocation_ids.into_iter().collect::<Vec<_>>();
+    scoped_ids.sort();
+    let common_params = vec![("inv_ids".to_owned(), scoped_ids.join(","))];
+    let timeline_config = crate::svg::TimelineConfig::default();
+    HistogramPanel::from_data_with_y_axis_and_plot_bounds(
+        &data,
+        &common_params,
+        "/invocations/timeline",
+        true,
+        None,
+        Some(timeline_config.left_margin),
+        Some(timeline_config.left_margin + timeline_config.drawable_width()),
+    )
+    .with_form_id("log-form")
 }
 
 /// Resolve truncated runner/worker IDs in parsed log lines to full UUIDs.

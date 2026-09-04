@@ -163,7 +163,7 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
 
       - name: Fuzz JSON trigger parsing
         run: cargo +nightly fuzz run fuzz_json_trigger -- -max_total_time=30

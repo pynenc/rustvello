@@ -289,6 +289,8 @@ endblock %} {% block extra_css %}
       >
         {{ analysis.svg_content|safe }}
       </div>
+      {% let histogram = analysis.histogram %}
+      {% include "partials/histogram.html" %}
       {# ── Invocation detail panel (click on SVG element) ── #}
       <div id="log-inv-detail" class="log-inv-detail">
         <div class="d-flex justify-content-between align-items-center mb-2">

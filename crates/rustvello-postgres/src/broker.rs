@@ -4,15 +4,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use rustvello_core::broker::Broker;
+use rustvello_core::broker::{validate_routing, Broker, DEFAULT_QUEUE};
 use rustvello_core::error::RustvelloResult;
 use rustvello_proto::identifiers::{InvocationId, TaskId};
 
 use crate::db::{pg_err, Database};
 
-/// PostgreSQL-backed broker implementation.
-///
-/// Persists the queue to a PostgreSQL database, suitable for multi-node deployments.
+/// PostgreSQL-backed broker with atomic priority dequeue via `SKIP LOCKED`.
 pub struct PostgresBroker {
     db: Arc<Database>,
 }
@@ -25,16 +23,30 @@ impl PostgresBroker {
 
 #[async_trait]
 impl Broker for PostgresBroker {
-    async fn route_invocation(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
+    async fn route_invocation_with_options(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: Option<&TaskId>,
+        queue_name: &str,
+        priority: f64,
+    ) -> RustvelloResult<()> {
+        validate_routing(queue_name, priority)?;
         let client = self.db.conn().await?;
+        let task_id = task_id.map(ToString::to_string);
         client
             .execute(
-                "INSERT INTO broker_queue (invocation_id) VALUES ($1)",
-                &[&invocation_id.as_str()],
+                "INSERT INTO broker_queue (invocation_id, task_id, queue_name, priority) \
+                 VALUES ($1, $2, $3, $4)",
+                &[&invocation_id.as_str(), &task_id, &queue_name, &priority],
             )
             .await
             .map_err(pg_err)?;
         Ok(())
+    }
+
+    async fn route_invocation(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
+        self.route_invocation_with_options(invocation_id, None, DEFAULT_QUEUE, 0.0)
+            .await
     }
 
     async fn route_invocation_for_task(
@@ -42,154 +54,176 @@ impl Broker for PostgresBroker {
         invocation_id: &InvocationId,
         task_id: &TaskId,
     ) -> RustvelloResult<()> {
-        let client = self.db.conn().await?;
-        client
-            .execute(
-                "INSERT INTO broker_queue (invocation_id, task_id) VALUES ($1, $2)",
-                &[&invocation_id.as_str(), &task_id.to_string()],
-            )
+        self.route_invocation_with_options(invocation_id, Some(task_id), DEFAULT_QUEUE, 0.0)
             .await
-            .map_err(pg_err)?;
-        Ok(())
+    }
+
+    async fn retrieve_invocation_from_queue(
+        &self,
+        queue_name: &str,
+        task_id: Option<&TaskId>,
+    ) -> RustvelloResult<Option<InvocationId>> {
+        validate_routing(queue_name, 0.0)?;
+        let client = self.db.conn().await?;
+        let row = match task_id {
+            Some(task_id) => {
+                let task_id = task_id.to_string();
+                client
+                    .query_opt(
+                        "DELETE FROM broker_queue WHERE id = (\
+                           SELECT id FROM broker_queue \
+                           WHERE queue_name = $1 AND task_id = $2 \
+                           ORDER BY priority DESC, id ASC LIMIT 1 \
+                           FOR UPDATE SKIP LOCKED\
+                         ) RETURNING invocation_id",
+                        &[&queue_name, &task_id],
+                    )
+                    .await
+                    .map_err(pg_err)?
+            }
+            None => client
+                .query_opt(
+                    "DELETE FROM broker_queue WHERE id = (\
+                       SELECT id FROM broker_queue WHERE queue_name = $1 \
+                       ORDER BY priority DESC, id ASC LIMIT 1 \
+                       FOR UPDATE SKIP LOCKED\
+                     ) RETURNING invocation_id",
+                    &[&queue_name],
+                )
+                .await
+                .map_err(pg_err)?,
+        };
+        Ok(row.map(|row| InvocationId::from_string(row.get::<_, String>(0))))
     }
 
     async fn retrieve_invocation(
         &self,
         task_id: Option<&TaskId>,
     ) -> RustvelloResult<Option<InvocationId>> {
-        let client = self.db.conn().await?;
+        self.retrieve_invocation_from_queue(DEFAULT_QUEUE, task_id)
+            .await
+    }
 
-        // Atomically select and delete using a CTE for crash safety.
-        let row = if let Some(tid) = task_id {
+    async fn retrieve_invocation_for_language_from_queue(
+        &self,
+        language: &str,
+        queue_name: &str,
+    ) -> RustvelloResult<Option<InvocationId>> {
+        validate_routing(queue_name, 0.0)?;
+        let client = self.db.conn().await?;
+        let row = if language.is_empty() {
             client
                 .query_opt(
-                    "DELETE FROM broker_queue
-                     WHERE id = (
-                         SELECT bq.id FROM broker_queue bq
-                         WHERE bq.task_id = $1 OR (bq.task_id IS NULL AND EXISTS (
-                             SELECT 1 FROM invocations inv
-                             WHERE inv.invocation_id = bq.invocation_id AND inv.task_id = $1
-                         ))
-                         ORDER BY bq.id ASC LIMIT 1
-                         FOR UPDATE OF bq SKIP LOCKED
-                     )
-                     RETURNING invocation_id",
-                    &[&tid.to_string()],
+                    "DELETE FROM broker_queue WHERE id = (\
+                       SELECT id FROM broker_queue \
+                       WHERE queue_name = $1 AND (task_id IS NULL OR task_id NOT LIKE '%::%') \
+                       ORDER BY priority DESC, id ASC LIMIT 1 \
+                       FOR UPDATE SKIP LOCKED\
+                     ) RETURNING invocation_id",
+                    &[&queue_name],
                 )
                 .await
                 .map_err(pg_err)?
         } else {
+            let prefix = format!("{language}::%");
             client
                 .query_opt(
-                    "DELETE FROM broker_queue
-                     WHERE id = (SELECT id FROM broker_queue ORDER BY id ASC LIMIT 1 FOR UPDATE SKIP LOCKED)
-                     RETURNING invocation_id",
-                    &[],
+                    "DELETE FROM broker_queue WHERE id = (\
+                       SELECT id FROM broker_queue \
+                       WHERE queue_name = $1 AND (task_id IS NULL OR task_id LIKE $2) \
+                       ORDER BY priority DESC, id ASC LIMIT 1 \
+                       FOR UPDATE SKIP LOCKED\
+                     ) RETURNING invocation_id",
+                    &[&queue_name, &prefix],
                 )
                 .await
                 .map_err(pg_err)?
         };
-
-        Ok(row.map(|r| InvocationId::from_string(r.get::<_, String>(0))))
-    }
-
-    async fn count_invocations(&self, task_id: Option<&TaskId>) -> RustvelloResult<usize> {
-        let client = self.db.conn().await?;
-        let row = if let Some(tid) = task_id {
-            client
-                .query_one(
-                    "SELECT COUNT(*) FROM broker_queue bq \
-                     WHERE bq.task_id = $1 OR (bq.task_id IS NULL AND EXISTS (\
-                         SELECT 1 FROM invocations inv \
-                         WHERE inv.invocation_id = bq.invocation_id AND inv.task_id = $1\
-                     ))",
-                    &[&tid.to_string()],
-                )
-                .await
-                .map_err(pg_err)?
-        } else {
-            client
-                .query_one("SELECT COUNT(*) FROM broker_queue", &[])
-                .await
-                .map_err(pg_err)?
-        };
-        let count: i64 = row.get(0);
-        Ok(usize::try_from(count).unwrap_or(usize::MAX))
-    }
-
-    async fn purge(&self, task_id: Option<&TaskId>) -> RustvelloResult<()> {
-        let client = self.db.conn().await?;
-        if let Some(tid) = task_id {
-            client
-                .execute(
-                    "DELETE FROM broker_queue \
-                     WHERE task_id = $1 OR (task_id IS NULL AND invocation_id IN (\
-                         SELECT inv.invocation_id FROM invocations inv WHERE inv.task_id = $1\
-                     ))",
-                    &[&tid.to_string()],
-                )
-                .await
-                .map_err(pg_err)?;
-        } else {
-            client
-                .execute("DELETE FROM broker_queue", &[])
-                .await
-                .map_err(pg_err)?;
-        }
-        Ok(())
+        Ok(row.map(|row| InvocationId::from_string(row.get::<_, String>(0))))
     }
 
     async fn retrieve_invocation_for_language(
         &self,
         language: &str,
     ) -> RustvelloResult<Option<InvocationId>> {
-        let client = self.db.conn().await?;
-        let prefix = format!("{language}::");
-        let global = client
-            .query_opt(
-                "DELETE FROM broker_queue
-                 WHERE id = (
-                     SELECT id FROM broker_queue
-                     WHERE task_id IS NULL
-                     ORDER BY id ASC LIMIT 1
-                     FOR UPDATE SKIP LOCKED
-                 )
-                 RETURNING invocation_id",
-                &[],
-            )
+        self.retrieve_invocation_for_language_from_queue(language, DEFAULT_QUEUE)
             .await
-            .map_err(pg_err)?;
-        let row = match global {
-            Some(row) => Some(row),
-            None if language.is_empty() => client
-                .query_opt(
-                    "DELETE FROM broker_queue
-                     WHERE id = (
-                         SELECT id FROM broker_queue
-                         WHERE task_id NOT LIKE '%::%'
-                         ORDER BY id ASC LIMIT 1
-                         FOR UPDATE SKIP LOCKED
-                     )
-                     RETURNING invocation_id",
-                    &[],
-                )
-                .await
-                .map_err(pg_err)?,
-            None => client
-                .query_opt(
-                    "DELETE FROM broker_queue
-                     WHERE id = (
-                         SELECT id FROM broker_queue
-                         WHERE task_id LIKE $1 || '%'
-                         ORDER BY id ASC LIMIT 1
-                         FOR UPDATE SKIP LOCKED
-                     )
-                     RETURNING invocation_id",
-                    &[&prefix],
-                )
-                .await
-                .map_err(pg_err)?,
-        };
-        Ok(row.map(|r| InvocationId::from_string(r.get::<_, String>(0))))
+    }
+
+    async fn count_invocations_in_queues(
+        &self,
+        queue_names: &[String],
+        task_id: Option<&TaskId>,
+    ) -> RustvelloResult<usize> {
+        for queue_name in queue_names {
+            validate_routing(queue_name, 0.0)?;
+        }
+        let client = self.db.conn().await?;
+        let task_id = task_id.map(ToString::to_string);
+        let mut count = 0i64;
+        if queue_names.is_empty() {
+            let row = match task_id {
+                Some(task_id) => client
+                    .query_one(
+                        "SELECT COUNT(*) FROM broker_queue WHERE task_id = $1",
+                        &[&task_id],
+                    )
+                    .await
+                    .map_err(pg_err)?,
+                None => client
+                    .query_one("SELECT COUNT(*) FROM broker_queue", &[])
+                    .await
+                    .map_err(pg_err)?,
+            };
+            count = row.get(0);
+        } else {
+            for queue_name in queue_names {
+                let row = match &task_id {
+                    Some(task_id) => client
+                        .query_one(
+                            "SELECT COUNT(*) FROM broker_queue \
+                             WHERE queue_name = $1 AND task_id = $2",
+                            &[queue_name, task_id],
+                        )
+                        .await
+                        .map_err(pg_err)?,
+                    None => client
+                        .query_one(
+                            "SELECT COUNT(*) FROM broker_queue WHERE queue_name = $1",
+                            &[queue_name],
+                        )
+                        .await
+                        .map_err(pg_err)?,
+                };
+                count += row.get::<_, i64>(0);
+            }
+        }
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
+    async fn count_invocations(&self, task_id: Option<&TaskId>) -> RustvelloResult<usize> {
+        self.count_invocations_in_queues(&[], task_id).await
+    }
+
+    async fn purge(&self, task_id: Option<&TaskId>) -> RustvelloResult<()> {
+        let client = self.db.conn().await?;
+        match task_id {
+            Some(task_id) => {
+                client
+                    .execute(
+                        "DELETE FROM broker_queue WHERE task_id = $1",
+                        &[&task_id.to_string()],
+                    )
+                    .await
+                    .map_err(pg_err)?;
+            }
+            None => {
+                client
+                    .execute("DELETE FROM broker_queue", &[])
+                    .await
+                    .map_err(pg_err)?;
+            }
+        }
+        Ok(())
     }
 }

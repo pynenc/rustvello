@@ -59,7 +59,7 @@ cargo test -p rustvello-redis -- --ignored
 cargo test -p rustvello-redis -- --include-ignored
 
 # Run Docker tests across all backends:
-cargo test --workspace --exclude py-rustvello -- --ignored
+cargo test --workspace --exclude py-rustvello --exclude rustvello-python -- --ignored
 
 # Run a specific Docker test:
 cargo test -p rustvello-redis -- --ignored suite_broker_route_and_retrieve

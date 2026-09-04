@@ -1,4 +1,4 @@
-use lapin::{Channel, Connection, ConnectionProperties};
+use lapin::{options::ConfirmSelectOptions, Channel, Connection, ConnectionProperties};
 use tokio::sync::Mutex;
 
 /// Manages a persistent AMQP connection and channel.
@@ -27,6 +27,7 @@ impl AmqpConnection {
         }
         let conn = Connection::connect(&self.uri, ConnectionProperties::default()).await?;
         let ch = conn.create_channel().await?;
+        ch.confirm_select(ConfirmSelectOptions::default()).await?;
         *guard = Some((conn, ch.clone()));
         Ok(ch)
     }

@@ -1,0 +1,72 @@
+<script>
+(function () {
+  function tooltip() {
+    var node = document.getElementById('histogram-tooltip');
+    if (!node) {
+      node = document.createElement('div');
+      node.id = 'histogram-tooltip';
+      node.className = 'histogram-tooltip';
+      document.body.appendChild(node);
+    }
+    return node;
+  }
+  function highlight(bucket, enabled) {
+    (bucket.dataset.invocationIds || '').split(/\s+/).filter(Boolean).forEach(function (id) {
+      document.querySelectorAll('[data-invocation-id="' + CSS.escape(id) + '"]').forEach(function (element) {
+        if (!element.closest('.histogram-bucket')) element.classList.toggle('invocation-highlight', enabled);
+      });
+    });
+  }
+  function bind(root) {
+    root.querySelectorAll('.histogram-bucket').forEach(function (bucket) {
+      if (bucket.dataset.histogramBound) return;
+      bucket.dataset.histogramBound = '1';
+      var tip = tooltip();
+      bucket.addEventListener('mouseenter', function (event) {
+        tip.textContent = bucket.dataset.tooltip || '';
+        tip.style.display = 'block';
+        tip.style.left = Math.min(event.clientX + 12, window.innerWidth - 440) + 'px';
+        tip.style.top = Math.max(8, event.clientY - 38) + 'px';
+        highlight(bucket, true);
+      });
+      bucket.addEventListener('mousemove', function (event) {
+        tip.style.left = Math.min(event.clientX + 12, window.innerWidth - 440) + 'px';
+        tip.style.top = Math.max(8, event.clientY - 38) + 'px';
+      });
+      bucket.addEventListener('mouseleave', function () {
+        tip.style.display = 'none';
+        highlight(bucket, false);
+      });
+    });
+    root.querySelectorAll('.histogram-status-toggle').forEach(function (input) {
+      if (input.dataset.histogramBound) return;
+      input.dataset.histogramBound = '1';
+      input.addEventListener('change', function () {
+        var panel = input.closest('[data-histogram-panel]');
+        var selected = Array.from(panel.querySelectorAll('.histogram-status-toggle:checked')).map(function (item) { return item.value; });
+        if (panel.dataset.histogramForm) {
+          var form = document.getElementById(panel.dataset.histogramForm);
+          if (form) {
+            var hidden = form.querySelector('input[name="histogram_status"]');
+            if (!hidden) {
+              hidden = document.createElement('input');
+              hidden.type = 'hidden';
+              hidden.name = 'histogram_status';
+              form.appendChild(hidden);
+            }
+            hidden.value = selected.join(',');
+            form.requestSubmit();
+            return;
+          }
+        }
+        var url = new URL(window.location.href);
+        url.searchParams.set('histogram_status', selected.join(','));
+        window.location.assign(url.toString());
+      });
+    });
+  }
+  function bindAll() { document.querySelectorAll('[data-histogram-panel]').forEach(bind); }
+  document.addEventListener('DOMContentLoaded', bindAll);
+  document.body.addEventListener('htmx:afterSwap', bindAll);
+})();
+</script>

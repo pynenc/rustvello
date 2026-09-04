@@ -10,7 +10,7 @@ use rustvello_proto::config::{AppConfig, TaskConfig};
 use rustvello_proto::identifiers::{InvocationId, RunnerId, TaskId};
 use rustvello_proto::invocation::InvocationDTO;
 use rustvello_proto::status::{ConcurrencyControlType, InvocationStatus};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -831,6 +831,8 @@ async fn test_cc_slot_is_atomic_across_runner_instances() {
         Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
     let active = Arc::new(AtomicUsize::new(0));
     let peak = Arc::new(AtomicUsize::new(0));
+    let first_started = Arc::new(AtomicBool::new(false));
+    let release_first = Arc::new(AtomicBool::new(false));
 
     let mut config = TaskConfig::default();
     config.concurrency_control = ConcurrencyControlType::Task;
@@ -839,6 +841,8 @@ async fn test_cc_slot_is_atomic_across_runner_instances() {
     let mut registry = TaskRegistry::new();
     let active_for_task = Arc::clone(&active);
     let peak_for_task = Arc::clone(&peak);
+    let started_for_task = Arc::clone(&first_started);
+    let release_for_task = Arc::clone(&release_first);
     registry
         .register(TaskDefinition::new(
             TaskId::new("test", "contended"),
@@ -846,7 +850,12 @@ async fn test_cc_slot_is_atomic_across_runner_instances() {
             Arc::new(move |_args: String| {
                 let now = active_for_task.fetch_add(1, Ordering::SeqCst) + 1;
                 peak_for_task.fetch_max(now, Ordering::SeqCst);
-                std::thread::sleep(Duration::from_millis(100));
+                if now == 1 {
+                    started_for_task.store(true, Ordering::SeqCst);
+                    while !release_for_task.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
                 active_for_task.fetch_sub(1, Ordering::SeqCst);
                 Ok("null".to_string())
             }),
@@ -892,9 +901,21 @@ async fn test_cc_slot_is_atomic_across_runner_instances() {
     .await;
 
     let a = tokio::spawn(async move { runner_a.run_one().await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !first_started.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("first runner did not start its invocation");
     let b = tokio::spawn(async move { runner_b.run_one().await });
+    let b_result = tokio::time::timeout(Duration::from_secs(2), b).await;
+    release_first.store(true, Ordering::SeqCst);
     a.await.unwrap().unwrap();
-    b.await.unwrap().unwrap();
+    b_result
+        .expect("second runner did not complete its CC check")
+        .unwrap()
+        .unwrap();
 
     let statuses = [
         orchestrator

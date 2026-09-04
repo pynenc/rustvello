@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -20,6 +21,7 @@ use rustvello_core::state_backend::StateBackend;
 use rustvello_core::task::{DynTask, TaskRegistry};
 use rustvello_core::trigger::TriggerManager;
 use rustvello_proto::call::SerializedArguments;
+use rustvello_proto::config::{AppConfig, QueueSelectionStrategy};
 use rustvello_proto::identifiers::{InvocationId, RunnerId};
 use rustvello_proto::invocation::InvocationHistory;
 use rustvello_proto::status::{ConcurrencyControlType, InvocationStatus, InvocationStatusRecord};
@@ -60,6 +62,27 @@ const MAX_BLOCKING_CANDIDATES: usize = 8;
 /// Maximum number of broker retrievals to attempt before giving up when
 /// all candidates fail CC checks.
 const MAX_CC_RETRIES: usize = 8;
+static NEXT_QUEUE_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn queue_names_for_retrieval(config: &AppConfig) -> Vec<String> {
+    use rand::seq::SliceRandom;
+
+    let mut queues = if config.runner_queues.is_empty() {
+        config.broker_queues.clone()
+    } else {
+        config.runner_queues.clone()
+    };
+    match config.queue_selection_strategy {
+        QueueSelectionStrategy::Ordered => {}
+        QueueSelectionStrategy::RoundRobin if !queues.is_empty() => {
+            let start = NEXT_QUEUE_INDEX.fetch_add(1, Ordering::Relaxed) % queues.len();
+            queues.rotate_left(start);
+        }
+        QueueSelectionStrategy::Random => queues.shuffle(&mut rand::thread_rng()),
+        _ => {}
+    }
+    queues
+}
 
 /// Retrieve the next invocation to execute using orchestrator-mediated dispatch.
 ///
@@ -71,6 +94,7 @@ pub(crate) async fn retrieve_next_invocation_with_cc(
     broker: &dyn Broker,
     state_backend: Option<&dyn StateBackend>,
     task_registry: Option<&TaskRegistry>,
+    config: &AppConfig,
 ) -> RustvelloResult<Option<InvocationId>> {
     // Step 1: Check for blocking-priority invocations (those with waiters).
     match orchestrator
@@ -104,7 +128,17 @@ pub(crate) async fn retrieve_next_invocation_with_cc(
 
     // Step 2: Fall back to broker FIFO with CC filtering
     for _ in 0..MAX_CC_RETRIES {
-        match broker.retrieve_invocation(None).await? {
+        let mut candidate = None;
+        for queue_name in queue_names_for_retrieval(config) {
+            if let Some(invocation_id) = broker
+                .retrieve_invocation_from_queue(&queue_name, None)
+                .await?
+            {
+                candidate = Some(invocation_id);
+                break;
+            }
+        }
+        match candidate {
             Some(inv_id) => {
                 if check_cc_for_candidate(
                     orchestrator,
@@ -197,7 +231,12 @@ async fn check_cc_for_candidate(
                     .set_invocation_status(invocation_id, InvocationStatus::Rerouted, None)
                     .await?;
                 broker
-                    .route_invocation_for_task(invocation_id, &inv_dto.task_id)
+                    .route_invocation_with_options(
+                        invocation_id,
+                        Some(&inv_dto.task_id),
+                        &config.queue,
+                        config.priority,
+                    )
                     .await?;
                 tracing::info!(
                     "Rerouted CC-denied invocation {} back to broker",
@@ -533,7 +572,14 @@ where
                     )
                     .await?;
 
-                deps.broker.route_invocation(invocation_id).await?;
+                deps.broker
+                    .route_invocation_with_options(
+                        invocation_id,
+                        Some(&inv_dto.task_id),
+                        &task.config().queue,
+                        task.config().priority,
+                    )
+                    .await?;
 
                 deps.state_backend
                     .add_history(

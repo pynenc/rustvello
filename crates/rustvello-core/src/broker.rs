@@ -2,9 +2,34 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
+use rustvello_proto::config::{MAX_PRIORITY, MIN_PRIORITY};
 use rustvello_proto::identifiers::{InvocationId, TaskId};
 
+use crate::error::RustvelloError;
 use crate::error::RustvelloResult;
+
+pub const DEFAULT_QUEUE: &str = "default";
+
+/// Validate backend-independent queue and priority values.
+pub fn validate_routing(queue_name: &str, priority: f64) -> RustvelloResult<()> {
+    if queue_name.is_empty()
+        || !queue_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+    {
+        return Err(RustvelloError::Configuration {
+            message: format!("invalid queue name {queue_name:?}; expected [A-Za-z0-9_.-]+"),
+        });
+    }
+    if !priority.is_finite() || !(MIN_PRIORITY..=MAX_PRIORITY).contains(&priority) {
+        return Err(RustvelloError::Configuration {
+            message: format!(
+                "priority must be a finite float between {MIN_PRIORITY} and {MAX_PRIORITY}"
+            ),
+        });
+    }
+    Ok(())
+}
 
 /// Message broker interface for routing invocations to runners.
 ///
@@ -19,6 +44,36 @@ use crate::error::RustvelloResult;
 /// [`retrieve_invocation_for_language`].
 #[async_trait]
 pub trait Broker: Send + Sync {
+    /// Queue an invocation with independent task, logical queue, and priority routing.
+    async fn route_invocation_with_options(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: Option<&TaskId>,
+        queue_name: &str,
+        priority: f64,
+    ) -> RustvelloResult<()>;
+
+    /// Retrieve from one logical queue, optionally filtered by task.
+    async fn retrieve_invocation_from_queue(
+        &self,
+        queue_name: &str,
+        task_id: Option<&TaskId>,
+    ) -> RustvelloResult<Option<InvocationId>>;
+
+    /// Retrieve from one logical queue for a language worker.
+    async fn retrieve_invocation_for_language_from_queue(
+        &self,
+        language: &str,
+        queue_name: &str,
+    ) -> RustvelloResult<Option<InvocationId>>;
+
+    /// Count invocations in the selected logical queues.
+    async fn count_invocations_in_queues(
+        &self,
+        queue_names: &[String],
+        task_id: Option<&TaskId>,
+    ) -> RustvelloResult<usize>;
+
     /// Queue an invocation for processing by a runner.
     ///
     /// When the task ID is unknown at the call site this selects the global

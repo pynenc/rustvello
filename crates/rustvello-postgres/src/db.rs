@@ -204,13 +204,14 @@ impl Database {
                 id BIGSERIAL PRIMARY KEY,
                 invocation_id TEXT NOT NULL,
                 task_id TEXT,
+                queue_name TEXT NOT NULL,
+                priority DOUBLE PRECISION NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
-            ALTER TABLE broker_queue ADD COLUMN IF NOT EXISTS task_id TEXT;
-            CREATE INDEX IF NOT EXISTS idx_broker_queue_created
-                ON broker_queue(created_at);
+            CREATE INDEX IF NOT EXISTS idx_broker_queue_route
+                ON broker_queue(queue_name, priority DESC, id ASC);
             CREATE INDEX IF NOT EXISTS idx_broker_queue_task
-                ON broker_queue(task_id, id);
+                ON broker_queue(queue_name, task_id, priority DESC, id ASC);
 
             -- Invocations
             CREATE TABLE IF NOT EXISTS invocations (

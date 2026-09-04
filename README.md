@@ -68,6 +68,7 @@ For the full architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 - **Invocation State Machine**: 13-state FSM with guarded transitions, ownership tracking, and automatic recovery
 - **Pluggable Backends**: Swap between in-memory, SQLite, Redis, PostgreSQL, MongoDB, and RabbitMQ backends via feature flags
 - **Concurrency Control**: Four levels (Unlimited, Task, Argument, None) enforced at both registration and execution time
+- **Queues and Priorities**: Named logical queues, configurable runner selection, and finite float priorities with FIFO ties
 - **Trigger System**: Event-driven and cron-scheduled task execution with durable event/run evidence in memory and SQLite
 - **Client Data Store**: SHA-256 content-addressed external storage for large arguments/results with LRU caching
 - **Workflow System**: Explicit `#[rustvello::workflow]` roots, child identity propagation, and root-scoped deterministic replay
@@ -101,7 +102,7 @@ Feature flags:
 
 ```toml
 [dependencies]
-rustvello = { version = "0.3.1", features = ["full"] }
+rustvello = { version = "0.4.0", features = ["full"] }
 ```
 
 ### Python
@@ -122,7 +123,7 @@ cargo install rustvello-cli
 use rustvello::prelude::*;
 
 // Define a task with the proc macro
-#[rustvello::task(max_retries = 2, concurrency = "task")]
+#[rustvello::task(max_retries = 2, concurrency = "task", queue = "orders", priority = 25.5)]
 fn process_order(order_id: String) -> String {
     format!("processed {}", order_id)
 }

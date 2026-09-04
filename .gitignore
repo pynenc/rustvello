@@ -142,6 +142,7 @@ cython_debug/
 
 # Temporary build/test artifacts — safe to delete at any time
 .tmp/
+crates/rustvello/tests/compile_fail/wip/
 
 # Personal local development files (scripts, notes, experiments) — not part of the project
 .local/

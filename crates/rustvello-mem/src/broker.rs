@@ -1,11 +1,11 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use async_trait::async_trait;
 use tracing::instrument;
 
-use rustvello_core::broker::Broker;
+use rustvello_core::broker::{validate_routing, Broker, DEFAULT_QUEUE};
 use rustvello_core::error::RustvelloResult;
 use rustvello_proto::identifiers::{InvocationId, TaskId};
 /// In-memory broker with a global queue and per-task queues.
@@ -28,20 +28,23 @@ use rustvello_proto::identifiers::{InvocationId, TaskId};
 /// Workers can call [`wait_for_work`] instead of polling with sleep.
 /// When new work is routed, one waiting worker is woken via `tokio::sync::Notify`.
 pub struct MemBroker {
-    /// Queues keyed by queue name.
-    /// GLOBAL_QUEUE is used for invocations routed without a task_id.
-    /// Each TaskId string maps to its own per-task queue.
-    queues: Mutex<BTreeMap<String, VecDeque<InvocationId>>>,
+    queue: Mutex<VecDeque<QueuedInvocation>>,
     /// Notification channel for waking idle workers.
     notify: tokio::sync::Notify,
 }
 
-const GLOBAL_QUEUE: &str = "__global__";
+#[derive(Clone)]
+struct QueuedInvocation {
+    invocation_id: InvocationId,
+    task_id: Option<TaskId>,
+    queue_name: String,
+    priority: f64,
+}
 
 impl MemBroker {
     pub fn new() -> Self {
         Self {
-            queues: Mutex::new(BTreeMap::new()),
+            queue: Mutex::new(VecDeque::new()),
             notify: tokio::sync::Notify::new(),
         }
     }
@@ -55,163 +58,136 @@ impl Default for MemBroker {
 
 #[async_trait]
 impl Broker for MemBroker {
-    /// Route to the global queue (task ID unknown at this call site).
-    #[instrument(skip(self), fields(%invocation_id))]
-    async fn route_invocation(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
-        let mut queues = self.queues.lock().await;
-        queues
-            .entry(GLOBAL_QUEUE.to_owned())
-            .or_default()
-            .push_back(invocation_id.clone());
-        drop(queues);
+    #[instrument(skip(self), fields(%invocation_id, queue = queue_name, priority))]
+    async fn route_invocation_with_options(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: Option<&TaskId>,
+        queue_name: &str,
+        priority: f64,
+    ) -> RustvelloResult<()> {
+        validate_routing(queue_name, priority)?;
+        self.queue.lock().await.push_back(QueuedInvocation {
+            invocation_id: invocation_id.clone(),
+            task_id: task_id.cloned(),
+            queue_name: queue_name.to_owned(),
+            priority,
+        });
         self.notify.notify_one();
         Ok(())
     }
 
-    /// Route to the task-specific queue.
-    ///
-    /// Callers that know the task ID should prefer this over `route_invocation`
-    /// so that `retrieve_invocation(Some(task_id))` can return a filtered result.
-    #[instrument(skip(self), fields(%invocation_id, %task_id))]
+    async fn route_invocation(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
+        self.route_invocation_with_options(invocation_id, None, DEFAULT_QUEUE, 0.0)
+            .await
+    }
+
     async fn route_invocation_for_task(
         &self,
         invocation_id: &InvocationId,
         task_id: &TaskId,
     ) -> RustvelloResult<()> {
-        let mut queues = self.queues.lock().await;
-        queues
-            .entry(task_id.to_string())
-            .or_default()
-            .push_back(invocation_id.clone());
-        drop(queues);
-        self.notify.notify_one();
-        Ok(())
+        self.route_invocation_with_options(invocation_id, Some(task_id), DEFAULT_QUEUE, 0.0)
+            .await
     }
 
-    #[instrument(skip(self))]
+    async fn retrieve_invocation_from_queue(
+        &self,
+        queue_name: &str,
+        task_id: Option<&TaskId>,
+    ) -> RustvelloResult<Option<InvocationId>> {
+        validate_routing(queue_name, 0.0)?;
+        let mut queue = self.queue.lock().await;
+        let selected = queue
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                item.queue_name == queue_name
+                    && task_id.is_none_or(|task_id| item.task_id.as_ref() == Some(task_id))
+            })
+            .max_by(|(left_index, left), (right_index, right)| {
+                left.priority
+                    .total_cmp(&right.priority)
+                    .then_with(|| right_index.cmp(left_index))
+            })
+            .map(|(index, _)| index);
+        Ok(selected.and_then(|index| queue.remove(index).map(|item| item.invocation_id)))
+    }
+
     async fn retrieve_invocation(
         &self,
         task_id: Option<&TaskId>,
     ) -> RustvelloResult<Option<InvocationId>> {
-        let mut queues = self.queues.lock().await;
-        if let Some(tid) = task_id {
-            // Task-filtered retrieval: pop from the task-specific queue only.
-            return Ok(queues
-                .get_mut(&tid.to_string())
-                .and_then(VecDeque::pop_front));
-        }
-        // Global retrieval: drain global queue first, then any task queue.
-        if let Some(id) = queues.get_mut(GLOBAL_QUEUE).and_then(VecDeque::pop_front) {
-            return Ok(Some(id));
-        }
-        // Fall back to the first non-empty task queue (in iteration order).
-        for (key, queue) in queues.iter_mut() {
-            if key == GLOBAL_QUEUE {
-                continue;
-            }
-            if let Some(id) = queue.pop_front() {
-                return Ok(Some(id));
-            }
-        }
-        Ok(None)
+        self.retrieve_invocation_from_queue(DEFAULT_QUEUE, task_id)
+            .await
     }
 
-    /// Retrieve from queues matching a specific language.
-    ///
-    /// **Behavior:** First checks the global queue, then per-task queues
-    /// whose keys start with `"language::"`. Because the global queue is
-    /// checked first, a single-language worker can drain globally-routed
-    /// invocations before language-agnostic workers see them.
-    ///
-    /// Queue keys for foreign tasks use the format `"language::module.name"`,
-    /// so we match keys that start with `"language::"`. For local tasks
-    /// (no language prefix), they are only retrieved if `language` is empty.
+    async fn retrieve_invocation_for_language_from_queue(
+        &self,
+        language: &str,
+        queue_name: &str,
+    ) -> RustvelloResult<Option<InvocationId>> {
+        validate_routing(queue_name, 0.0)?;
+        let mut queue = self.queue.lock().await;
+        let selected = queue
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                if item.queue_name != queue_name {
+                    return false;
+                }
+                match &item.task_id {
+                    None => true,
+                    Some(task_id) if language.is_empty() => task_id.language().is_empty(),
+                    Some(task_id) => task_id.language() == language,
+                }
+            })
+            .max_by(|(left_index, left), (right_index, right)| {
+                left.priority
+                    .total_cmp(&right.priority)
+                    .then_with(|| right_index.cmp(left_index))
+            })
+            .map(|(index, _)| index);
+        Ok(selected.and_then(|index| queue.remove(index).map(|item| item.invocation_id)))
+    }
+
     async fn retrieve_invocation_for_language(
         &self,
         language: &str,
     ) -> RustvelloResult<Option<InvocationId>> {
-        let mut queues = self.queues.lock().await;
-        // First check the global queue (serves all languages).
-        if let Some(id) = queues.get_mut(GLOBAL_QUEUE).and_then(VecDeque::pop_front) {
-            return Ok(Some(id));
+        self.retrieve_invocation_for_language_from_queue(language, DEFAULT_QUEUE)
+            .await
+    }
+
+    async fn count_invocations_in_queues(
+        &self,
+        queue_names: &[String],
+        task_id: Option<&TaskId>,
+    ) -> RustvelloResult<usize> {
+        for queue_name in queue_names {
+            validate_routing(queue_name, 0.0)?;
         }
-        let prefix = format!("{language}::");
-        for (key, queue) in queues.iter_mut() {
-            if key == GLOBAL_QUEUE {
-                continue;
-            }
-            // Match: foreign task keys start with "language::"; local keys have no "::"
-            let matches = if language.is_empty() {
-                !key.contains("::")
-            } else {
-                key.starts_with(&prefix)
-            };
-            if matches {
-                if let Some(id) = queue.pop_front() {
-                    return Ok(Some(id));
-                }
-            }
-        }
-        Ok(None)
+        let queue = self.queue.lock().await;
+        Ok(queue
+            .iter()
+            .filter(|item| {
+                (queue_names.is_empty() || queue_names.contains(&item.queue_name))
+                    && task_id.is_none_or(|task_id| item.task_id.as_ref() == Some(task_id))
+            })
+            .count())
     }
 
     async fn count_invocations(&self, task_id: Option<&TaskId>) -> RustvelloResult<usize> {
-        let queues = self.queues.lock().await;
-        if let Some(tid) = task_id {
-            return Ok(queues.get(&tid.to_string()).map_or(0, VecDeque::len));
-        }
-        Ok(queues.values().map(VecDeque::len).sum())
+        self.count_invocations_in_queues(&[], task_id).await
     }
 
     async fn purge(&self, task_id: Option<&TaskId>) -> RustvelloResult<()> {
-        let mut queues = self.queues.lock().await;
-        if let Some(tid) = task_id {
-            queues.remove(&tid.to_string());
-            return Ok(());
+        let mut queue = self.queue.lock().await;
+        match task_id {
+            Some(task_id) => queue.retain(|item| item.task_id.as_ref() != Some(task_id)),
+            None => queue.clear(),
         }
-        queues.clear();
         Ok(())
-    }
-
-    /// Batch retrieval: single lock acquisition drains up to `max` items.
-    async fn retrieve_invocations(
-        &self,
-        max: usize,
-        task_id: Option<&TaskId>,
-    ) -> RustvelloResult<Vec<InvocationId>> {
-        let mut queues = self.queues.lock().await;
-        let capped = max.min(10_000);
-        let mut results = Vec::with_capacity(capped);
-        for _ in 0..capped {
-            let item = if let Some(tid) = task_id {
-                queues
-                    .get_mut(&tid.to_string())
-                    .and_then(VecDeque::pop_front)
-            } else {
-                // Global first, then any task queue
-                let global = queues.get_mut(GLOBAL_QUEUE).and_then(VecDeque::pop_front);
-                if global.is_some() {
-                    global
-                } else {
-                    let mut found = None;
-                    for (key, queue) in queues.iter_mut() {
-                        if key == GLOBAL_QUEUE {
-                            continue;
-                        }
-                        if let Some(id) = queue.pop_front() {
-                            found = Some(id);
-                            break;
-                        }
-                    }
-                    found
-                }
-            };
-            match item {
-                Some(id) => results.push(id),
-                None => break,
-            }
-        }
-        Ok(results)
     }
 
     /// Zero-cost wait: blocks until new work is routed or cancelled.

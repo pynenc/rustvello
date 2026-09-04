@@ -2,6 +2,23 @@
 
 For detailed information on each version, please visit the [GitHub Releases page](https://github.com/pynenc/rustvello/releases).
 
+## 0.4.0 - 2026-09-01
+
+- Added named logical queues and finite float priorities to every broker
+  implementation under one mandatory shared contract.
+- Added task queue/priority configuration, wildcard priority rules, multi-queue
+  runner selection, Python bindings, and queue-aware lifecycle rerouting.
+- RabbitMQ documents and tests its adapter-only normalization from
+  `-100.0..100.0` floats to native `0..255` integer priorities.
+- Broker monitoring now reports configured queues non-destructively instead of
+  dequeueing and re-enqueueing messages for previews.
+- MongoDB and MongoDB 3 now coordinate concurrency slots on standalone
+  deployments; Redis status CAS no longer retries indefinitely; RabbitMQ
+  confirms publishes and synchronizes selective scan requeues before reporting
+  task-specific counts.
+- Hardened atomic concurrency testing and fixed the cargo-fuzz CI toolchain.
+- Rust crates and Python packaging are version-aligned at `0.4.0`.
+
 ## 0.3.1 - 2026-08-31
 
 Rustvello is version-aligned with Pynenc `v0.3.1` for the committed sync scope
@@ -79,6 +96,11 @@ Pynenc adapters may set the low-level workflow marker when translating Pynenc's
 explicit workflow decorator.
 
 ### Monitoring dashboard
+
+- Added task occupancy histograms to invocation timelines, workflow-run
+  comparisons, and the Log Explorer, with aligned SVG buckets, task-colored
+  stacks and legends, status selectors, hover context, and filtered invocation
+  drill-down links.
 
 - Timeline views include invocation scope, workflow type, and workflow ID
   filters against persisted invocation data.

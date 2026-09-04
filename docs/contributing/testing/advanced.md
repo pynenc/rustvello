@@ -76,7 +76,7 @@ fuzz_target!(|data: &[u8]| {
 
 ```bash
 # Install cargo-fuzz (requires nightly)
-cargo install cargo-fuzz
+cargo +nightly install cargo-fuzz --locked
 
 # Run a fuzz target
 cargo +nightly fuzz run fuzz_json_trigger

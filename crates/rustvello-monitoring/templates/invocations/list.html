@@ -30,6 +30,13 @@ endblock %} {% block content %}
               <small class="text-muted">Hold Ctrl/Cmd to select multiple</small>
             </div>
             <div class="mb-3">
+              <label for="status-mode" class="form-label">Status meaning</label>
+              <select id="status-mode" name="status_mode" class="form-select">
+                <option value="current" {% if current_filters.status_mode == "current" %}selected{% endif %}>Current status</option>
+                <option value="history" {% if current_filters.status_mode == "history" %}selected{% endif %}>Any history status</option>
+              </select>
+            </div>
+            <div class="mb-3">
               <label for="task_id" class="form-label">Task ID</label>
               <select name="task_id" id="task_id" class="form-select">
                 <option value="">All Tasks</option>
@@ -89,6 +96,16 @@ endblock %} {% block content %}
                 name="limit"
                 value="{{ current_filters.limit }}"
               />
+            </div>
+            <div class="mb-3">
+              <label for="start_date" class="form-label">From (UTC)</label>
+              <input type="text" class="form-control" id="start_date" name="start_date" value="{{ current_filters.start_date }}" placeholder="ISO timestamp" />
+            </div>
+            <div class="mb-3">
+              <label for="end_date" class="form-label">To (UTC)</label>
+              <input type="text" class="form-control" id="end_date" name="end_date" value="{{ current_filters.end_date }}" placeholder="ISO timestamp" />
+              <input type="hidden" name="time_range" value="{% if !current_filters.start_date.is_empty() && !current_filters.end_date.is_empty() %}custom{% endif %}" />
+              {% if !current_filters.inv_ids.is_empty() %}<input type="hidden" name="inv_ids" value="{{ current_filters.inv_ids }}" />{% endif %}
             </div>
             <button type="submit" class="btn btn-primary w-100">
               Apply Filters
@@ -217,10 +234,9 @@ endblock %} {% block content %}
             <ul class="pagination pagination-sm mb-0">
               <li
                 class="page-item{% if !pagination.has_prev %} disabled{% endif %}"
-              >
                 <a
                   class="page-link"
-                  href="?status={{ status_query }}&task_id={{ current_filters.task_id }}&workflow_type={{ current_filters.workflow_type }}&workflow_id={{ current_filters.workflow_id }}&limit={{ pagination.limit }}&page=1"
+                  href="?{{ pagination_query }}&page=1"
                   >First</a
                 >
               </li>
@@ -229,7 +245,7 @@ endblock %} {% block content %}
               >
                 <a
                   class="page-link"
-                  href="?status={{ status_query }}&task_id={{ current_filters.task_id }}&workflow_type={{ current_filters.workflow_type }}&workflow_id={{ current_filters.workflow_id }}&limit={{ pagination.limit }}&page={{ pagination.page - 1 }}"
+                  href="?{{ pagination_query }}&page={{ pagination.page - 1 }}"
                   >Previous</a
                 >
               </li>
@@ -241,7 +257,7 @@ endblock %} {% block content %}
               >
                 <a
                   class="page-link"
-                  href="?status={{ status_query }}&task_id={{ current_filters.task_id }}&workflow_type={{ current_filters.workflow_type }}&workflow_id={{ current_filters.workflow_id }}&limit={{ pagination.limit }}&page={{ pagination.page + 1 }}"
+                  href="?{{ pagination_query }}&page={{ pagination.page + 1 }}"
                   >Next</a
                 >
               </li>
@@ -250,7 +266,7 @@ endblock %} {% block content %}
               >
                 <a
                   class="page-link"
-                  href="?status={{ status_query }}&task_id={{ current_filters.task_id }}&workflow_type={{ current_filters.workflow_type }}&workflow_id={{ current_filters.workflow_id }}&limit={{ pagination.limit }}&page={{ pagination.total_pages }}"
+                  href="?{{ pagination_query }}&page={{ pagination.total_pages }}"
                   >Last</a
                 >
               </li>

@@ -109,7 +109,8 @@ impl RustvelloApp {
                 task_id: task_id.clone(),
             }
         })?;
-        let is_workflow_task = self.resolve_is_workflow_task(task_id, task.config());
+        let task_config = self.resolve_task_config(task_id, task.config());
+        let is_workflow_task = task_config.is_workflow_task;
 
         // Create the call DTO
         let call = CallDTO::new(task_id.clone(), args);
@@ -178,7 +179,12 @@ impl RustvelloApp {
         // Route to broker — runner will transition Registered → Pending → Running
         self.coordinator
             .broker
-            .route_invocation_for_task(&invocation_id, task_id)
+            .route_invocation_with_options(
+                &invocation_id,
+                Some(task_id),
+                &task_config.queue,
+                task_config.priority,
+            )
             .await?;
 
         Ok(invocation_id)
@@ -335,7 +341,8 @@ impl RustvelloApp {
             .await?;
 
         // Resolve workflow identity from the explicit workflow-task marker.
-        let is_workflow_task = self.resolve_is_workflow_task(task_id, task.config());
+        let task_config = self.resolve_task_config(task_id, task.config());
+        let is_workflow_task = task_config.is_workflow_task;
         let (parent_id, workflow) =
             self.resolve_workflow(&invocation_id, task_id, is_workflow_task);
 
@@ -390,7 +397,12 @@ impl RustvelloApp {
         // Route to broker — runner will transition Registered → Pending → Running
         self.coordinator
             .broker
-            .route_invocation_for_task(&invocation_id, task_id)
+            .route_invocation_with_options(
+                &invocation_id,
+                Some(task_id),
+                &task_config.queue,
+                task_config.priority,
+            )
             .await?;
 
         Ok(InvocationHandle::new(

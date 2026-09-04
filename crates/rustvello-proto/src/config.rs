@@ -3,6 +3,45 @@ use serde::{Deserialize, Serialize};
 
 use crate::status::ConcurrencyControlType;
 
+pub const DEFAULT_QUEUE: &str = "default";
+pub const MIN_PRIORITY: f64 = -100.0;
+pub const MAX_PRIORITY: f64 = 100.0;
+pub const DEFAULT_PRIORITY: f64 = 0.0;
+
+/// Broker priority override matched against a task ID with shell-style wildcards.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrokerPriorityRule {
+    pub task_id: String,
+    pub priority: f64,
+}
+
+impl std::str::FromStr for BrokerPriorityRule {
+    type Err = ConfigParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (task_id, priority) = value.rsplit_once('=').ok_or_else(|| {
+            ConfigParseError(format!(
+                "invalid broker priority rule {value:?}; expected task-pattern=priority"
+            ))
+        })?;
+        let priority = priority
+            .parse::<f64>()
+            .map_err(|_| ConfigParseError(format!("invalid priority in broker rule {value:?}")))?;
+        if task_id.is_empty()
+            || !priority.is_finite()
+            || !(MIN_PRIORITY..=MAX_PRIORITY).contains(&priority)
+        {
+            return Err(ConfigParseError(format!(
+                "invalid broker priority rule {value:?}; priority must be between {MIN_PRIORITY} and {MAX_PRIORITY}"
+            )));
+        }
+        Ok(Self {
+            task_id: task_id.to_owned(),
+            priority,
+        })
+    }
+}
+
 /// Error type for parsing config enum variants from strings.
 #[derive(Debug)]
 pub struct ConfigParseError(pub String);
@@ -56,6 +95,36 @@ pub enum ArgumentPrintMode {
     Hidden,
 }
 
+/// Strategy used by runners when consuming multiple logical queues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum QueueSelectionStrategy {
+    RoundRobin,
+    Ordered,
+    Random,
+}
+
+impl Default for QueueSelectionStrategy {
+    fn default() -> Self {
+        Self::RoundRobin
+    }
+}
+
+impl std::str::FromStr for QueueSelectionStrategy {
+    type Err = ConfigParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "round_robin" => Ok(Self::RoundRobin),
+            "ordered" => Ok(Self::Ordered),
+            "random" => Ok(Self::Random),
+            _ => Err(ConfigParseError(format!(
+                "invalid QueueSelectionStrategy: {value}"
+            ))),
+        }
+    }
+}
+
 impl Default for ArgumentPrintMode {
     fn default() -> Self {
         Self::Truncated
@@ -82,6 +151,10 @@ impl std::str::FromStr for ArgumentPrintMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TaskConfig {
+    /// Logical broker queue used for this task.
+    pub queue: String,
+    /// Broker priority within the task queue. Higher values run first.
+    pub priority: f64,
     /// Maximum number of retry attempts (0 = no retries)
     pub max_retries: u32,
     /// Error type names that should trigger a retry.
@@ -117,6 +190,8 @@ pub struct TaskConfig {
 impl Default for TaskConfig {
     fn default() -> Self {
         Self {
+            queue: DEFAULT_QUEUE.to_owned(),
+            priority: DEFAULT_PRIORITY,
             max_retries: 0,
             retry_for_errors: Vec::new(),
             concurrency_control: ConcurrencyControlType::Unlimited,
@@ -142,6 +217,18 @@ pub struct AppConfig {
     /// Unique identifier for this application instance
     #[config(default = "rustvello")]
     pub app_id: String,
+    /// Logical queues accepted by the broker. `default` is always present.
+    #[config(default = vec!["default".to_owned()])]
+    pub broker_queues: Vec<String>,
+    /// Queues consumed by runners. Empty means all broker queues.
+    #[config(default = vec![])]
+    pub runner_queues: Vec<String>,
+    /// Selection strategy when a runner consumes multiple queues.
+    #[config(default = QueueSelectionStrategy::RoundRobin)]
+    pub queue_selection_strategy: QueueSelectionStrategy,
+    /// Task-ID wildcard rules. The highest matching priority overrides task config.
+    #[config(default = vec![])]
+    pub priority_rules: Vec<BrokerPriorityRule>,
     /// Force synchronous task execution (for development/testing)
     #[config(default = false)]
     pub dev_mode_force_sync: bool,
@@ -219,6 +306,10 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             app_id: "rustvello".to_string(),
+            broker_queues: vec![DEFAULT_QUEUE.to_owned()],
+            runner_queues: Vec::new(),
+            queue_selection_strategy: QueueSelectionStrategy::RoundRobin,
+            priority_rules: Vec::new(),
             dev_mode_force_sync: false,
             max_pending_seconds: 300,
             heartbeat_interval_seconds: 30,
@@ -298,6 +389,8 @@ mod tests {
     #[test]
     fn task_config_defaults() {
         let tc = TaskConfig::default();
+        assert_eq!(tc.queue, DEFAULT_QUEUE);
+        assert_eq!(tc.priority, DEFAULT_PRIORITY);
         assert_eq!(tc.max_retries, 0);
         assert_eq!(tc.concurrency_control, ConcurrencyControlType::Unlimited);
         assert!(tc.running_concurrency.is_none());
@@ -330,6 +423,8 @@ mod tests {
     #[test]
     fn serde_round_trip_task_config() {
         let tc = TaskConfig {
+            queue: "critical".to_string(),
+            priority: 12.5,
             max_retries: 3,
             retry_for_errors: vec!["TimeoutError".to_string()],
             concurrency_control: ConcurrencyControlType::Task,
@@ -346,6 +441,8 @@ mod tests {
         };
         let json = serde_json::to_string(&tc).unwrap();
         let back: TaskConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.queue, "critical");
+        assert_eq!(back.priority, 12.5);
         assert_eq!(back.max_retries, 3);
         assert_eq!(back.concurrency_control, ConcurrencyControlType::Task);
         assert_eq!(back.running_concurrency, Some(5));

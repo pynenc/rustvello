@@ -10,9 +10,9 @@ This package provides PyO3-based Python bindings that expose rustvello's task en
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.9+
 - [maturin](https://www.maturin.rs/)
-- Rust toolchain (1.78+)
+- Rust toolchain (1.85+)
 
 ### Development Build
 

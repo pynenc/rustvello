@@ -347,6 +347,7 @@ impl Runner for RayonRunner {
                     &*self.broker,
                     Some(&*self.state_backend),
                     Some(&*self.task_registry),
+                    &self.config,
                 )
                 .await?
                 {
@@ -465,6 +466,7 @@ impl Runner for RayonRunner {
             &*self.broker,
             Some(&*self.state_backend),
             Some(&*self.task_registry),
+            &self.config,
         )
         .await?
         {

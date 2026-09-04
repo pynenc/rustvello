@@ -220,7 +220,7 @@ cross-component behavior:
 The GitHub Actions workflow (`.github/workflows/main.yml`) runs:
 
 ```bash
-make test  # → cargo test --workspace --exclude py-rustvello
+make test  # → cargo test --workspace --exclude py-rustvello --exclude rustvello-python
 ```
 
 Docker-dependent tests are **skipped** in CI because no Docker service containers

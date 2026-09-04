@@ -33,6 +33,16 @@ fn noop() -> String {
     "done".to_string()
 }
 
+#[rustvello::task(queue = "critical", priority = -12.5)]
+fn low_priority() -> String {
+    "low".to_string()
+}
+
+#[rustvello::task(queue = "critical", priority = 40)]
+fn high_priority() -> String {
+    "high".to_string()
+}
+
 #[rustvello::task]
 fn fallible_divide(x: f64, y: f64) -> RustvelloResult<f64> {
     if y == 0.0 {
@@ -79,6 +89,17 @@ fn macro_task_custom_config() {
     let task = FlakyDoubleTask::new();
     let config = Task::config(&task);
     assert_eq!(config.max_retries, 3);
+}
+
+#[test]
+fn macro_task_queue_and_signed_float_priority() {
+    let low = LowPriorityTask::new();
+    assert_eq!(Task::config(&low).queue, "critical");
+    assert_eq!(Task::config(&low).priority, -12.5);
+
+    let high = HighPriorityTask::new();
+    assert_eq!(Task::config(&high).queue, "critical");
+    assert_eq!(Task::config(&high).priority, 40.0);
 }
 
 #[test]
@@ -246,6 +267,63 @@ async fn submit_call_macro_task() {
     // The invocation should be in Registered state (runner claims it later)
     let status = handle.status().await.unwrap();
     assert_eq!(status, InvocationStatus::Registered);
+}
+
+#[tokio::test]
+async fn submit_call_routes_by_queue_and_priority() {
+    let mut config = AppConfig::new("routing-test");
+    config.broker_queues.push("critical".to_owned());
+    let mut app = RustvelloApp::new(config);
+    app.register(LowPriorityTask::new()).unwrap();
+    app.register(HighPriorityTask::new()).unwrap();
+
+    let low = app.submit_call(&LowPriorityTask::new(), ()).await.unwrap();
+    let high = app.submit_call(&HighPriorityTask::new(), ()).await.unwrap();
+
+    assert_eq!(
+        app.broker()
+            .retrieve_invocation_from_queue("critical", None)
+            .await
+            .unwrap()
+            .as_ref(),
+        Some(high.invocation_id())
+    );
+    assert_eq!(
+        app.broker()
+            .retrieve_invocation_from_queue("critical", None)
+            .await
+            .unwrap()
+            .as_ref(),
+        Some(low.invocation_id())
+    );
+}
+
+#[test]
+fn broker_priority_rules_override_concrete_task_priority() {
+    let mut config = AppConfig::new("priority-rule-test");
+    config.priority_rules = vec![
+        rustvello_proto::config::BrokerPriorityRule {
+            task_id: "*priority".to_owned(),
+            priority: 25.0,
+        },
+        rustvello_proto::config::BrokerPriorityRule {
+            task_id: "*low_priority".to_owned(),
+            priority: 75.0,
+        },
+        rustvello_proto::config::BrokerPriorityRule {
+            task_id: "*noop".to_owned(),
+            priority: -75.0,
+        },
+    ];
+    let app = RustvelloApp::new(config);
+    let task = LowPriorityTask::new();
+    let resolved = app.resolve_task_config(Task::task_id(&task), Task::config(&task));
+    assert_eq!(resolved.priority, 75.0);
+
+    let default_task = NoopTask::new();
+    let resolved =
+        app.resolve_task_config(Task::task_id(&default_task), Task::config(&default_task));
+    assert_eq!(resolved.priority, -75.0);
 }
 
 #[tokio::test]
