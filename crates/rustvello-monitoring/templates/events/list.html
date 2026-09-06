@@ -2,35 +2,58 @@
 {% block title %}Events - Rustvello Monitor{% endblock %}
 {% block content %}
 <div class="pynmon-container">
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2 class="h4 mb-0 text-primary"><span class="material-icons align-middle me-2">bolt</span>Events</h2>
-    <form method="get" class="d-flex gap-2">
-      <input class="form-control form-control-sm" name="event_code" value="{{ event_code }}" placeholder="Event code">
-      <button class="btn btn-sm btn-primary" type="submit"><span class="material-icons align-middle" style="font-size:16px">filter_list</span> Filter</button>
-    </form>
-  </div>
+  <h2 class="h4 mb-2 text-primary"><span class="material-icons align-middle me-2">bolt</span>Events</h2>
+  <section class="list-filter-bar mb-2" aria-label="Event filters">
+    <div class="monitor-filter-header">
+      <button class="list-filter-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#event-filter-fields" aria-expanded="false" aria-controls="event-filter-fields">
+        <span class="d-inline-flex align-items-center gap-2"><span class="material-icons">tune</span><strong>Filters</strong></span>
+        <span class="material-icons list-filter-chevron">expand_more</span>
+      </button>
+      {% include "components/filter_summary.html" %}
+    </div>
+    <div class="collapse" id="event-filter-fields">
+      <form method="get" class="list-filter-grid">
+        <div><label class="form-label" for="event_code">Event code</label><input id="event_code" class="form-control form-control-sm" name="event_code" value="{{ event_code }}" placeholder="All event codes"></div>
+        <div><label class="form-label" for="event_triggered">Triggered</label><select id="event_triggered" class="form-select form-select-sm" name="triggered"><option value="only" {% if triggered_filter == "only" %}selected{% endif %}>Only triggered</option><option value="all" {% if triggered_filter == "all" %}selected{% endif %}>All events</option></select></div>
+        <div><label class="form-label" for="event_matched">Matched</label><select id="event_matched" class="form-select form-select-sm" name="matched"><option value="all" {% if matched_filter == "all" %}selected{% endif %}>All events</option><option value="only" {% if matched_filter == "only" %}selected{% endif %}>Only matched</option></select></div>
+        <div><label class="form-label" for="event_limit">Page size</label><select id="event_limit" class="form-select form-select-sm" name="limit"><option value="25" {% if pagination.limit == 25 %}selected{% endif %}>25</option><option value="50" {% if pagination.limit == 50 %}selected{% endif %}>50</option><option value="100" {% if pagination.limit == 100 %}selected{% endif %}>100</option><option value="200" {% if pagination.limit == 200 %}selected{% endif %}>200</option></select></div>
+        <button class="btn btn-sm btn-primary monitor-filter-submit" type="submit">Apply</button>
+      </form>
+    </div>
+  </section>
   {% if !monitoring_available %}
   <div class="alert alert-secondary">Event monitoring is not supported by this trigger store.</div>
   {% else if events.is_empty() %}
   <p class="text-muted">No events found.</p>
   {% else %}
+  <div class="monitor-stats-row mb-2" aria-label="Events on this page">
+    <span><strong>{{ stats.rendered }}</strong> shown</span>
+    <span><strong>{{ stats.matched }}</strong> matched</span>
+    <span><strong>{{ stats.triggered }}</strong> triggered</span>
+    <span><strong>{{ stats.external }}</strong> external</span>
+  </div>
   <div class="table-responsive">
     <table class="table table-hover pynmon-table">
-      <thead><tr><th>Event</th><th>Code</th><th>Time</th><th>Matched</th><th>Triggered</th><th>Emitter</th></tr></thead>
+      <thead><tr><th>Event</th><th>Code</th><th>Time</th><th>Matched</th><th>Triggered</th><th>Emitter</th><th>Actions</th></tr></thead>
       <tbody>
       {% for event in events %}
-        <tr>
+            <tr class="monitor-temporal-row" style="--time-left: {{ event.left_percent }}%; --time-width: {{ event.width_percent }}%">
           <td><a href="/events/{{ event.event_id }}"><code>{{ event.event_id }}</code></a></td>
           <td>{{ event.event_code }}</td>
           <td>{{ event.timestamp }}</td>
-          <td>{% if event.matched %}<span class="badge bg-info text-dark">Matched</span>{% else %}<span class="text-muted">No</span>{% endif %}</td>
-          <td>{% if event.triggered %}<span class="badge bg-success">Triggered</span>{% else %}<span class="text-muted">No</span>{% endif %}</td>
+          <td>{% if event.matched %}<span class="badge bg-info text-dark">{{ event.matched_count }} matched</span>{% else %}<span class="text-muted">No</span>{% endif %}</td>
+          <td>{% if event.triggered %}<span class="badge bg-success">{{ event.triggered_count }} triggered</span>{% else %}<span class="text-muted">No</span>{% endif %}</td>
           <td>{% if let Some(id) = event.emitted_by_invocation_id %}<a href="/invocations/{{ id }}"><code>{{ id }}</code></a>{% else %}<span class="text-muted">External</span>{% endif %}</td>
+          <td class="monitor-actions">
+            <a class="btn btn-sm btn-outline-success" href="{{ event.timeline_url }}" title="Open event context in timeline"><span class="material-icons">timeline</span></a>
+            <a class="btn btn-sm btn-outline-secondary" href="/events/{{ event.event_id }}/trace" title="Open event trace JSON"><span class="material-icons">account_tree</span></a>
+          </td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
   </div>
+  {% include "components/pagination.html" %}
   {% endif %}
 </div>
 {% endblock %}

@@ -74,6 +74,7 @@ fn macro_task_id() {
     let task = AddTask::new();
     let id = Task::task_id(&task);
     // Module path will be this test crate's path; function name is "add"
+    assert_eq!(id.language(), TaskLanguage::Rust);
     assert_eq!(id.name(), "add");
 }
 

@@ -34,7 +34,7 @@ endblock %} {% block extra_css %}
                 name="log_text"
                 rows="6"
                 style="font-size: 11.5px; line-height: 1.5"
-                placeholder="2026-03-21T15:39:09.107782Z  INFO runner{runner_id=5719fe43-33fb-4979-a024-7b092f0fff6f app_id=test-hierarchical pid=70112}:invocation{invocation_id=69bec730-...  task_id=test.child_task}: rustvello::runner: Invocation completed successfully
+                placeholder="2026-03-21T15:39:09.107782Z  INFO runner{runner_id=5719fe43-33fb-4979-a024-7b092f0fff6f app_id=test-hierarchical pid=70112}:invocation{invocation_id=69bec730-...  task_id=rust::test.child_task}: rustvello::runner: Invocation completed successfully
 2026-03-05 00:13:51.125+01:00 INFO  rustvello.app [TR(a86ab1f8)] task:core_tasks.recover invocation:cc6c0e34-… REGISTERED"
               >
 {{ log_text }}</textarea
@@ -158,7 +158,7 @@ endblock %} {% block extra_css %}
                       {{ inv_id }}
                     </a>
                     <a
-                      href="/invocations/timeline?time_range=auto&selected={{ inv_id }}"
+                      href="{% if let Some(timeline_url) = la.invocation_timeline_url %}{{ timeline_url }}{% endif %}"
                       class="ref-chip chip-invocation chip-timeline"
                       data-invocation-id="{{ inv_id }}"
                       title="Timeline zoom"
@@ -201,14 +201,14 @@ endblock %} {% block extra_css %}
                       <span class="material-icons">info</span>
                       {{ eref.value }}
                     </a>
-                    <a
-                      href="/invocations/timeline?time_range=auto&selected={{ eref.value }}"
+                    {% if let Some(timeline_url) = eref.timeline_url %}<a
+                      href="{{ timeline_url }}"
                       class="ref-chip chip-invocation chip-timeline"
                       data-invocation-id="{{ eref.value }}"
                       title="Timeline zoom"
                     >
                       <span class="material-icons">timeline</span>
-                    </a>
+                    </a>{% endif %}
                   </span>
                   {% else if eref.kind == "runner" || eref.kind == "worker" %}
                   <a
@@ -269,7 +269,7 @@ endblock %} {% block extra_css %}
       >
         Invocation Timeline
         <a
-          href="/invocations/timeline?{{ analysis.timeline_qs }}"
+          href="{{ analysis.timeline_url }}"
           class="ms-2 log-svg-timeline-link"
           style="font-size: 10px; text-transform: none; letter-spacing: 0"
           title="Open full timeline"
@@ -316,7 +316,7 @@ endblock %} {% block extra_css %}
             <a href="#" class="detail-link me-2" style="font-size: 11px"
               >View detail &rarr;</a
             >
-            <a href="#" class="detail-timeline-link" style="font-size: 11px"
+            <a href="#" class="detail-timeline-link" data-timeline-template="{{ timeline_url_template }}" style="font-size: 11px"
               >Timeline &rarr;</a
             >
           </div>
@@ -613,8 +613,7 @@ let Some(analysis) = analysis.as_ref() %} {% if analysis.has_valid %}
       detailLink.href = "/invocations/" + invId;
 
       var timelineLink = detailPanel.querySelector(".detail-timeline-link");
-      timelineLink.href =
-        "/invocations/timeline?time_range=auto&selected=" + invId;
+      timelineLink.href = timelineLink.dataset.timelineTemplate.replace("__INVOCATION_ID__", encodeURIComponent(invId));
 
       // Fetch basic info via API
       var statusEl = detailPanel.querySelector(".detail-status");

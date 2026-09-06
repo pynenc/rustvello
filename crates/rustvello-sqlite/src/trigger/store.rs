@@ -657,20 +657,46 @@ impl TriggerStore for SqliteTriggerStore {
                 .map(ToString::to_string);
             let start = query.start.map(|value| value.to_rfc3339());
             let end = query.end.map(|value| value.to_rfc3339());
-            let limit = i64::try_from(query.limit.unwrap_or(1000)).unwrap_or(i64::MAX);
+            let limit = if query.matched.is_some() || query.triggered.is_some() {
+                i64::MAX
+            } else {
+                i64::try_from(
+                    query
+                        .offset
+                        .unwrap_or(0)
+                        .saturating_add(query.limit.unwrap_or(1000)),
+                )
+                .unwrap_or(i64::MAX)
+            };
             let rows = stmt
                 .query_map(
                     rusqlite::params![query.event_code, emitter, start, end, limit],
                     |row| row.get::<_, String>(0),
                 )
                 .map_err(sql_err)?;
-            rows.map(|row| {
-                let json = row.map_err(sql_err)?;
-                serde_json::from_str(&json).map_err(|error| RustvelloError::Serialization {
-                    message: error.to_string(),
+            let mut events = rows
+                .map(|row| {
+                    let json = row.map_err(sql_err)?;
+                    serde_json::from_str(&json).map_err(|error| RustvelloError::Serialization {
+                        message: error.to_string(),
+                    })
                 })
-            })
-            .collect()
+                .collect::<RustvelloResult<Vec<EventRecord>>>()?;
+            events.retain(|event| {
+                query
+                    .matched
+                    .is_none_or(|matched| event.is_matched() == matched)
+                    && query
+                        .triggered
+                        .is_none_or(|triggered| event.is_triggered() == triggered)
+            });
+            if let Some(offset) = query.offset {
+                events = events.into_iter().skip(offset).collect();
+            }
+            if let Some(limit) = query.limit {
+                events.truncate(limit);
+            }
+            Ok(events)
         })
         .await
     }

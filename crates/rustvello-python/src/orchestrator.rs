@@ -47,7 +47,12 @@ mod tests {
     /// Helper: register an invocation directly on the inner MemOrchestrator and
     /// return the generated invocation ID string.
     fn register_invocation(orch: &PyMemOrchestrator, module: &str, name: &str) -> String {
-        let task_id = TaskId::try_new(module, name).unwrap();
+        let task_id = TaskId::try_for_language(
+            rustvello_proto::identifiers::TaskLanguage::Python,
+            module,
+            name,
+        )
+        .unwrap();
         let call = CallDTO::new(task_id, SerializedArguments::new());
         let rt = crate::runtime::shared_runtime().unwrap();
         rt.block_on(orch.inner.register_invocation(&call))

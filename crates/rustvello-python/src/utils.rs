@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use pyo3::PyResult;
 use rustvello_core::context::get_invocation_context;
 use rustvello_proto::call::SerializedArguments;
-use rustvello_proto::identifiers::InvocationId;
+use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
 use std::collections::BTreeMap;
 
 /// Parse `s` as an invocation ID and return an `InvocationId`.
@@ -17,6 +17,15 @@ pub fn parse_invocation_id(s: &str) -> PyResult<InvocationId> {
         return Err(PyValueError::new_err("invocation_id must not be empty"));
     }
     Ok(InvocationId::from_string(s))
+}
+
+/// Build a task ID from the textual language used at the Python ABI boundary.
+pub fn parse_task_id(language: &str, module: &str, name: &str) -> PyResult<TaskId> {
+    let language = language
+        .parse::<TaskLanguage>()
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    TaskId::try_for_language(language, module, name)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 /// Return the invocation ID from Rust's thread-local context if set.

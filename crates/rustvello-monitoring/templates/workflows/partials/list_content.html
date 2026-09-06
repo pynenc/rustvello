@@ -43,7 +43,7 @@
 <div class="mt-4">
   <h6 class="section-title">
     All Workflow Runs
-    <span class="badge bg-primary ms-2">{{ workflow_runs.len() }}</span>
+    <span class="badge bg-primary ms-2">{{ total_workflow_runs }}</span>
   </h6>
   {% if !workflow_runs.is_empty() %}
   <div class="table-responsive">
@@ -122,6 +122,7 @@
       </tbody>
     </table>
   </div>
+  {% include "components/pagination.html" %}
   {% else %}
   <p class="text-muted small mb-0">
     No workflow runs found. Workflow runs appear when invocations have child

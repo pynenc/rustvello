@@ -3,7 +3,7 @@
 use std::fmt::Write;
 
 use super::data::TimelineData;
-use super::{render_axis, render_elements, render_lanes};
+use super::{render_atomic_service, render_axis, render_elements, render_lanes};
 
 /// Renders `TimelineData` into a complete SVG string.
 pub struct TimelineSvgRenderer;
@@ -34,15 +34,12 @@ impl TimelineSvgRenderer {
             r#"<rect width="{width}" height="{height}" fill="white"/>"#,
         );
 
-        // Defs: shadow filter, label clip path, ongoing stripes pattern
+        // Defs: label clip path and ongoing stripes pattern.
         let label_clip_w = data.config.left_margin - 10.0;
         let _ = write!(
             buf,
             concat!(
                 r#"<defs>"#,
-                r#"<filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">"#,
-                r#"<feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.15"/>"#,
-                r#"</filter>"#,
                 r#"<clipPath id="label-clip"><rect x="0" y="0" width="{}" height="100%"/></clipPath>"#,
                 r#"<pattern id="ongoing-stripes" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">"#,
                 r#"<line x1="0" y1="0" x2="0" y2="8" stroke="rgba(255,255,255,0.3)" stroke-width="4"/>"#,
@@ -61,17 +58,22 @@ impl TimelineSvgRenderer {
         // Lane group backgrounds
         render_lanes::render_group_containers(&mut buf, &data.config, &data.groups);
 
+        // Atomic-service runs sit behind invocation marks but above lane tinting.
+        render_atomic_service::render(&mut buf, data);
+
         // Group separators
         render_lanes::render_group_separators(&mut buf, &data.config, &data.groups);
 
         // Lane labels
         render_lanes::render_lane_labels(&mut buf, &data.config, &data.groups);
 
-        // Connecting lines (behind segments/points)
-        render_elements::render_lines(&mut buf, &data.config, &data.groups);
-
-        // Cross-lane connecting lines
-        render_elements::render_global_lines(&mut buf, &data.config, &data.global_lines);
+        // One relation path per invocation, including lane-local and cross-lane links.
+        render_elements::render_relation_paths(
+            &mut buf,
+            &data.config,
+            &data.groups,
+            &data.global_lines,
+        );
 
         // Segment bars
         render_elements::render_segments(&mut buf, &data.config, &data.groups);

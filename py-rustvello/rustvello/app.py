@@ -29,6 +29,7 @@ import inspect
 import json
 import threading
 import time
+from enum import Enum
 from typing import Any, Callable, TypeVar
 
 from rustvello.backends import create_backends as _create_backends
@@ -39,14 +40,20 @@ from rustvello.rustvello import (
     RustTaskRunnerBuilder,
     Rustvello,
     TaskConfig,
+    get_current_invocation_id,
 )
 
 F = TypeVar("F", bound=Callable[..., Any])
 
-__all__ = ["App", "Invocation", "TaskHandle"]
+__all__ = ["App", "ForeignTaskHandle", "Invocation", "TaskHandle", "TaskLanguage"]
 
 
 _SENTINEL = object()  # marks "no pre-computed result"
+
+
+class TaskLanguage(str, Enum):
+    Rust = "rust"
+    Python = "python"
 
 
 class Invocation:
@@ -97,6 +104,12 @@ class Invocation:
         if self._sync_result is not _SENTINEL:
             return self._sync_result
 
+        current_invocation_id = get_current_invocation_id()
+        if current_invocation_id is not None:
+            current = InvocationId.from_string(current_invocation_id)
+            if str(current) != str(self._invocation_id):
+                self._app._engine.set_waiting_for(current, self._invocation_id)
+
         deadline = time.monotonic() + timeout
         while True:
             status = self.status
@@ -121,11 +134,13 @@ class TaskHandle:
         self,
         app: "App",
         func: Callable[..., Any],
+        language: str,
         module: str,
         name: str,
     ) -> None:
         self._app = app
         self._func = func
+        self._language = language
         self._module = module
         self._name = name
         self.__name__ = func.__name__
@@ -144,6 +159,12 @@ class TaskHandle:
         """Explicit keyword-only submission (alternative to calling the handle)."""
         serialized = {k: json.dumps(v) for k, v in kwargs.items()}
         return self._dispatch(serialized)
+
+    @property
+    def is_workflow_task(self) -> bool:
+        """Whether this handle was registered as an explicit workflow root."""
+        key = f"{self._language}::{self._module}.{self._name}"
+        return bool(self._app._task_configs.get(key, {}).get("is_workflow_task", False))
 
     def _make_rust_wrapper(self) -> Callable[[str], str]:
         """Return a fresh wrapper callable suitable for ``register_task``."""
@@ -170,8 +191,40 @@ class TaskHandle:
                 sync_result=value,
                 sync_status=InvocationStatus.success(),
             )
-        inv_id = self._app._engine.submit(self._module, self._name, serialized)
+        inv_id = self._app._engine.submit_task(self._language, self._module, self._name, serialized)
         return Invocation(self._app, inv_id)
+
+
+class ForeignTaskHandle:
+    """A task implemented by another language runtime."""
+
+    def __init__(
+        self,
+        app: "App",
+        func: Callable[..., Any],
+        language: TaskLanguage,
+        module: str,
+        name: str,
+    ) -> None:
+        self._app = app
+        self._func = func
+        self._language = language.value
+        self._module = module
+        self._name = name
+        self.__name__ = func.__name__
+        self.__doc__ = func.__doc__
+        self.__wrapped__ = func
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Invocation:
+        sig = inspect.signature(self._func)
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        serialized = {k: json.dumps(v) for k, v in bound.arguments.items()}
+        inv_id = self._app._engine.submit_task(self._language, self._module, self._name, serialized)
+        return Invocation(self._app, inv_id)
+
+    def submit(self, **kwargs: Any) -> Invocation:
+        return self(**kwargs)
 
 
 class App:
@@ -226,6 +279,7 @@ class App:
         self._dev_mode_force_sync = dev_mode_force_sync
         self._backend_name = backend.lower()
         self._tasks: dict[str, TaskHandle] = {}
+        self._foreign_tasks: dict[str, ForeignTaskHandle] = {}
         self._task_configs: dict[str, dict[str, Any]] = {}
         self._backend_objects: dict[str, Any] | None = None
         self._runner = None
@@ -271,6 +325,7 @@ class App:
         blocking: bool = False,
         parallel_batch_size: int = 100,
         reroute_on_cc: bool = False,
+        _is_workflow_task: bool = False,
     ) -> Any:
         """Register a function as a distributed task.
 
@@ -310,6 +365,7 @@ class App:
             "blocking": blocking,
             "parallel_batch_size": parallel_batch_size,
             "reroute_on_cc": reroute_on_cc,
+            "is_workflow_task": _is_workflow_task,
         }
 
         def decorator(fn: Callable[..., Any]) -> TaskHandle:
@@ -323,6 +379,7 @@ class App:
                 max_retries=max_retries,
                 cache_results=cache_results,
                 running_concurrency=running_concurrency,
+                is_workflow_task=_is_workflow_task,
             )
 
             def _rust_wrapper(args_json: str) -> str:
@@ -332,9 +389,75 @@ class App:
                 return json.dumps(result)
 
             self._engine.register_task(module, name, _rust_wrapper, task_config)
-            handle = TaskHandle(self, fn, module, name)
-            self._tasks[f"{module}.{name}"] = handle
-            self._task_configs[f"{module}.{name}"] = extra_config
+            handle = TaskHandle(self, fn, "python", module, name)
+            key = f"python::{module}.{name}"
+            self._tasks[key] = handle
+            self._task_configs[key] = extra_config
+            return handle
+
+        if func is not None:
+            return decorator(func)
+        return decorator
+
+    def workflow(
+        self,
+        func: Callable[..., Any] | None = None,
+        *,
+        max_retries: int = 0,
+        cache_results: bool = False,
+        running_concurrency: int | None = None,
+        concurrency: str = "unlimited",
+        key_arguments: list[str] | None = None,
+        parallel_batch_size: int = 100,
+        reroute_on_cc: bool = False,
+    ) -> Any:
+        """Register a function as an explicit workflow root.
+
+        Workflows are submitted like tasks, but their root invocation records a
+        workflow run and child task submissions inherit its workflow identity.
+        Use ``rustvello.workflow_root()`` inside the workflow body for
+        deterministic ``random()``, ``utc_now()``, and ``uuid()`` operations.
+        """
+        return self.task(
+            func,
+            max_retries=max_retries,
+            cache_results=cache_results,
+            running_concurrency=running_concurrency,
+            concurrency=concurrency,
+            key_arguments=key_arguments,
+            blocking=True,
+            parallel_batch_size=parallel_batch_size,
+            reroute_on_cc=reroute_on_cc,
+            _is_workflow_task=True,
+        )
+
+    def foreign_task(
+        self,
+        language: TaskLanguage,
+        func: Callable[..., Any] | None = None,
+        *,
+        module: str | None = None,
+        name: str | None = None,
+        max_retries: int = 0,
+        cache_results: bool = False,
+        queue: str = "default",
+        priority: float = 0.0,
+    ) -> Any:
+        """Declare a typed task implemented by another language runtime."""
+        language = TaskLanguage(language)
+        config = TaskConfig(
+            max_retries=max_retries,
+            cache_results=cache_results,
+            queue=queue,
+            priority=priority,
+        )
+
+        def decorator(fn: Callable[..., Any]) -> ForeignTaskHandle:
+            foreign_module = module or fn.__module__
+            foreign_name = name or fn.__name__
+            self._engine.register_foreign_task(language.value, foreign_module, foreign_name, config)
+            handle = ForeignTaskHandle(self, fn, language, foreign_module, foreign_name)
+            self._foreign_tasks[f"{language.value}::{foreign_module}.{foreign_name}"] = handle
             return handle
 
         if func is not None:
@@ -348,6 +471,7 @@ class App:
         *,
         num_workers: int = 4,
         idle_sleep_ms: int = 50,
+        evaluate_triggers: bool = True,
         block: bool = True,
     ) -> None:
         """Start a persistent task runner.
@@ -358,10 +482,15 @@ class App:
         Args:
             num_workers: Number of concurrent worker slots.
             idle_sleep_ms: Sleep interval when no work is available (ms).
+            evaluate_triggers: Whether this runner should evaluate trigger conditions.
             block: If ``True`` (default), blocks until :meth:`stop` is
                 called. If ``False``, starts the runner in a background thread.
         """
-        runner = self._build_runner(num_workers=num_workers, idle_sleep_ms=idle_sleep_ms)
+        runner = self._build_runner(
+            num_workers=num_workers,
+            idle_sleep_ms=idle_sleep_ms,
+            evaluate_triggers=evaluate_triggers,
+        )
         self._runner = runner
 
         if block:
@@ -378,7 +507,13 @@ class App:
             self._runner_thread.join(timeout=30)
             self._runner_thread = None
 
-    def _build_runner(self, *, num_workers: int = 4, idle_sleep_ms: int = 50) -> Any:
+    def _build_runner(
+        self,
+        *,
+        num_workers: int = 4,
+        idle_sleep_ms: int = 50,
+        evaluate_triggers: bool = True,
+    ) -> Any:
         builder = RustTaskRunnerBuilder(self._app_id)
 
         if self._backend_objects is not None:
@@ -386,7 +521,7 @@ class App:
                 self._backend_objects["broker"],
                 self._backend_objects["orchestrator"],
                 self._backend_objects["state_backend"],
-                self._backend_objects.get("trigger"),
+                self._backend_objects.get("trigger") if evaluate_triggers else None,
             )
         else:
             builder.memory()
@@ -411,14 +546,17 @@ class App:
                 disable_cache_args=[],
                 on_diff_non_key_args_raise=False,
                 parallel_batch_size=extra.get("parallel_batch_size", 100),
-                is_workflow_task=False,
+                is_workflow_task=extra.get("is_workflow_task", False),
             )
+
+        for handle in self._foreign_tasks.values():
+            builder.register_foreign_task(handle._language, handle._module, handle._name)
 
         return builder.build()
 
     # --- Triggers --------------------------------------------------------
 
-    def trigger(self, task_handle: "TaskHandle") -> "_TriggerBuilder":
+    def trigger(self, task_handle: "TaskHandle | ForeignTaskHandle") -> "_TriggerBuilder":
         """Create a trigger that fires the given task.
 
         Returns a :class:`_TriggerBuilder` for fluent configuration::
@@ -431,7 +569,7 @@ class App:
 
     @property
     def tasks(self) -> dict[str, "TaskHandle"]:
-        """Registered tasks as ``{module.name: TaskHandle}``."""
+        """Registered tasks as ``{language::module.name: TaskHandle}``."""
         return dict(self._tasks)
 
     @property
@@ -463,7 +601,7 @@ class _TriggerBuilder:
         app.trigger(my_task).on_cron("0 */5 * * * *").with_args(x=1).register()
     """
 
-    def __init__(self, app: App, task_handle: TaskHandle) -> None:
+    def __init__(self, app: App, task_handle: TaskHandle | ForeignTaskHandle) -> None:
         self._app = app
         self._task_handle = task_handle
         self._kind: str | None = None
@@ -502,7 +640,7 @@ class _TriggerBuilder:
         """
         if self._kind is None:
             raise ValueError("Must specify a trigger type (on_cron / on_interval) " "before calling register()")
-        key = f"{self._task_handle._module}.{self._task_handle._name}"
+        key = f"{self._task_handle._language}::{self._task_handle._module}.{self._task_handle._name}"
         tdef = _TriggerDef(key, self._kind, self._schedule, **self._kwargs)
         self._app._triggers.append(tdef)
         return tdef

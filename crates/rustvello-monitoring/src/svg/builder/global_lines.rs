@@ -30,6 +30,12 @@ impl TimelineDataBuilder {
         // Build a lookup: group_runner_id + adjusted_lane_index → absolute y_offset
         let mut lane_y_lookup: HashMap<(&str, usize), f64> = HashMap::new();
         for group in &data.groups {
+            if let Some(control_plane) = &group.control_plane {
+                lane_y_lookup.insert(
+                    (group.runner_info.runner_id.as_str(), usize::MAX),
+                    control_plane.y_offset,
+                );
+            }
             for (li, lane) in group.lanes.iter().enumerate() {
                 lane_y_lookup.insert((group.runner_info.runner_id.as_str(), li), lane.y_offset);
             }
@@ -129,7 +135,12 @@ impl TimelineDataBuilder {
             if group.runner_info.runner_id != group_key {
                 continue;
             }
-            if let Some(lane) = group.lanes.get(adjusted_lane) {
+            let lane = if adjusted_lane == usize::MAX {
+                group.control_plane.as_ref()
+            } else {
+                group.lanes.get(adjusted_lane)
+            };
+            if let Some(lane) = lane {
                 // Check segments first (they have x + width)
                 let seg_end = lane
                     .segments
@@ -168,7 +179,12 @@ impl TimelineDataBuilder {
             if group.runner_info.runner_id != group_key {
                 continue;
             }
-            if let Some(lane) = group.lanes.get(adjusted_lane) {
+            let lane = if adjusted_lane == usize::MAX {
+                group.control_plane.as_ref()
+            } else {
+                group.lanes.get(adjusted_lane)
+            };
+            if let Some(lane) = lane {
                 let seg_start = lane
                     .segments
                     .iter()

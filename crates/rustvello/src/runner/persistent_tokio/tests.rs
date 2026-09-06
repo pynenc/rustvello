@@ -1,7 +1,7 @@
 use super::*;
 use rustvello_core::broker::Broker;
 use rustvello_core::error::RustvelloError;
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::runner::Runner;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::task::{TaskDefinition, TaskRegistry};
@@ -16,11 +16,11 @@ use std::time::Duration;
 
 pub(super) fn make_runner() -> (
     PersistentTokioRunner,
-    Arc<dyn Orchestrator>,
+    Arc<dyn InvocationControlBackend>,
     Arc<dyn StateBackend>,
 ) {
     let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-    let orchestrator: Arc<dyn Orchestrator> =
+    let orchestrator: Arc<dyn InvocationControlBackend> =
         Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
     let state_backend: Arc<dyn StateBackend> =
         Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
@@ -80,7 +80,12 @@ async fn test_full_invocation_cycle() {
         .upsert_invocation(&inv_dto, &call)
         .await
         .unwrap();
-    runner.broker.route_invocation(&inv_id).await.unwrap();
+    runner
+        .control_plane
+        .broker
+        .route_invocation(&inv_id)
+        .await
+        .unwrap();
 
     let did_work = runner.run_one().await.unwrap();
     assert!(did_work);
@@ -95,7 +100,7 @@ async fn test_full_invocation_cycle() {
 #[tokio::test]
 async fn test_retry_on_failure() {
     let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-    let orchestrator: Arc<dyn Orchestrator> =
+    let orchestrator: Arc<dyn InvocationControlBackend> =
         Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
     let state_backend: Arc<dyn StateBackend> =
         Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
@@ -168,7 +173,7 @@ async fn test_heartbeat_registers_with_orchestrator() {
 async fn test_recover_stale_pending_invocation() {
     let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
     let mem_orchestrator = Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
-    let orchestrator: Arc<dyn Orchestrator> = Arc::clone(&mem_orchestrator) as _;
+    let orchestrator: Arc<dyn InvocationControlBackend> = Arc::clone(&mem_orchestrator) as _;
     let state_backend: Arc<dyn StateBackend> =
         Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
 
@@ -241,7 +246,7 @@ async fn test_recover_stale_pending_invocation() {
 #[tokio::test]
 async fn test_recover_stale_running_invocation() {
     let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-    let orchestrator: Arc<dyn Orchestrator> =
+    let orchestrator: Arc<dyn InvocationControlBackend> =
         Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
     let state_backend: Arc<dyn StateBackend> =
         Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
@@ -338,7 +343,7 @@ fn test_with_num_workers_clamps_to_one() {
 #[tokio::test]
 async fn test_concurrent_workers_process_invocations() {
     let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-    let orchestrator: Arc<dyn Orchestrator> =
+    let orchestrator: Arc<dyn InvocationControlBackend> =
         Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
     let state_backend: Arc<dyn StateBackend> =
         Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
@@ -428,7 +433,7 @@ fn test_max_parallel_slots() {
 #[tokio::test]
 async fn test_blocking_priority_over_fifo() {
     let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-    let orchestrator: Arc<dyn Orchestrator> =
+    let orchestrator: Arc<dyn InvocationControlBackend> =
         Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
     let state_backend: Arc<dyn StateBackend> =
         Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
@@ -534,7 +539,12 @@ async fn test_no_blocking_falls_back_to_fifo() {
         .upsert_invocation(&inv_dto, &call)
         .await
         .unwrap();
-    runner.broker.route_invocation(&inv_id).await.unwrap();
+    runner
+        .control_plane
+        .broker
+        .route_invocation(&inv_id)
+        .await
+        .unwrap();
 
     let did_work = runner.run_one().await.unwrap();
     assert!(did_work);
@@ -548,7 +558,7 @@ async fn test_no_blocking_falls_back_to_fifo() {
 #[tokio::test]
 async fn test_blocking_race_handled_gracefully() {
     let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-    let orchestrator: Arc<dyn Orchestrator> =
+    let orchestrator: Arc<dyn InvocationControlBackend> =
         Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
     let state_backend: Arc<dyn StateBackend> =
         Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
@@ -614,12 +624,12 @@ fn make_runner_with_config(
     task_config: TaskConfig,
 ) -> (
     PersistentTokioRunner,
-    Arc<dyn Orchestrator>,
+    Arc<dyn InvocationControlBackend>,
     Arc<dyn StateBackend>,
     Arc<dyn Broker>,
 ) {
     let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-    let orchestrator: Arc<dyn Orchestrator> =
+    let orchestrator: Arc<dyn InvocationControlBackend> =
         Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
     let state_backend: Arc<dyn StateBackend> =
         Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
@@ -659,7 +669,7 @@ fn make_runner_with_config(
 }
 
 async fn submit_invocation(
-    orchestrator: &dyn Orchestrator,
+    orchestrator: &dyn InvocationControlBackend,
     state_backend: &dyn StateBackend,
     broker: &dyn Broker,
     task_id: &TaskId,
@@ -822,10 +832,85 @@ async fn test_cc_index_cleanup_on_success() {
     }
 }
 
+#[tokio::test]
+async fn test_trigger_static_string_args_are_json_serialized_for_tasks() {
+    let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
+    let orchestrator: Arc<dyn InvocationControlBackend> =
+        Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
+    let state_backend: Arc<dyn StateBackend> =
+        Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
+    let trigger_store: Arc<dyn rustvello_core::trigger::TriggerStore> =
+        Arc::new(rustvello_mem::trigger::MemTriggerStore::new());
+    let trigger_manager = rustvello_core::trigger::TriggerManager::new(Arc::clone(&trigger_store));
+
+    let task_id = TaskId::new("test", "echo_message");
+    let mut registry = TaskRegistry::new();
+    registry
+        .register(TaskDefinition::new(
+            task_id.clone(),
+            TaskConfig::default(),
+            Arc::new(|args_json: String| {
+                let args: std::collections::BTreeMap<String, String> =
+                    serde_json::from_str(&args_json).map_err(|e| {
+                        RustvelloError::Serialization {
+                            message: e.to_string(),
+                        }
+                    })?;
+                let raw = args
+                    .get("message")
+                    .ok_or_else(|| RustvelloError::Serialization {
+                        message: "missing message argument".to_owned(),
+                    })?;
+                let message: String =
+                    serde_json::from_str(raw).map_err(|e| RustvelloError::Serialization {
+                        message: e.to_string(),
+                    })?;
+                serde_json::to_string(&message).map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })
+            }),
+        ))
+        .unwrap();
+
+    crate::trigger_builder::TriggerBuilder::new()
+        .on_event("demo.event")
+        .with_static_args(serde_json::json!({"message": "hello"}))
+        .build_and_register(&task_id, &trigger_store)
+        .await
+        .unwrap();
+
+    trigger_manager
+        .emit_event("demo.event", serde_json::json!({}))
+        .await
+        .unwrap();
+
+    let runner = PersistentTokioRunner::new(
+        "test-app".to_string(),
+        AppConfig::default(),
+        Arc::clone(&broker),
+        Arc::clone(&orchestrator),
+        Arc::clone(&state_backend),
+        Arc::new(registry),
+        Some(trigger_manager.clone()),
+    );
+
+    runner.evaluate_triggers(&trigger_manager).await.unwrap();
+
+    let invocations = orchestrator
+        .get_invocations_by_task(&task_id)
+        .await
+        .unwrap();
+    assert_eq!(invocations.len(), 1);
+    assert!(runner.run_one().await.unwrap());
+
+    let result = state_backend.get_result(&invocations[0]).await.unwrap();
+    assert_eq!(result, Some("\"hello\"".to_owned()));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_cc_slot_is_atomic_across_runner_instances() {
     let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-    let orchestrator: Arc<dyn Orchestrator> =
+    let orchestrator: Arc<dyn InvocationControlBackend> =
         Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
     let state_backend: Arc<dyn StateBackend> =
         Arc::new(rustvello_mem::state_backend::MemStateBackend::new());

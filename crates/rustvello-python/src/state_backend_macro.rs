@@ -36,7 +36,7 @@ macro_rules! impl_py_state_backend {
                 use rustvello_proto::identifiers::TaskId;
                 use rustvello_proto::invocation::{InvocationDTO, WorkflowIdentity};
 
-                let task_id = TaskId::try_new(task_module, task_name)
+                let task_id = TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python, task_module, task_name)
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
                 let mut args = SerializedArguments::new();
                 for (k, v) in serialized_arguments {
@@ -332,7 +332,7 @@ macro_rules! impl_py_state_backend {
             ) -> pyo3::PyResult<Vec<String>> {
                 use rustvello_core::state_backend::StateBackendQuery;
                 use rustvello_proto::identifiers::TaskId;
-                let task_id = TaskId::try_new(task_module, task_name)
+                let task_id = TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python, task_module, task_name)
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
@@ -478,6 +478,8 @@ macro_rules! impl_py_state_backend {
 
             #[pyo3(signature = (
                                         runner_id, runner_cls, pid, hostname, thread_id,
+                                        runner_language="rust",
+                                        executor_kind="tokio",
                                         parent_runner_id=None, parent_runner_cls=None
                                     ))]
             #[allow(clippy::too_many_arguments)]
@@ -489,12 +491,24 @@ macro_rules! impl_py_state_backend {
                 pid: u32,
                 hostname: &str,
                 thread_id: u64,
+                runner_language: &str,
+                executor_kind: &str,
                 parent_runner_id: Option<&str>,
                 parent_runner_cls: Option<&str>,
             ) -> pyo3::PyResult<()> {
                 use rustvello_core::state_backend::StateBackendRunner;
                 let ctx = rustvello_core::state_backend::StoredRunnerContext {
                     runner_cls: runner_cls.to_string(),
+                    runner_language: runner_language
+                        .parse::<rustvello_proto::identifiers::TaskLanguage>()
+                        .map_err(|error| {
+                            pyo3::exceptions::PyValueError::new_err(error.to_string())
+                        })?,
+                    executor_kind: executor_kind
+                        .parse::<rustvello_proto::identifiers::ExecutorKind>()
+                        .map_err(|error| {
+                            pyo3::exceptions::PyValueError::new_err(error.to_string())
+                        })?,
                     runner_id: runner_id.to_string(),
                     pid,
                     hostname: hostname.to_string(),

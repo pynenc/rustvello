@@ -557,12 +557,21 @@ impl TriggerStore for PostgresTriggerStore {
                     .is_some_and(|id| event.emitted_by_invocation_id.as_ref() != Some(id))
                 || query.start.is_some_and(|start| event.timestamp < start)
                 || query.end.is_some_and(|end| event.timestamp > end)
+                || query
+                    .matched
+                    .is_some_and(|matched| event.is_matched() != matched)
+                || query
+                    .triggered
+                    .is_some_and(|triggered| event.is_triggered() != triggered)
             {
                 continue;
             }
             events.push(event);
         }
         events.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+        if let Some(offset) = query.offset {
+            events = events.into_iter().skip(offset).collect();
+        }
         if let Some(limit) = query.limit {
             events.truncate(limit);
         }

@@ -14,7 +14,7 @@ use tokio::time::{sleep, Duration};
 use rustvello_core::broker::{validate_routing, Broker, DEFAULT_QUEUE};
 use rustvello_core::error::{RustvelloError, RustvelloResult};
 use rustvello_proto::config::{MAX_PRIORITY, MIN_PRIORITY};
-use rustvello_proto::identifiers::{InvocationId, TaskId};
+use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
 
 use crate::connection::AmqpConnection;
 
@@ -31,11 +31,12 @@ struct MessageEnvelope {
     priority: f64,
 }
 
-/// RabbitMQ broker using one native priority queue per logical queue.
+/// RabbitMQ broker using one native priority queue per language and logical queue.
 ///
 /// Pynenc/Rustvello float priorities are normalized into RabbitMQ's 256
-/// integer levels. Filtering keeps non-matching deliveries unacknowledged and
-/// requeues them after the scan, so inspection cannot lose messages.
+/// integer levels. Language routing happens when publishing, so a worker reads
+/// directly from its own physical queue without scanning or requeueing work
+/// owned by another runtime.
 #[non_exhaustive]
 pub struct RabbitMqBroker {
     conn: AmqpConnection,
@@ -52,8 +53,11 @@ impl RabbitMqBroker {
         }
     }
 
-    fn queue_name(&self, logical_queue: &str) -> String {
-        format!("{}_rustvello_broker_{}", self.prefix, logical_queue)
+    fn queue_name(&self, logical_queue: &str, language: TaskLanguage) -> String {
+        format!(
+            "{}_rustvello_broker_{}_{}",
+            self.prefix, language, logical_queue
+        )
     }
 
     fn priority_rank(priority: f64) -> u8 {
@@ -61,8 +65,12 @@ impl RabbitMqBroker {
         (normalized * f64::from(MAX_RABBITMQ_PRIORITY)).round() as u8
     }
 
-    async fn ensure_queue(&self, logical_queue: &str) -> RustvelloResult<u32> {
-        let queue_name = self.queue_name(logical_queue);
+    async fn ensure_queue(
+        &self,
+        logical_queue: &str,
+        language: TaskLanguage,
+    ) -> RustvelloResult<u32> {
+        let queue_name = self.queue_name(logical_queue, language);
         let mut arguments = FieldTable::default();
         arguments.insert(
             ShortString::from("x-max-priority"),
@@ -96,13 +104,14 @@ impl RabbitMqBroker {
     async fn wait_for_requeued_messages(
         &self,
         logical_queue: &str,
+        language: TaskLanguage,
         expected_count: u32,
     ) -> RustvelloResult<()> {
         // Basic.Nack has no synchronous server acknowledgement. A short,
         // bounded poll avoids exposing a transient empty queue after a
         // task/language scan has requeued deliveries.
         for _ in 0..20 {
-            if self.ensure_queue(logical_queue).await? >= expected_count {
+            if self.ensure_queue(logical_queue, language).await? >= expected_count {
                 break;
             }
             sleep(Duration::from_millis(5)).await;
@@ -113,14 +122,15 @@ impl RabbitMqBroker {
     async fn take_matching<F>(
         &self,
         logical_queue: &str,
+        language: TaskLanguage,
         matches: F,
     ) -> RustvelloResult<Option<InvocationId>>
     where
         F: Fn(&MessageEnvelope) -> bool + Send,
     {
-        let message_count = self.ensure_queue(logical_queue).await?;
+        let message_count = self.ensure_queue(logical_queue, language).await?;
         let channel = self.conn.channel().await.map_err(broker_err)?;
-        let queue_name = self.queue_name(logical_queue);
+        let queue_name = self.queue_name(logical_queue, language);
         let mut held = Vec::new();
         for _ in 0..message_count {
             let Some(message) = channel
@@ -153,25 +163,30 @@ impl RabbitMqBroker {
                     .await
                     .map_err(broker_err)?;
                 Self::requeue(held).await?;
-                self.wait_for_requeued_messages(logical_queue, message_count - 1)
+                self.wait_for_requeued_messages(logical_queue, language, message_count - 1)
                     .await?;
                 return Ok(Some(InvocationId::from_string(envelope.invocation_id)));
             }
             held.push(delivery);
         }
         Self::requeue(held).await?;
-        self.wait_for_requeued_messages(logical_queue, message_count)
+        self.wait_for_requeued_messages(logical_queue, language, message_count)
             .await?;
         Ok(None)
     }
 
-    async fn count_matching<F>(&self, logical_queue: &str, matches: F) -> RustvelloResult<usize>
+    async fn count_matching<F>(
+        &self,
+        logical_queue: &str,
+        language: TaskLanguage,
+        matches: F,
+    ) -> RustvelloResult<usize>
     where
         F: Fn(&MessageEnvelope) -> bool + Send,
     {
-        let message_count = self.ensure_queue(logical_queue).await?;
+        let message_count = self.ensure_queue(logical_queue, language).await?;
         let channel = self.conn.channel().await.map_err(broker_err)?;
-        let queue_name = self.queue_name(logical_queue);
+        let queue_name = self.queue_name(logical_queue, language);
         let mut deliveries = Vec::new();
         let mut count = 0;
         for _ in 0..message_count {
@@ -203,7 +218,7 @@ impl RabbitMqBroker {
             deliveries.push(delivery);
         }
         Self::requeue(deliveries).await?;
-        self.wait_for_requeued_messages(logical_queue, message_count)
+        self.wait_for_requeued_messages(logical_queue, language, message_count)
             .await?;
         Ok(count)
     }
@@ -219,7 +234,10 @@ impl Broker for RabbitMqBroker {
         priority: f64,
     ) -> RustvelloResult<()> {
         validate_routing(queue_name, priority)?;
-        self.ensure_queue(queue_name).await?;
+        // The legacy task-less API predates language-qualified TaskIds. Keep it
+        // on the Rust lane; normal application submission always supplies a task.
+        let language = task_id.map_or(TaskLanguage::Rust, TaskId::language);
+        self.ensure_queue(queue_name, language).await?;
         let envelope = serde_json::to_vec(&MessageEnvelope {
             invocation_id: invocation_id.to_string(),
             task_id: task_id.map(ToString::to_string),
@@ -230,7 +248,7 @@ impl Broker for RabbitMqBroker {
         channel
             .basic_publish(
                 "",
-                &self.queue_name(queue_name),
+                &self.queue_name(queue_name, language),
                 BasicPublishOptions::default(),
                 &envelope,
                 BasicProperties::default().with_priority(Self::priority_rank(priority)),
@@ -262,13 +280,24 @@ impl Broker for RabbitMqBroker {
         task_id: Option<&TaskId>,
     ) -> RustvelloResult<Option<InvocationId>> {
         validate_routing(queue_name, 0.0)?;
-        let task_id = task_id.map(ToString::to_string);
-        self.take_matching(queue_name, move |envelope| {
-            task_id
-                .as_ref()
-                .is_none_or(|task_id| envelope.task_id.as_ref() == Some(task_id))
-        })
-        .await
+        if let Some(task_id) = task_id {
+            let language = task_id.language();
+            let task_id = task_id.to_string();
+            return self
+                .take_matching(queue_name, language, move |envelope| {
+                    envelope.task_id.as_ref() == Some(&task_id)
+                })
+                .await;
+        }
+
+        // Language-agnostic administrative retrieval has no cross-language
+        // ordering guarantee. Worker paths always use the language API below.
+        for language in TaskLanguage::ALL {
+            if let Some(invocation_id) = self.take_matching(queue_name, language, |_| true).await? {
+                return Ok(Some(invocation_id));
+            }
+        }
+        Ok(None)
     }
 
     async fn retrieve_invocation(
@@ -281,22 +310,16 @@ impl Broker for RabbitMqBroker {
 
     async fn retrieve_invocation_for_language_from_queue(
         &self,
-        language: &str,
+        language: TaskLanguage,
         queue_name: &str,
     ) -> RustvelloResult<Option<InvocationId>> {
         validate_routing(queue_name, 0.0)?;
-        let language = language.to_owned();
-        self.take_matching(queue_name, move |envelope| match &envelope.task_id {
-            None => true,
-            Some(task_id) if language.is_empty() => !task_id.contains("::"),
-            Some(task_id) => task_id.starts_with(&format!("{language}::")),
-        })
-        .await
+        self.take_matching(queue_name, language, |_| true).await
     }
 
     async fn retrieve_invocation_for_language(
         &self,
-        language: &str,
+        language: TaskLanguage,
     ) -> RustvelloResult<Option<InvocationId>> {
         self.retrieve_invocation_for_language_from_queue(language, DEFAULT_QUEUE)
             .await
@@ -316,14 +339,17 @@ impl Broker for RabbitMqBroker {
         for queue_name in queues {
             validate_routing(&queue_name, 0.0)?;
             if let Some(task_id) = task_id {
+                let language = task_id.language();
                 let task_id = task_id.to_string();
                 total += self
-                    .count_matching(&queue_name, move |envelope| {
+                    .count_matching(&queue_name, language, move |envelope| {
                         envelope.task_id.as_ref() == Some(&task_id)
                     })
                     .await?;
             } else {
-                total += self.ensure_queue(&queue_name).await? as usize;
+                for language in TaskLanguage::ALL {
+                    total += self.ensure_queue(&queue_name, language).await? as usize;
+                }
             }
         }
         Ok(total)
@@ -347,11 +373,16 @@ impl Broker for RabbitMqBroker {
         }
         let channel = self.conn.channel().await.map_err(broker_err)?;
         for queue_name in queues {
-            self.ensure_queue(&queue_name).await?;
-            channel
-                .queue_purge(&self.queue_name(&queue_name), QueuePurgeOptions::default())
-                .await
-                .map_err(broker_err)?;
+            for language in TaskLanguage::ALL {
+                self.ensure_queue(&queue_name, language).await?;
+                channel
+                    .queue_purge(
+                        &self.queue_name(&queue_name, language),
+                        QueuePurgeOptions::default(),
+                    )
+                    .await
+                    .map_err(broker_err)?;
+            }
         }
         Ok(())
     }
@@ -369,11 +400,15 @@ mod tests {
     }
 
     #[test]
-    fn logical_queue_uses_prefix() {
+    fn physical_queue_includes_language_and_logical_queue() {
         let broker = RabbitMqBroker::new("amqp://localhost", "test");
         assert_eq!(
-            broker.queue_name("payments"),
-            "test_rustvello_broker_payments"
+            broker.queue_name("payments", TaskLanguage::Rust),
+            "test_rustvello_broker_rust_payments"
+        );
+        assert_eq!(
+            broker.queue_name("payments", TaskLanguage::Python),
+            "test_rustvello_broker_python_payments"
         );
     }
 }

@@ -1,18 +1,23 @@
-//! Orchestration coordinator — multi-subsystem coordination for hot-path operations.
+//! Concrete orchestration service for cross-backend invocation use cases.
 //!
 //! Mirrors pynenc's `BaseOrchestrator` coordination methods: each method
 //! bundles multiple subsystem calls (status transition + history + trigger +
 //! waiters + auto-purge) into a single Rust operation, eliminating FFI
 //! round-trips when called from language bindings.
 //!
-//! The coordinator does **not** own the task registry or config resolution —
-//! those remain in [`crate::app::RustvelloApp`].  CC-aware operations like
-//! `get_invocations_to_run` that require task config stay on the app.
+//! The orchestrator owns operation ordering across invocation control, state,
+//! broker, trigger, and payload ports. It does not execute user task code.
 
-mod extended;
+mod backends;
+mod dispatch;
+mod maintenance;
 mod retrieval;
+mod routing;
+mod submission;
+mod triggers;
 
-pub use extended::RouteCallResult;
+pub(crate) use dispatch::queue_names_for_retrieval;
+pub use routing::RouteCallResult;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -20,26 +25,35 @@ use std::sync::Arc;
 use rustvello_core::broker::Broker;
 use rustvello_core::client_data_store::ClientDataStoreManager;
 use rustvello_core::error::{RustvelloResult, TaskError};
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::trigger::TriggerManager;
 use rustvello_proto::call::CallDTO;
+use rustvello_proto::config::AppConfig;
 use rustvello_proto::identifiers::{InvocationId, RunnerId, TaskId};
 use rustvello_proto::invocation::{InvocationDTO, InvocationHistory};
 use rustvello_proto::status::{InvocationStatus, InvocationStatusRecord};
 
-/// Orchestration coordinator holding shared backend references.
+use crate::task_catalog::TaskCatalog;
+
+/// Concrete owner of cross-backend invocation use cases.
 ///
 /// Created by [`crate::app::RustvelloApp`] or directly via [`Self::new`]
 /// for the `from_backends()` FFI path.  All methods are `&self` — the
-/// coordinator is logically immutable once built.
-pub struct OrchestratorCoordinator {
-    pub(crate) orchestrator: Arc<dyn Orchestrator>,
-    pub(crate) state_backend: Arc<dyn StateBackend>,
-    pub(crate) broker: Arc<dyn Broker>,
-    pub(crate) client_data_store: Arc<ClientDataStoreManager>,
-    pub(crate) trigger_manager: Option<TriggerManager>,
+/// service is logically immutable once built.
+#[derive(Clone)]
+pub struct Orchestrator {
+    backends: backends::RuntimeBackends,
+    stored_runner_cache: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
     auto_purge_delay_secs: u64,
+}
+
+/// Named ports transferred from the application composition root to a runner.
+pub(crate) struct RunnerPorts {
+    pub(crate) broker: Arc<dyn Broker>,
+    pub(crate) invocation_control: Arc<dyn InvocationControlBackend>,
+    pub(crate) state_backend: Arc<dyn StateBackend>,
+    pub(crate) trigger_manager: Option<TriggerManager>,
 }
 
 /// Convert a purge duration in fractional hours to whole seconds.
@@ -67,10 +81,10 @@ fn hours_to_purge_secs(hours: f64) -> u64 {
     secs as u64
 }
 
-impl OrchestratorCoordinator {
-    /// Create a new coordinator from shared backend references.
+impl Orchestrator {
+    /// Create an orchestrator from shared backend references.
     pub fn new(
-        orchestrator: Arc<dyn Orchestrator>,
+        orchestrator: Arc<dyn InvocationControlBackend>,
         state_backend: Arc<dyn StateBackend>,
         broker: Arc<dyn Broker>,
         client_data_store: Arc<ClientDataStoreManager>,
@@ -78,13 +92,126 @@ impl OrchestratorCoordinator {
         auto_purge_hours: f64,
     ) -> Self {
         Self {
-            orchestrator,
-            state_backend,
-            broker,
-            client_data_store,
-            trigger_manager,
+            backends: backends::RuntimeBackends::new(
+                orchestrator,
+                state_backend,
+                broker,
+                client_data_store,
+                trigger_manager,
+            ),
+            stored_runner_cache: Arc::new(
+                tokio::sync::Mutex::new(std::collections::HashSet::new()),
+            ),
             auto_purge_delay_secs: hours_to_purge_secs(auto_purge_hours),
         }
+    }
+
+    pub(crate) fn for_runner(
+        invocation_control: Arc<dyn InvocationControlBackend>,
+        state_backend: Arc<dyn StateBackend>,
+        broker: Arc<dyn Broker>,
+        trigger_manager: Option<TriggerManager>,
+        auto_purge_hours: f64,
+    ) -> Self {
+        Self {
+            backends: backends::RuntimeBackends::for_runner(
+                invocation_control,
+                state_backend,
+                broker,
+                trigger_manager,
+            ),
+            stored_runner_cache: Arc::new(
+                tokio::sync::Mutex::new(std::collections::HashSet::new()),
+            ),
+            auto_purge_delay_secs: hours_to_purge_secs(auto_purge_hours),
+        }
+    }
+
+    pub(crate) fn broker(&self) -> Arc<dyn Broker> {
+        Arc::clone(&self.backends.broker)
+    }
+
+    pub(crate) fn invocation_control(&self) -> Arc<dyn InvocationControlBackend> {
+        Arc::clone(&self.backends.invocation_control)
+    }
+
+    pub(crate) fn state_backend(&self) -> Arc<dyn StateBackend> {
+        Arc::clone(&self.backends.state_backend)
+    }
+
+    pub(crate) fn client_data_store(&self) -> Arc<ClientDataStoreManager> {
+        Arc::clone(&self.backends.client_data_store)
+    }
+
+    pub(crate) fn trigger_manager(&self) -> Option<&TriggerManager> {
+        self.backends.trigger_manager.as_ref()
+    }
+
+    pub(crate) fn set_trigger_manager(&mut self, manager: TriggerManager) {
+        self.backends.trigger_manager = Some(manager);
+    }
+
+    pub(crate) async fn purge(&self) -> RustvelloResult<()> {
+        self.backends.invocation_control.purge().await?;
+        self.backends.broker.purge(None).await?;
+        self.backends.state_backend.purge().await?;
+        if let Some(trigger_manager) = &self.backends.trigger_manager {
+            trigger_manager.store().purge().await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn into_runner_ports(self) -> RunnerPorts {
+        RunnerPorts {
+            broker: self.backends.broker,
+            invocation_control: self.backends.invocation_control,
+            state_backend: self.backends.state_backend,
+            trigger_manager: self.backends.trigger_manager,
+        }
+    }
+
+    pub async fn set_waiting_for(
+        &self,
+        waiter: &InvocationId,
+        waited_on: &InvocationId,
+    ) -> RustvelloResult<()> {
+        self.backends
+            .invocation_control
+            .set_waiting_for(waiter, waited_on)
+            .await
+    }
+
+    pub(crate) async fn release_concurrency_slot(
+        &self,
+        invocation_id: &InvocationId,
+    ) -> RustvelloResult<()> {
+        self.backends
+            .invocation_control
+            .remove_from_concurrency_index(invocation_id)
+            .await
+    }
+
+    pub(crate) async fn retry_invocation(
+        &self,
+        app_config: &AppConfig,
+        task_catalog: &TaskCatalog,
+        invocation_id: &InvocationId,
+        runner_id: &RunnerId,
+    ) -> RustvelloResult<()> {
+        let invocation = self
+            .backends
+            .state_backend
+            .get_invocation(invocation_id)
+            .await?;
+        let (queue, priority) = task_catalog
+            .routing_for(app_config, &invocation.task_id)
+            .ok_or_else(
+                || rustvello_core::error::RustvelloError::TaskNotRegistered {
+                    task_id: invocation.task_id,
+                },
+            )?;
+        self.set_invocation_retry(invocation_id, runner_id, &queue, priority)
+            .await
     }
 
     // -----------------------------------------------------------------------
@@ -102,7 +229,7 @@ impl OrchestratorCoordinator {
         status: InvocationStatus,
         runner_id: &RunnerId,
     ) -> RustvelloResult<InvocationStatusRecord> {
-        let (task_id, arguments) = if self.trigger_manager.is_some() {
+        let (task_id, arguments) = if self.backends.trigger_manager.is_some() {
             self.get_trigger_context(invocation_id).await
         } else {
             (TaskId::new("_", "_"), BTreeMap::new())
@@ -133,25 +260,32 @@ impl OrchestratorCoordinator {
     ) -> RustvelloResult<InvocationStatusRecord> {
         // 1. Atomic status transition
         let record = self
-            .orchestrator
+            .backends
+            .invocation_control
             .set_invocation_status(invocation_id, status, Some(runner_id))
             .await?;
 
         // 2. Terminal side-effects
         if status.is_terminal() {
-            self.orchestrator.release_waiters(invocation_id).await?;
+            self.backends
+                .invocation_control
+                .release_waiters(invocation_id)
+                .await?;
             if self.auto_purge_delay_secs > 0 {
-                self.orchestrator.schedule_auto_purge(invocation_id).await?;
+                self.backends
+                    .invocation_control
+                    .schedule_auto_purge(invocation_id)
+                    .await?;
             }
         }
 
         // 3. Record history
         let history = InvocationHistory::new(invocation_id.clone(), record.clone(), None)
             .with_runner(runner_id.clone());
-        self.state_backend.add_history(&history).await?;
+        self.backends.state_backend.add_history(&history).await?;
 
         // 4. Trigger notification
-        if let Some(ref tm) = self.trigger_manager {
+        if let Some(ref tm) = self.backends.trigger_manager {
             let ctx = rustvello_proto::trigger::StatusContext {
                 invocation_id: invocation_id.clone(),
                 task_id: task_id.clone(),
@@ -187,21 +321,23 @@ impl OrchestratorCoordinator {
             });
         }
         for (inv_dto, call_dto) in invocations {
-            self.state_backend
+            self.backends
+                .state_backend
                 .upsert_invocation(inv_dto, call_dto)
                 .await?;
 
             let record = self
-                .orchestrator
+                .backends
+                .invocation_control
                 .register_invocation_with_id(&inv_dto.invocation_id, call_dto, Some(runner_id))
                 .await?;
 
             let history =
                 InvocationHistory::new(inv_dto.invocation_id.clone(), record.clone(), None)
                     .with_runner(runner_id.clone());
-            self.state_backend.add_history(&history).await?;
+            self.backends.state_backend.add_history(&history).await?;
 
-            if let Some(ref tm) = self.trigger_manager {
+            if let Some(ref tm) = self.backends.trigger_manager {
                 let ctx = rustvello_proto::trigger::StatusContext {
                     invocation_id: inv_dto.invocation_id.clone(),
                     task_id: inv_dto.task_id.clone(),
@@ -213,7 +349,8 @@ impl OrchestratorCoordinator {
         }
 
         for ((invocation, _), (queue_name, priority)) in invocations.iter().zip(routes) {
-            self.broker
+            self.backends
+                .broker
                 .route_invocation_with_options(
                     &invocation.invocation_id,
                     Some(&invocation.task_id),
@@ -236,7 +373,7 @@ impl OrchestratorCoordinator {
         result: &str,
         runner_id: &RunnerId,
     ) -> RustvelloResult<()> {
-        let (task_id, arguments) = if self.trigger_manager.is_some() {
+        let (task_id, arguments) = if self.backends.trigger_manager.is_some() {
             self.get_trigger_context(invocation_id).await
         } else {
             (TaskId::new("_", "_"), BTreeMap::new())
@@ -264,7 +401,8 @@ impl OrchestratorCoordinator {
         task_id: &TaskId,
         arguments: BTreeMap<String, String>,
     ) -> RustvelloResult<()> {
-        self.state_backend
+        self.backends
+            .state_backend
             .store_result(invocation_id, result)
             .await?;
 
@@ -278,7 +416,7 @@ impl OrchestratorCoordinator {
         .await?;
 
         // Trigger result notification
-        if let Some(ref tm) = self.trigger_manager {
+        if let Some(ref tm) = self.backends.trigger_manager {
             let result_value: serde_json::Value =
                 serde_json::from_str(result).unwrap_or_else(|e| {
                     tracing::warn!(
@@ -311,7 +449,7 @@ impl OrchestratorCoordinator {
         error_message: &str,
         runner_id: &RunnerId,
     ) -> RustvelloResult<()> {
-        let (task_id, arguments) = if self.trigger_manager.is_some() {
+        let (task_id, arguments) = if self.backends.trigger_manager.is_some() {
             self.get_trigger_context(invocation_id).await
         } else {
             (TaskId::new("_", "_"), BTreeMap::new())
@@ -346,7 +484,8 @@ impl OrchestratorCoordinator {
             message: error_message.to_owned(),
             traceback: None,
         };
-        self.state_backend
+        self.backends
+            .state_backend
             .store_error(invocation_id, &task_error)
             .await?;
 
@@ -359,7 +498,7 @@ impl OrchestratorCoordinator {
         )
         .await?;
 
-        if let Some(ref tm) = self.trigger_manager {
+        if let Some(ref tm) = self.backends.trigger_manager {
             let ctx = rustvello_proto::trigger::ExceptionContext {
                 invocation_id: invocation_id.clone(),
                 task_id: task_id.clone(),
@@ -386,6 +525,7 @@ impl OrchestratorCoordinator {
         priority: f64,
     ) -> RustvelloResult<()> {
         let task_id = self
+            .backends
             .state_backend
             .get_invocation(invocation_id)
             .await?
@@ -425,11 +565,13 @@ impl OrchestratorCoordinator {
         )
         .await?;
 
-        self.orchestrator
+        self.backends
+            .invocation_control
             .increment_invocation_retries(invocation_id)
             .await?;
 
-        self.broker
+        self.backends
+            .broker
             .route_invocation_with_options(invocation_id, Some(task_id), queue_name, priority)
             .await?;
         Ok(())
@@ -444,11 +586,16 @@ impl OrchestratorCoordinator {
         &self,
         invocation_id: &InvocationId,
     ) -> BTreeMap<String, String> {
-        let inv_dto = match self.state_backend.get_invocation(invocation_id).await {
+        let inv_dto = match self
+            .backends
+            .state_backend
+            .get_invocation(invocation_id)
+            .await
+        {
             Ok(dto) => dto,
             Err(_) => return BTreeMap::new(),
         };
-        match self.state_backend.get_call(&inv_dto.call_id).await {
+        match self.backends.state_backend.get_call(&inv_dto.call_id).await {
             Ok(call) => call.serialized_arguments.0,
             Err(_) => BTreeMap::new(),
         }
@@ -459,11 +606,16 @@ impl OrchestratorCoordinator {
         &self,
         invocation_id: &InvocationId,
     ) -> (TaskId, BTreeMap<String, String>) {
-        let inv_dto = match self.state_backend.get_invocation(invocation_id).await {
+        let inv_dto = match self
+            .backends
+            .state_backend
+            .get_invocation(invocation_id)
+            .await
+        {
             Ok(dto) => dto,
             Err(_) => return (TaskId::new("unknown", "unknown"), BTreeMap::new()),
         };
-        let args = match self.state_backend.get_call(&inv_dto.call_id).await {
+        let args = match self.backends.state_backend.get_call(&inv_dto.call_id).await {
             Ok(call) => call.serialized_arguments.0,
             Err(_) => BTreeMap::new(),
         };

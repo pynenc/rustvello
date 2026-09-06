@@ -1,6 +1,8 @@
 use super::TimelineDataBuilder;
 use chrono::{DateTime, Duration, Utc};
-use rustvello_proto::identifiers::{InvocationId, RunnerId};
+use rustvello_core::orchestrator::AtomicServiceExecution;
+use rustvello_core::state_backend::StoredRunnerContext;
+use rustvello_proto::identifiers::{ExecutorKind, InvocationId, RunnerId, TaskLanguage};
 use rustvello_proto::invocation::InvocationHistory;
 use rustvello_proto::status::{InvocationStatus, InvocationStatusRecord};
 
@@ -84,7 +86,7 @@ fn test_sequential_invocations_same_runner_share_y_position() {
             running_at,
             success_at,
         );
-        builder.add_history_batch_for_task(history, "test.task");
+        builder.add_history_batch_for_task(history, "rust::test.task");
     }
 
     let data = builder.build();
@@ -159,8 +161,8 @@ fn test_concurrent_invocations_same_runner_get_multiple_sublanes() {
         t0 + Duration::seconds(25), // success
     );
 
-    builder.add_history_batch_for_task(h0, "test.task");
-    builder.add_history_batch_for_task(h1, "test.task");
+    builder.add_history_batch_for_task(h0, "rust::test.task");
+    builder.add_history_batch_for_task(h1, "rust::test.task");
 
     let data = builder.build();
 
@@ -195,7 +197,7 @@ fn test_registered_entries_go_to_unassigned() {
         t0 + Duration::seconds(11), // running (runner)
         t0 + Duration::seconds(15), // success (runner)
     );
-    builder.add_history_batch_for_task(history, "test.task");
+    builder.add_history_batch_for_task(history, "rust::test.task");
 
     let data = builder.build();
 
@@ -217,6 +219,132 @@ fn test_registered_entries_go_to_unassigned() {
         .find(|g| g.runner_info.runner_id == "unassigned")
         .expect("should have an 'unassigned' group for Registered entries");
     assert_eq!(unassigned.lanes.len(), 1);
+}
+
+#[test]
+fn parent_runner_registration_uses_the_control_plane_row() {
+    let t0 = Utc::now();
+    let parent_id = "parent-runner";
+    let worker_id = "worker-runner";
+    let mut builder = TimelineDataBuilder::new(TimelineConfig::default());
+    builder.set_runner_contexts(std::collections::HashMap::from([
+        (
+            parent_id.to_owned(),
+            StoredRunnerContext {
+                runner_cls: "PersistentTokioRunner".to_owned(),
+                runner_language: TaskLanguage::Python,
+                executor_kind: ExecutorKind::Python,
+                runner_id: parent_id.to_owned(),
+                pid: 42,
+                hostname: "host".to_owned(),
+                thread_id: 0,
+                started_at: t0,
+                parent_runner_id: None,
+                parent_runner_cls: None,
+            },
+        ),
+        (
+            worker_id.to_owned(),
+            StoredRunnerContext {
+                runner_cls: "PersistentTokioWorker".to_owned(),
+                runner_language: TaskLanguage::Python,
+                executor_kind: ExecutorKind::Python,
+                runner_id: worker_id.to_owned(),
+                pid: 42,
+                hostname: "host".to_owned(),
+                thread_id: 4,
+                started_at: t0,
+                parent_runner_id: Some(parent_id.to_owned()),
+                parent_runner_cls: Some("PersistentTokioRunner".to_owned()),
+            },
+        ),
+    ]));
+    builder.set_atomic_service_executions(vec![AtomicServiceExecution {
+        runner_id: parent_id.to_owned(),
+        start: t0,
+        end: t0 + Duration::milliseconds(5),
+    }]);
+    builder.add_history_batch_for_task(
+        vec![
+            make_entry("inv-1", InvocationStatus::Registered, Some(parent_id), t0),
+            make_entry(
+                "inv-1",
+                InvocationStatus::Pending,
+                Some(worker_id),
+                t0 + Duration::milliseconds(1),
+            ),
+            make_entry(
+                "inv-1",
+                InvocationStatus::Success,
+                Some(worker_id),
+                t0 + Duration::milliseconds(2),
+            ),
+        ],
+        "python::test.triggered_task",
+    );
+
+    let data = builder.build();
+    let group = data
+        .groups
+        .iter()
+        .find(|group| group.runner_info.runner_id == parent_id)
+        .expect("parent group");
+    let control_plane = group.control_plane.as_ref().expect("control-plane row");
+    assert!(control_plane
+        .points
+        .iter()
+        .any(|point| point.status == InvocationStatus::Registered));
+    assert!(control_plane
+        .points
+        .iter()
+        .any(|point| point.tooltip.contains("atomic service trigger evaluation")));
+    assert!(group.lanes.iter().all(|lane| {
+        lane.points
+            .iter()
+            .all(|point| point.status != InvocationStatus::Registered)
+    }));
+}
+
+#[test]
+fn atomic_only_window_still_renders_a_runner_row() {
+    use crate::svg::render::TimelineSvgRenderer;
+
+    let t0 =
+        chrono::NaiveDateTime::parse_from_str("2026-09-04T19:40:35.412", "%Y-%m-%dT%H:%M:%S%.3f")
+            .unwrap()
+            .and_utc();
+    let runner_id = "runner-atomic-only";
+    let mut builder = TimelineDataBuilder::new(TimelineConfig::default());
+    builder.set_time_bounds(t0, t0 + Duration::milliseconds(4));
+    builder.set_runner_contexts(std::collections::HashMap::from([(
+        runner_id.to_owned(),
+        StoredRunnerContext {
+            runner_cls: "PersistentTokioRunner".to_owned(),
+            runner_language: TaskLanguage::Rust,
+            executor_kind: ExecutorKind::Tokio,
+            runner_id: runner_id.to_owned(),
+            pid: 42,
+            hostname: "host".to_owned(),
+            thread_id: 0,
+            started_at: t0,
+            parent_runner_id: None,
+            parent_runner_cls: None,
+        },
+    )]));
+    builder.set_atomic_service_executions(vec![AtomicServiceExecution {
+        runner_id: runner_id.to_owned(),
+        start: t0 + Duration::milliseconds(1),
+        end: t0 + Duration::milliseconds(2),
+    }]);
+
+    let data = builder.build();
+    assert_eq!(data.groups.len(), 1);
+    assert_eq!(data.groups[0].runner_info.runner_id, runner_id);
+    assert!(data.groups[0].has_control_plane());
+
+    let svg = TimelineSvgRenderer::render(&data);
+    assert!(svg.contains("atomic-service-window"));
+    assert!(svg.contains("runner-atomic-only"));
 }
 
 #[test]
@@ -264,7 +392,7 @@ fn test_zoom_centering_short_duration_invocation() {
     let config = TimelineConfig::default();
     let mut builder = TimelineDataBuilder::new(config.clone());
     builder.set_time_bounds(zoom_start, zoom_end);
-    builder.add_history_batch_for_task(history, "test.task");
+    builder.add_history_batch_for_task(history, "rust::test.task");
     let data = builder.build();
 
     // The invocation's center (t0 + 4ms) should map to roughly
@@ -361,7 +489,7 @@ fn test_rendered_svg_sequential_invocations_same_y() {
             running_at,
             success_at,
         );
-        builder.add_history_batch_for_task(history, "test.task");
+        builder.add_history_batch_for_task(history, "rust::test.task");
     }
 
     let data = builder.build();

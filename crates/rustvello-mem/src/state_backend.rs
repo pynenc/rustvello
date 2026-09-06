@@ -323,6 +323,30 @@ impl StateBackendQuery for MemStateBackend {
             .unwrap_or_default())
     }
 
+    async fn count_workflow_runs(&self, workflow_type: &TaskId) -> RustvelloResult<usize> {
+        let state = self.state.lock().await;
+        Ok(state
+            .workflow_runs
+            .get(&workflow_type.to_string())
+            .map_or(0, Vec::len))
+    }
+
+    async fn get_workflow_runs_paginated(
+        &self,
+        workflow_type: &TaskId,
+        limit: usize,
+        offset: usize,
+    ) -> RustvelloResult<Vec<WorkflowIdentity>> {
+        let state = self.state.lock().await;
+        let mut runs = state
+            .workflow_runs
+            .get(&workflow_type.to_string())
+            .cloned()
+            .unwrap_or_default();
+        runs.sort_by(|left, right| right.workflow_id.as_str().cmp(left.workflow_id.as_str()));
+        Ok(runs.into_iter().skip(offset).take(limit).collect())
+    }
+
     async fn set_workflow_data(
         &self,
         workflow_id: &InvocationId,

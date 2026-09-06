@@ -10,7 +10,9 @@ use rustvello_core::state_backend::{
     StateBackendCore, StateBackendQuery, StateBackendRunner, StoredRunnerContext,
 };
 use rustvello_proto::call::{CallDTO, SerializedArguments};
-use rustvello_proto::identifiers::{CallId, InvocationId, RunnerId, TaskId};
+use rustvello_proto::identifiers::{
+    CallId, ExecutorKind, InvocationId, RunnerId, TaskId, TaskLanguage,
+};
 use rustvello_proto::invocation::{InvocationDTO, InvocationHistory, WorkflowIdentity};
 use rustvello_proto::status::InvocationStatusRecord;
 
@@ -475,6 +477,59 @@ impl StateBackendQuery for PostgresStateBackend {
             .collect()
     }
 
+    async fn count_workflow_runs(&self, workflow_type: &TaskId) -> RustvelloResult<usize> {
+        let client = self.db.conn().await?;
+        let row = client
+            .query_one(
+                "SELECT COUNT(*) FROM workflow_runs WHERE workflow_type = $1",
+                &[&workflow_type.to_string()],
+            )
+            .await
+            .map_err(pg_err)?;
+        let count: i64 = row.get(0);
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
+    async fn get_workflow_runs_paginated(
+        &self,
+        workflow_type: &TaskId,
+        limit: usize,
+        offset: usize,
+    ) -> RustvelloResult<Vec<WorkflowIdentity>> {
+        let client = self.db.conn().await?;
+        let rows = client
+            .query(
+                "SELECT workflow_id, workflow_type, parent_workflow_id, depth
+                 FROM workflow_runs WHERE workflow_type = $1
+                 ORDER BY workflow_id DESC LIMIT $2 OFFSET $3",
+                &[
+                    &workflow_type.to_string(),
+                    &i64::try_from(limit).unwrap_or(i64::MAX),
+                    &i64::try_from(offset).unwrap_or(i64::MAX),
+                ],
+            )
+            .await
+            .map_err(pg_err)?;
+        rows.iter()
+            .map(|row| {
+                let workflow_id: String = row.get(0);
+                let workflow_type: String = row.get(1);
+                let parent_id: Option<String> = row.get(2);
+                let depth: i32 = row.get(3);
+                Ok(WorkflowIdentity {
+                    workflow_id: InvocationId::from_string(workflow_id),
+                    workflow_type: workflow_type.parse::<TaskId>().map_err(|error| {
+                        RustvelloError::state_backend(format!(
+                            "invalid workflow task_id in database: {error}"
+                        ))
+                    })?,
+                    parent_id: parent_id.map(InvocationId::from_string),
+                    depth: u32::try_from(depth).unwrap_or(0),
+                })
+            })
+            .collect()
+    }
+
     async fn set_workflow_data(
         &self,
         workflow_id: &InvocationId,
@@ -619,15 +674,18 @@ impl StateBackendRunner for PostgresStateBackend {
         client
             .execute(
                 "INSERT INTO runner_contexts
-                 (runner_id, runner_cls, pid, hostname, thread_id, started_at,
+                 (runner_id, runner_cls, runner_language, executor_kind, pid, hostname, thread_id, started_at,
                   parent_runner_id, parent_runner_cls)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                  ON CONFLICT (runner_id) DO UPDATE SET
-                    runner_cls = $2, pid = $3, hostname = $4, thread_id = $5,
-                    started_at = $6, parent_runner_id = $7, parent_runner_cls = $8",
+                    runner_cls = $2, runner_language = $3, executor_kind = $4, pid = $5, hostname = $6,
+                    thread_id = $7, started_at = $8, parent_runner_id = $9,
+                    parent_runner_cls = $10",
                 &[
                     &context.runner_id,
                     &context.runner_cls,
+                    &context.runner_language.as_str(),
+                    &context.executor_kind.as_str(),
                     &i32::try_from(context.pid).unwrap_or(0),
                     &context.hostname,
                     &(context.thread_id as i64),
@@ -649,7 +707,7 @@ impl StateBackendRunner for PostgresStateBackend {
         let runner_id_s = runner_id.to_string();
         let row = client
             .query_opt(
-                "SELECT runner_id, runner_cls, pid, hostname, thread_id, started_at,
+                "SELECT runner_id, runner_cls, runner_language, executor_kind, pid, hostname, thread_id, started_at,
                         parent_runner_id, parent_runner_cls
                  FROM runner_contexts WHERE runner_id = $1",
                 &[&runner_id_s],
@@ -667,7 +725,7 @@ impl StateBackendRunner for PostgresStateBackend {
         let parent_id_s = parent_runner_id.to_string();
         let rows = client
             .query(
-                "SELECT runner_id, runner_cls, pid, hostname, thread_id, started_at,
+                "SELECT runner_id, runner_cls, runner_language, executor_kind, pid, hostname, thread_id, started_at,
                         parent_runner_id, parent_runner_cls
                  FROM runner_contexts WHERE parent_runner_id = $1",
                 &[&parent_id_s],
@@ -791,7 +849,7 @@ impl StateBackendRunner for PostgresStateBackend {
         let pattern = format!("%{partial_id}%");
         let rows = client
             .query(
-                "SELECT runner_id, runner_cls, pid, hostname, thread_id, started_at,
+                "SELECT runner_id, runner_cls, runner_language, executor_kind, pid, hostname, thread_id, started_at,
                         parent_runner_id, parent_runner_cls
                  FROM runner_contexts WHERE runner_id LIKE $1",
                 &[&pattern],
@@ -806,11 +864,19 @@ fn parse_pg_runner_row(row: &tokio_postgres::Row) -> StoredRunnerContext {
     StoredRunnerContext {
         runner_id: row.get(0),
         runner_cls: row.get(1),
-        pid: u32::try_from(row.get::<_, i32>(2)).unwrap_or(0),
-        hostname: row.get(3),
-        thread_id: u64::try_from(row.get::<_, i64>(4)).unwrap_or(0),
-        started_at: row.get(5),
-        parent_runner_id: row.get(6),
-        parent_runner_cls: row.get(7),
+        runner_language: row
+            .get::<_, String>(2)
+            .parse()
+            .unwrap_or(TaskLanguage::Rust),
+        executor_kind: row
+            .get::<_, String>(3)
+            .parse()
+            .unwrap_or(ExecutorKind::Tokio),
+        pid: u32::try_from(row.get::<_, i32>(4)).unwrap_or(0),
+        hostname: row.get(5),
+        thread_id: u64::try_from(row.get::<_, i64>(6)).unwrap_or(0),
+        started_at: row.get(7),
+        parent_runner_id: row.get(8),
+        parent_runner_cls: row.get(9),
     }
 }

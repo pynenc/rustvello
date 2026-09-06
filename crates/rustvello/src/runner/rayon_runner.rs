@@ -3,29 +3,26 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rustvello_core::broker::Broker;
-use rustvello_core::context::{
-    clear_thread_invocation_context, clear_thread_runner_context, set_thread_invocation_context,
-    set_thread_runner_context, RunnerContext,
-};
-use rustvello_core::error::{RustvelloError, RustvelloResult};
+use rustvello_core::context::RunnerContext;
+#[cfg(test)]
+use rustvello_core::error::RustvelloError;
+use rustvello_core::error::RustvelloResult;
 use rustvello_core::middleware::TaskMiddleware;
 use rustvello_core::observability::{
     CompositeEmitter, EventEmitter, EventLevel, NoopEmitter, WorkerState,
 };
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::runner::Runner;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::task::TaskRegistry;
 use rustvello_proto::config::AppConfig;
-use rustvello_proto::identifiers::{InvocationId, RunnerId};
+use rustvello_proto::identifiers::{ExecutorKind, InvocationId, RunnerId, TaskLanguage};
 
-use tokio::sync::watch;
-use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use super::executor_common::{
-    execute_invocation_common, retrieve_next_invocation_with_cc, ExecutionDeps,
-};
+use super::control_plane::RunnerControlPlane;
+use super::executor::RayonExecutor;
+use super::executor_common::{execute_invocation_common, ExecutionDeps};
 use super::PrevEmitterWrapper;
 
 /// A runner that executes tasks on a rayon thread pool.
@@ -46,39 +43,29 @@ use super::PrevEmitterWrapper;
 ///   inside rayon threads.
 pub struct RayonRunner {
     runner_id: RunnerId,
-    app_id: Arc<str>,
-    config: AppConfig,
-    broker: Arc<dyn Broker>,
-    orchestrator: Arc<dyn Orchestrator>,
-    state_backend: Arc<dyn StateBackend>,
-    task_registry: Arc<TaskRegistry>,
+    control_plane: RunnerControlPlane,
     middlewares: Vec<Arc<dyn TaskMiddleware>>,
     emitter: Arc<dyn EventEmitter>,
     /// Tracks active workers on the rayon pool.
     active_tasks: Arc<std::sync::Mutex<HashMap<RunnerId, WorkerState>>>,
-    shutdown_tx: Arc<watch::Sender<bool>>,
+    /// Stable logical worker identities leased while a Rayon slot is active.
+    worker_slots: Arc<std::sync::Mutex<Vec<RunnerId>>>,
     /// Number of rayon threads (= max concurrent tasks).
     num_threads: usize,
-    /// The rayon thread pool.
-    pool: Arc<rayon::ThreadPool>,
+    executor: RayonExecutor,
 }
 
 impl Clone for RayonRunner {
     fn clone(&self) -> Self {
         Self {
             runner_id: self.runner_id.clone(),
-            app_id: Arc::clone(&self.app_id),
-            config: self.config.clone(),
-            broker: Arc::clone(&self.broker),
-            orchestrator: Arc::clone(&self.orchestrator),
-            state_backend: Arc::clone(&self.state_backend),
-            task_registry: Arc::clone(&self.task_registry),
+            control_plane: self.control_plane.clone(),
             middlewares: self.middlewares.clone(),
             emitter: Arc::clone(&self.emitter),
             active_tasks: Arc::clone(&self.active_tasks),
-            shutdown_tx: Arc::clone(&self.shutdown_tx),
+            worker_slots: Arc::clone(&self.worker_slots),
             num_threads: self.num_threads,
-            pool: Arc::clone(&self.pool),
+            executor: self.executor.clone(),
         }
     }
 }
@@ -87,7 +74,7 @@ impl std::fmt::Debug for RayonRunner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RayonRunner")
             .field("runner_id", &self.runner_id)
-            .field("app_id", &self.app_id)
+            .field("app_id", &self.control_plane.app_id)
             .field("num_threads", &self.num_threads)
             .finish_non_exhaustive()
     }
@@ -98,37 +85,66 @@ impl RayonRunner {
         app_id: String,
         config: AppConfig,
         broker: Arc<dyn Broker>,
-        orchestrator: Arc<dyn Orchestrator>,
+        orchestrator: Arc<dyn InvocationControlBackend>,
         state_backend: Arc<dyn StateBackend>,
         task_registry: Arc<TaskRegistry>,
     ) -> RustvelloResult<Self> {
         let num_threads = std::thread::available_parallelism()
             .map(std::num::NonZero::get)
             .unwrap_or(1);
-        let pool = build_thread_pool(num_threads)?;
-        let (shutdown_tx, _) = watch::channel(false);
         Ok(Self {
             runner_id: RunnerId::new(),
-            app_id: Arc::from(app_id),
-            config,
-            broker,
-            orchestrator,
-            state_backend,
-            task_registry,
+            control_plane: RunnerControlPlane::new(
+                TaskLanguage::Rust,
+                app_id,
+                config,
+                broker,
+                orchestrator,
+                state_backend,
+                task_registry,
+                None,
+            )
+            .with_executor_kind(ExecutorKind::Rayon),
             middlewares: Vec::new(),
             emitter: Arc::new(NoopEmitter),
             active_tasks: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            shutdown_tx: Arc::new(shutdown_tx),
+            worker_slots: Arc::new(std::sync::Mutex::new(Self::build_worker_slots(num_threads))),
             num_threads,
-            pool: Arc::new(pool),
+            executor: RayonExecutor::new(num_threads)?,
         })
     }
 
     pub fn with_num_threads(mut self, n: usize) -> RustvelloResult<Self> {
         let n = n.max(1);
         self.num_threads = n;
-        self.pool = Arc::new(build_thread_pool(n)?);
+        self.executor = RayonExecutor::new(n)?;
+        self.worker_slots = Arc::new(std::sync::Mutex::new(Self::build_worker_slots(n)));
         Ok(self)
+    }
+
+    fn build_worker_slots(num_threads: usize) -> Vec<RunnerId> {
+        (0..num_threads.max(1)).map(|_| RunnerId::new()).collect()
+    }
+
+    fn worker_slot_ids(&self) -> Vec<RunnerId> {
+        self.worker_slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn acquire_worker_slot(&self) -> Option<RunnerId> {
+        self.worker_slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop()
+    }
+
+    fn release_worker_slot(&self, worker_id: RunnerId) {
+        self.worker_slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(worker_id);
     }
 
     pub fn with_middleware(mut self, middleware: impl TaskMiddleware + 'static) -> Self {
@@ -150,22 +166,18 @@ impl RayonRunner {
     }
 
     fn is_shutdown(&self) -> bool {
-        *self.shutdown_tx.borrow()
+        self.control_plane.is_shutdown()
     }
 
     async fn wait_for_shutdown(&self) {
-        let mut rx = self.shutdown_tx.subscribe();
-        if *rx.borrow() {
-            return;
-        }
-        let _ = rx.changed().await;
+        self.control_plane.wait_for_shutdown().await;
     }
 
     pub async fn with_graceful_shutdown<F>(self, signal: F) -> RustvelloResult<()>
     where
         F: std::future::Future<Output = ()> + Send,
     {
-        let shutdown_tx = Arc::clone(&self.shutdown_tx);
+        let control_plane = self.control_plane.clone();
         tokio::pin!(signal);
         let run_future = self.run();
         tokio::pin!(run_future);
@@ -173,7 +185,7 @@ impl RayonRunner {
             result = &mut run_future => result,
             _ = &mut signal => {
                 tracing::info!("Shutdown signal received, draining...");
-                let _ = shutdown_tx.send(true);
+                control_plane.request_shutdown();
                 run_future.await
             }
         }
@@ -206,47 +218,21 @@ impl RayonRunner {
         _worker_ctx: &RunnerContext,
     ) -> RustvelloResult<()> {
         let deps = ExecutionDeps {
-            orchestrator: Arc::clone(&self.orchestrator),
-            state_backend: Arc::clone(&self.state_backend),
-            broker: Arc::clone(&self.broker),
+            lifecycle: self.control_plane.lifecycle(),
+            state_backend: Arc::clone(&self.control_plane.state_backend),
             emitter: Arc::clone(&self.emitter),
             middlewares: self.middlewares.clone(),
-            task_registry: Arc::clone(&self.task_registry),
-            trigger_manager: None,
+            task_catalog: Arc::clone(&self.control_plane.task_catalog),
             worker_states: None,
         };
 
-        let pool = &self.pool;
         execute_invocation_common(
             &deps,
             invocation_id,
             worker_runner_id,
             "RayonRunner worker",
             _worker_ctx,
-            |task, args, inv_ctx, run_ctx| async move {
-                // Rayon threads don't have tokio task-locals; use thread-local
-                // fallback so child submissions capture the runner context.
-                let thread_ctx = run_ctx;
-                let thread_inv_ctx = inv_ctx;
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                pool.spawn(move || {
-                    set_thread_runner_context(thread_ctx);
-                    set_thread_invocation_context(thread_inv_ctx);
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        task.execute(&args)
-                    }));
-                    clear_thread_invocation_context();
-                    clear_thread_runner_context();
-                    let result = match result {
-                        Ok(r) => r,
-                        Err(panic) => Err(super::executor_common::unwrap_panic(panic)),
-                    };
-                    let _ = tx.send(result);
-                });
-                rx.await.map_err(|_| RustvelloError::Internal {
-                    message: "rayon task panicked".to_string(),
-                })?
-            },
+            &self.executor,
         )
         .await
     }
@@ -280,55 +266,76 @@ impl Runner for RayonRunner {
             "runner",
             runner_id = %self.runner_id,
             cls = "RR",
-            app_id = %self.app_id,
+            app_id = %self.control_plane.app_id,
         );
 
         async {
             tracing::info!(
                 "RayonRunner starting (num_threads={}, app_id={}, pid={})",
                 self.num_threads,
-                self.app_id,
+                self.control_plane.app_id,
                 std::process::id()
             );
             self.emitter.on_worker_started(&self.runner_id);
 
-            let runner_ctx = rustvello_core::state_backend::StoredRunnerContext::current(
-                self.runner_id.to_string(),
-                "RayonRunner",
-            );
-            if let Err(e) = self.state_backend.store_runner_context(&runner_ctx).await {
+            let runner_ctx =
+                rustvello_core::state_backend::StoredRunnerContext::current_with_runtime(
+                    self.runner_id.to_string(),
+                    "RayonRunner",
+                    self.control_plane.runner_language,
+                    self.control_plane.executor_kind,
+                );
+            if let Err(e) = self
+                .control_plane
+                .state_backend
+                .store_runner_context(&runner_ctx)
+                .await
+            {
                 tracing::warn!("Failed to store runner context: {}", e);
+            }
+
+            for worker_runner_id in self.worker_slot_ids() {
+                let worker_ctx = runner_ctx.new_child(worker_runner_id.to_string(), "RayonWorker");
+                if let Err(e) = self
+                    .control_plane
+                    .state_backend
+                    .store_runner_context(&worker_ctx)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to store worker context for worker:{}: {}",
+                        worker_runner_id,
+                        e
+                    );
+                }
             }
 
             self.heartbeat().await.ok();
 
-            let main_ctx = RunnerContext::new(
+            let main_ctx = RunnerContext::new_with_runtime(
                 self.runner_id.clone(),
-                Arc::clone(&self.app_id),
+                Arc::clone(&self.control_plane.app_id),
                 "RayonRunner",
+                self.control_plane.runner_language,
+                self.control_plane.executor_kind,
             );
             let semaphore = Arc::new(tokio::sync::Semaphore::new(self.num_threads));
             let mut handles = tokio::task::JoinSet::new();
 
-            // Bridge shutdown_tx → CancellationToken for wait_for_work
-            let cancel = CancellationToken::new();
-            {
-                let cancel_clone = cancel.clone();
-                let mut rx = self.shutdown_tx.subscribe();
-                tokio::spawn(async move {
-                    if !*rx.borrow() {
-                        let _ = rx.changed().await;
-                    }
-                    cancel_clone.cancel();
-                });
-            }
+            let cancel = self.control_plane.cancellation_token();
 
-            let heartbeat_interval = Duration::from_secs(self.config.heartbeat_interval_seconds);
+            let heartbeat_interval =
+                Duration::from_secs(self.control_plane.config.heartbeat_interval_seconds);
             let mut last_heartbeat = Instant::now();
 
             while !self.is_shutdown() {
                 if last_heartbeat.elapsed() >= heartbeat_interval {
                     self.heartbeat().await.ok();
+                    for worker_id in self.active_worker_ids() {
+                        if let Err(e) = self.control_plane.heartbeat(&worker_id, false).await {
+                            tracing::warn!("rayon worker:{} heartbeat failed: {}", worker_id, e);
+                        }
+                    }
                     last_heartbeat = Instant::now();
                 }
 
@@ -342,49 +349,36 @@ impl Runner for RayonRunner {
                     _ = self.wait_for_shutdown() => break,
                 };
 
-                let inv_id = match retrieve_next_invocation_with_cc(
-                    &*self.orchestrator,
-                    &*self.broker,
-                    Some(&*self.state_backend),
-                    Some(&*self.task_registry),
-                    &self.config,
-                )
-                .await?
-                {
+                let inv_id = match self.control_plane.claim_next().await? {
                     Some(id) => id,
                     None => {
                         drop(permit);
-                        if !self.broker.wait_for_work(&cancel).await {
+                        if !self.control_plane.broker.wait_for_work(&cancel).await {
                             break;
                         }
                         continue;
                     }
                 };
 
-                let worker_runner_id = RunnerId::new();
+                let Some(worker_runner_id) = self.acquire_worker_slot() else {
+                    drop(permit);
+                    continue;
+                };
                 let worker_ctx = main_ctx.new_child(worker_runner_id.clone());
                 let runner = self.clone();
                 let w_id = worker_runner_id.clone();
-
-                // Store worker context in state backend for monitoring
-                let worker_sb_ctx =
-                    runner_ctx.new_child(worker_runner_id.to_string(), "RayonWorker");
-                if let Err(e) = self
-                    .state_backend
-                    .store_runner_context(&worker_sb_ctx)
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to store worker context for worker:{}: {}",
-                        worker_runner_id,
-                        e
-                    );
-                }
 
                 if let Ok(mut tasks) = self.active_tasks.lock() {
                     tasks.insert(
                         worker_runner_id.clone(),
                         WorkerState::new(worker_runner_id.clone()),
+                    );
+                }
+                if let Err(e) = self.control_plane.heartbeat(&worker_runner_id, false).await {
+                    tracing::warn!(
+                        "rayon worker:{} initial heartbeat failed: {}",
+                        worker_runner_id,
+                        e
                     );
                 }
 
@@ -400,6 +394,7 @@ impl Runner for RayonRunner {
                         if let Ok(mut tasks) = runner.active_tasks.lock() {
                             tasks.remove(&w_id);
                         }
+                        runner.release_worker_slot(w_id.clone());
                         drop(permit);
                         result
                     }
@@ -432,76 +427,74 @@ impl Runner for RayonRunner {
     }
 
     async fn run_one(&self) -> RustvelloResult<bool> {
-        let main_ctx = RunnerContext::new(
+        let main_ctx = RunnerContext::new_with_runtime(
             self.runner_id.clone(),
-            Arc::clone(&self.app_id),
+            Arc::clone(&self.control_plane.app_id),
             "RayonRunner",
+            self.control_plane.runner_language,
+            self.control_plane.executor_kind,
         );
-        let worker_runner_id = RunnerId::new();
+        let Some(worker_runner_id) = self.acquire_worker_slot() else {
+            return Ok(false);
+        };
         let worker_ctx = main_ctx.new_child(worker_runner_id.clone());
 
-        // Store main + worker contexts for monitoring
-        let runner_ctx = rustvello_core::state_backend::StoredRunnerContext::current(
-            self.runner_id.to_string(),
-            "RayonRunner",
-        );
-        if let Err(e) = self.state_backend.store_runner_context(&runner_ctx).await {
-            tracing::warn!("Failed to store runner context: {}", e);
-        }
-        let worker_sb_ctx = runner_ctx.new_child(worker_runner_id.to_string(), "RayonWorker");
-        if let Err(e) = self
-            .state_backend
-            .store_runner_context(&worker_sb_ctx)
-            .await
-        {
-            tracing::warn!(
-                "Failed to store worker context for worker:{}: {}",
-                worker_runner_id,
-                e
-            );
-        }
-
-        match retrieve_next_invocation_with_cc(
-            &*self.orchestrator,
-            &*self.broker,
-            Some(&*self.state_backend),
-            Some(&*self.task_registry),
-            &self.config,
-        )
-        .await?
-        {
-            Some(inv_id) => {
-                self.execute_invocation(&inv_id, &worker_runner_id, &worker_ctx)
-                    .await?;
-                Ok(true)
+        let result = async {
+            let runner_ctx =
+                rustvello_core::state_backend::StoredRunnerContext::current_with_runtime(
+                    self.runner_id.to_string(),
+                    "RayonRunner",
+                    self.control_plane.runner_language,
+                    self.control_plane.executor_kind,
+                );
+            if let Err(e) = self
+                .control_plane
+                .state_backend
+                .store_runner_context(&runner_ctx)
+                .await
+            {
+                tracing::warn!("Failed to store runner context: {}", e);
             }
-            None => Ok(false),
+            let worker_sb_ctx = runner_ctx.new_child(worker_runner_id.to_string(), "RayonWorker");
+            if let Err(e) = self
+                .control_plane
+                .state_backend
+                .store_runner_context(&worker_sb_ctx)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to store worker context for worker:{}: {}",
+                    worker_runner_id,
+                    e
+                );
+            }
+
+            match self.control_plane.claim_next().await? {
+                Some(inv_id) => {
+                    self.control_plane
+                        .heartbeat(&worker_runner_id, false)
+                        .await?;
+                    self.execute_invocation(&inv_id, &worker_runner_id, &worker_ctx)
+                        .await?;
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
         }
+        .await;
+        self.release_worker_slot(worker_runner_id);
+        result
     }
 
     async fn shutdown(&self) -> RustvelloResult<()> {
-        let _ = self.shutdown_tx.send(true);
+        self.control_plane.request_shutdown();
         Ok(())
     }
 
     async fn heartbeat(&self) -> RustvelloResult<()> {
-        self.orchestrator
-            .register_heartbeat(&self.runner_id, true)
-            .await?;
+        self.control_plane.heartbeat(&self.runner_id, true).await?;
         Ok(())
     }
-}
-
-fn build_thread_pool(num_threads: usize) -> RustvelloResult<rayon::ThreadPool> {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(num_threads)
-        .build()
-        .map_err(|e| {
-            tracing::error!("failed to build rayon thread pool: {e}");
-            RustvelloError::Internal {
-                message: format!("failed to build rayon thread pool: {e}"),
-            }
-        })
 }
 
 #[cfg(all(test, feature = "mem"))]
@@ -518,12 +511,12 @@ mod tests {
 
     fn make_runner() -> (
         RayonRunner,
-        Arc<dyn Orchestrator>,
+        Arc<dyn InvocationControlBackend>,
         Arc<dyn StateBackend>,
         Arc<dyn Broker>,
     ) {
         let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-        let orchestrator: Arc<dyn Orchestrator> =
+        let orchestrator: Arc<dyn InvocationControlBackend> =
             Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
         let state_backend: Arc<dyn StateBackend> =
             Arc::new(rustvello_mem::state_backend::MemStateBackend::new());

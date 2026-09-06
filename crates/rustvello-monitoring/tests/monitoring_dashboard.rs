@@ -20,15 +20,22 @@
 
 mod common;
 
+use std::sync::Arc;
+
 use common::{
     create_hierarchical_test_app, create_test_app, register_hierarchical_tasks,
     seed_grandparents_only, seed_hierarchical_invocations, seed_invocations, should_keep_alive,
     start_test_server, TestServer,
 };
-use rustvello::prelude::{PerInvocationTokioRunner, RayonRunner};
+use rustvello::prelude::{ForeignTaskProxy, RayonRunner};
+use rustvello_core::context::{InvocationContext, RunnerContext, INVOCATION_CTX, RUNNER_CTX};
 use rustvello_core::runner::Runner;
+use rustvello_core::state_backend::{StateBackend, StoredRunnerContext};
 use rustvello_core::trigger::TriggerStore;
-use rustvello_proto::identifiers::{InvocationId, TaskId};
+use rustvello_proto::call::SerializedArguments;
+use rustvello_proto::identifiers::{InvocationId, RunnerId, TaskId, TaskLanguage};
+use rustvello_proto::invocation::InvocationHistory;
+use rustvello_proto::status::{InvocationStatus, InvocationStatusRecord};
 use rustvello_proto::trigger::{
     ConditionId, EventRecord, TriggerDefinitionId, TriggerLogic, TriggerRunId,
     TriggerRunParticipant, TriggerRunRecord,
@@ -37,6 +44,34 @@ use rustvello_proto::trigger::{
 /// Set to `true` to keep the monitoring server alive for browser debugging.
 /// The env vars `KEEP_ALIVE=1` and `RUSTVELLO_MONITOR_KEEP_ALIVE=1` also work.
 const KEEP_ALIVE: bool = false;
+
+async fn record_runner_status(
+    state_backend: &Arc<dyn StateBackend>,
+    invocation_id: &InvocationId,
+    runner: &RunnerContext,
+    status: InvocationStatus,
+) {
+    state_backend
+        .store_runner_context(&StoredRunnerContext::from_runtime(runner))
+        .await
+        .expect("store runner context");
+
+    let runner_id = runner.runner_id.clone();
+    state_backend
+        .add_history(
+            &InvocationHistory::new(
+                invocation_id.clone(),
+                InvocationStatusRecord::new(status, Some(runner_id.clone())),
+                None,
+            )
+            .with_runner(runner_id),
+        )
+        .await
+        .expect("store invocation history");
+
+    // Keep status timestamps strictly ordered for timeline and duration assertions.
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+}
 
 #[tokio::test]
 async fn test_event_and_trigger_run_monitoring_views() {
@@ -89,8 +124,28 @@ async fn test_event_and_trigger_run_monitoring_views() {
     assert_eq!(response.status(), 200);
     let list = response.text().await.unwrap();
     assert!(list.contains("event-monitor-1"));
-    assert!(list.contains("Matched"));
-    assert!(list.contains("Triggered"));
+    assert!(list.contains("1 matched"));
+    assert!(list.contains("1 triggered"));
+    assert!(list.contains("name=\"triggered\""));
+    assert!(list.contains("monitor-filter-chip"));
+    assert!(list.contains("monitor-stats-row"));
+    assert!(list.contains("/events/event-monitor-1/trace"));
+    assert!(list.contains("/invocations/timeline?"));
+    assert!(list.contains("inv_ids=source-invocation%2Ctriggered-invocation"));
+    assert!(list.contains("--time-left:"));
+
+    let filtered_response = client
+        .get(format!(
+            "{}/events?event_code=payment_received&triggered=only&matched=only",
+            server.url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(filtered_response.status(), 200);
+    let filtered_list = filtered_response.text().await.unwrap();
+    assert!(filtered_list.contains("Only triggered"));
+    assert!(filtered_list.contains("Only matched"));
 
     let response = client
         .get(format!("{}/events/event-monitor-1", server.url))
@@ -101,9 +156,44 @@ async fn test_event_and_trigger_run_monitoring_views() {
     let detail = response.text().await.unwrap();
     assert!(detail.contains("ORD-42"));
     assert!(detail.contains("/trigger-runs/trigger-run-monitor-1"));
-    assert!(detail.contains("time_range=custom"));
-    assert!(detail.contains("start_date="));
-    assert!(detail.contains("end_date="));
+    assert!(detail.contains("/events/event-monitor-1/api"));
+    assert!(detail.contains("/events/event-monitor-1/trace"));
+    assert!(detail.contains("Participants"));
+    assert!(detail.contains("selected=source-invocation"));
+    assert!(
+        !detail.contains("start_date="),
+        "event links with invocation scope should let the timeline fit actual invocation history"
+    );
+
+    let response = client
+        .get(format!("{}/events/event-monitor-1/api", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let event_api: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(event_api["event"]["event_code"], "payment_received");
+    assert_eq!(
+        event_api["trigger_runs"][0]["trigger_run_id"],
+        "trigger-run-monitor-1"
+    );
+    assert!(event_api["links"]["timeline"].as_str().is_some_and(|href| {
+        href.contains("/invocations/timeline?")
+            && href.contains("selected=source-invocation")
+            && !href.contains("start_date=")
+    }));
+
+    let response = client
+        .get(format!("{}/events/event-monitor-1/trace", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let trace: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(trace["focus_kind"], "event");
+    assert!(trace["generated_invocation_ids"]
+        .as_array()
+        .is_some_and(|ids| ids.iter().any(|id| id == "triggered-invocation")));
 
     let response = client
         .get(format!("{}/trigger-runs/trigger-run-monitor-1", server.url))
@@ -115,6 +205,123 @@ async fn test_event_and_trigger_run_monitoring_views() {
     assert!(run_detail.contains("condition-payment"));
     assert!(run_detail.contains("valid-payment"));
     assert!(run_detail.contains("/events/event-monitor-1"));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_event_timeline_link_fits_generated_invocation_history() {
+    let setup = create_test_app("events-generated-invocation-timeline");
+    let generated_ids = seed_invocations(&setup.app, 1)
+        .await
+        .expect("seed generated invocation");
+    let generated_id = InvocationId::from_string(generated_ids[0].clone());
+    let history = setup
+        .state_backend
+        .get_history(&generated_id)
+        .await
+        .expect("generated invocation history");
+    let invocation_start = history
+        .iter()
+        .map(|entry| {
+            entry
+                .history_timestamp
+                .unwrap_or(entry.status_record.timestamp)
+        })
+        .min()
+        .expect("generated invocation has history");
+
+    let store: std::sync::Arc<dyn TriggerStore> = std::sync::Arc::clone(&setup.trigger_store);
+    let event_timestamp = invocation_start - chrono::Duration::seconds(1);
+    let event = EventRecord {
+        event_id: "event-generated-later".into(),
+        event_code: "late_trigger".into(),
+        payload: serde_json::json!({"order_id": "ORD-late"}),
+        timestamp: event_timestamp,
+        matched_condition_ids: vec![ConditionId::from("condition-late")],
+        valid_condition_ids: vec!["valid-late".into()],
+        triggered_invocation_ids: vec![generated_id.clone()],
+        emitted_by_invocation_id: None,
+        emitted_by_task_id: None,
+        emitted_by_runner_id: Some(RunnerId::from_string("runner-event-source")),
+    };
+    store.store_event(&event).await.unwrap();
+    store
+        .store_trigger_run(&TriggerRunRecord {
+            trigger_run_id: TriggerRunId::from("trigger-run-generated-later"),
+            trigger_id: TriggerDefinitionId::from("trigger-late"),
+            task_id: TaskId::new("test", "process_order"),
+            logic: TriggerLogic::And,
+            arguments: serde_json::json!({"order_id": "ORD-late"}),
+            participants: vec![TriggerRunParticipant {
+                context_type: "event".into(),
+                condition_id: ConditionId::from("condition-late"),
+                valid_condition_id: "valid-late".into(),
+                event_id: Some(event.event_id.clone()),
+                source_invocation_id: None,
+                context_summary: "late_trigger".into(),
+            }],
+            claimed_at: invocation_start,
+            executed_at: Some(invocation_start),
+            triggered_invocation_id: Some(generated_id.clone()),
+            atomic_service_run_id: None,
+            atomic_service_runner_id: None,
+        })
+        .await
+        .unwrap();
+
+    let server = start_test_server(setup).await;
+    let client = server.client();
+
+    let response = client
+        .get(format!("{}/events/event-generated-later/api", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let event_api: serde_json::Value = response.json().await.unwrap();
+    let timeline_path = event_api["links"]["timeline"]
+        .as_str()
+        .expect("event timeline link");
+    assert!(timeline_path.contains("selected="));
+    assert!(timeline_path.contains("inv_ids="));
+    assert!(
+        !timeline_path.contains("start_date=") && !timeline_path.contains("time_range=custom"),
+        "event timeline links with invocation IDs must not use event-time-only custom windows"
+    );
+    let query = timeline_path.split_once('?').expect("timeline query").1;
+    let rendered_scope = url::form_urlencoded::parse(query.as_bytes())
+        .find_map(|(key, value)| (key == "inv_ids").then(|| value.into_owned()))
+        .expect("invocation scope");
+    assert_eq!(rendered_scope, generated_ids[0]);
+
+    let timeline = client
+        .get(format!("{}{timeline_path}", server.url))
+        .send()
+        .await
+        .expect("event timeline request");
+    assert_eq!(timeline.status(), 200);
+    let timeline = timeline.text().await.expect("timeline body");
+    assert!(
+        timeline.contains(&format!("data-invocation-id=\"{}\"", generated_ids[0])),
+        "event timeline link should render the generated invocation instead of an empty timeline"
+    );
+    assert!(
+        !timeline.contains("No invocation history in this time range."),
+        "generated invocation history should define the visible timeline range"
+    );
+
+    let detail = client
+        .get(format!("{}/events/event-generated-later", server.url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(detail.contains("event-generated-later"));
+    assert!(detail.contains("selected="));
+    assert!(!detail.contains("start_date="));
 
     server.shutdown().await;
 }
@@ -372,13 +579,35 @@ async fn test_tasks_detail() {
     let client = server.client();
 
     let resp = client
-        .get(format!("{}/tasks/test::process_order", server.url))
+        .get(format!("{}/tasks/rust::test.process_order", server.url))
         .send()
         .await
         .expect("task detail request");
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.expect("body");
-    assert!(body.contains("process_order"), "should show task name");
+    assert!(
+        body.contains("rust::test.process_order"),
+        "should show canonical task ID"
+    );
+    assert!(body.contains("Language"), "should show task language");
+    assert!(
+        body.contains("rust"),
+        "should show Rust as the task language"
+    );
+    assert!(body.contains("Module:"), "should show task module");
+    assert!(body.contains("Function:"), "should show task function");
+    assert!(
+        body.contains("language-rust"),
+        "should use the Rust language badge"
+    );
+    assert!(
+        body.contains("monitor-table-compact") && body.contains("view-in-timeline-link"),
+        "task detail should reuse the canonical invocation table"
+    );
+    assert!(
+        body.contains("task_id=rust%3A%3Atest.process_order"),
+        "task timeline actions should preserve the task scope"
+    );
 
     handle_keep_alive(server).await;
 }
@@ -404,6 +633,97 @@ async fn test_invocations_list() {
         inv_ids.iter().any(|id| body.contains(&id[..8])),
         "should show invocation short IDs"
     );
+
+    handle_keep_alive(server).await;
+}
+
+#[tokio::test]
+async fn test_invocations_list_timeline_link_preserves_visible_scope() {
+    let setup = create_test_app("test-invocations-list-timeline");
+    let inv_ids = seed_invocations(&setup.app, 3)
+        .await
+        .expect("seed invocations");
+    let server = start_test_server(setup).await;
+    let client = server.client();
+
+    let response = client
+        .get(format!("{}/invocations", server.url))
+        .send()
+        .await
+        .expect("invocations request");
+    assert_eq!(response.status(), 200);
+    let body = response.text().await.expect("invocations body");
+    let action_position = body
+        .find("invocation-list-timeline-link")
+        .expect("list timeline action");
+    let href_start = body[..action_position]
+        .rfind("href=\"")
+        .expect("list timeline href")
+        + 6;
+    let href_end = href_start
+        + body[href_start..]
+            .find('"')
+            .expect("end of list timeline href");
+    let timeline_path = body[href_start..href_end].replace("&amp;", "&");
+    assert!(
+        timeline_path.starts_with("/invocations/timeline?inv_ids="),
+        "the list-level timeline link should carry the visible invocation scope"
+    );
+    let query = timeline_path.split_once('?').expect("timeline query").1;
+    let rendered_scope = url::form_urlencoded::parse(query.as_bytes())
+        .find_map(|(key, value)| (key == "inv_ids").then(|| value.into_owned()))
+        .expect("invocation scope");
+    let rendered_ids = rendered_scope
+        .split(',')
+        .collect::<std::collections::HashSet<_>>();
+    let expected_ids = inv_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(rendered_ids, expected_ids);
+
+    let timeline = client
+        .get(format!("{}{timeline_path}", server.url))
+        .send()
+        .await
+        .expect("scoped timeline request");
+    assert_eq!(timeline.status(), 200);
+    let timeline = timeline.text().await.expect("timeline body");
+    assert!(timeline.contains("data-timeline-start="));
+    for invocation_id in &inv_ids {
+        assert!(
+            timeline.contains(&format!("data-invocation-id=\"{invocation_id}\"")),
+            "scoped timeline should render invocation {invocation_id}"
+        );
+    }
+
+    let row_action_position = body
+        .find("view-in-timeline-link")
+        .expect("row timeline action");
+    let row_href_start = body[..row_action_position]
+        .rfind("href=\"")
+        .expect("row timeline href")
+        + 6;
+    let row_href_end = row_href_start
+        + body[row_href_start..]
+            .find('"')
+            .expect("end of row timeline href");
+    let row_timeline_path = body[row_href_start..row_href_end].replace("&amp;", "&");
+    let row_timeline = client
+        .get(format!("{}{row_timeline_path}", server.url))
+        .send()
+        .await
+        .expect("row timeline request");
+    assert_eq!(row_timeline.status(), 200);
+    let row_timeline = row_timeline.text().await.expect("row timeline body");
+    let row_query = row_timeline_path
+        .split_once('?')
+        .expect("row timeline query")
+        .1;
+    let selected_id = url::form_urlencoded::parse(row_query.as_bytes())
+        .find_map(|(key, value)| (key == "selected").then(|| value.into_owned()))
+        .expect("selected invocation");
+    assert!(row_timeline.contains(&format!("data-invocation-id=\"{selected_id}\"")));
 
     handle_keep_alive(server).await;
 }
@@ -547,36 +867,133 @@ async fn test_invocations_timeline() {
     assert!(timeline_position < histogram_position && histogram_position < details_position);
     assert!(body.contains("Apply"), "should have filter Apply button");
 
+    let resp = client
+        .get(format!(
+            "{}/invocations/timeline?time_range=custom&start_date=2026-09-04T19%3A40%3A35.412070%2B00%3A00&end_date=2026-09-04T19%3A40%3A35.416259%2B00%3A00",
+            server.url
+        ))
+        .send()
+        .await
+        .expect("custom timeline request");
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.expect("custom timeline body");
+    assert!(
+        body.contains(
+            r#"id="start_date" class="form-control" step="0.001" value="2026-09-04T19:40:35.412""#
+        ) && body.contains(
+            r#"id="end_date" class="form-control" step="0.001" value="2026-09-04T19:40:35.416""#
+        ),
+        "RFC3339 custom timeline links should be echoed as valid datetime-local values"
+    );
+
     handle_keep_alive(server).await;
 }
 
+/// Render both directions of a cross-language call:
+/// Rust external -> Python task -> Rust child task.
 #[tokio::test]
 async fn test_timeline_renders_complete_invocation_history() {
-    let setup = create_test_app("test-timeline-lifecycle");
-    let inv_ids = seed_invocations(&setup.app, 1)
-        .await
-        .expect("seed invocation");
-    let inv_id = rustvello_proto::identifiers::InvocationId::from_string(inv_ids[0].clone());
-    let runner_id = rustvello_proto::identifiers::RunnerId::from_string("timeline-runner");
-    let now = chrono::Utc::now();
+    let mut setup = create_test_app("test-timeline-lifecycle");
+    let python_task_id = TaskId::for_language(TaskLanguage::Python, "test", "prepare_order");
+    setup
+        .app
+        .register_foreign(ForeignTaskProxy::<String, String>::new(
+            python_task_id.clone(),
+        ))
+        .expect("register Python task proxy");
+    setup.task_ids.push(python_task_id.clone());
 
-    for (status, offset) in [
-        (rustvello_proto::status::InvocationStatus::Pending, -3),
-        (rustvello_proto::status::InvocationStatus::Running, -2),
-        (rustvello_proto::status::InvocationStatus::Success, -1),
+    let rust_task_id = TaskId::new("test", "process_order");
+    let app_id: Arc<str> = Arc::from("test-timeline-lifecycle");
+    let rust_external = RunnerContext::new_with_runtime(
+        RunnerId::from_string("rust-external"),
+        Arc::clone(&app_id),
+        "ExternalRunner",
+        TaskLanguage::Rust,
+        rustvello_proto::identifiers::ExecutorKind::Tokio,
+    );
+    let python_worker = RunnerContext::new_with_runtime(
+        RunnerId::from_string("python-worker"),
+        Arc::clone(&app_id),
+        "PythonWorker",
+        TaskLanguage::Python,
+        rustvello_proto::identifiers::ExecutorKind::Python,
+    );
+    let rust_worker = RunnerContext::new_with_runtime(
+        RunnerId::from_string("rust-worker"),
+        app_id,
+        "RustWorker",
+        TaskLanguage::Rust,
+        rustvello_proto::identifiers::ExecutorKind::Rayon,
+    );
+
+    let mut python_args = SerializedArguments::new();
+    python_args.insert("order_id", "ORD-PYTHON");
+    let python_invocation_id = RUNNER_CTX
+        .scope(
+            rust_external,
+            setup.app.submit(&python_task_id, python_args),
+        )
+        .await
+        .expect("Rust side should submit the Python task");
+
+    record_runner_status(
+        &setup.state_backend,
+        &python_invocation_id,
+        &python_worker,
+        InvocationStatus::Pending,
+    )
+    .await;
+    record_runner_status(
+        &setup.state_backend,
+        &python_invocation_id,
+        &python_worker,
+        InvocationStatus::Running,
+    )
+    .await;
+
+    let python_invocation_context = InvocationContext {
+        invocation_id: python_invocation_id.clone(),
+        task_id: python_task_id.clone(),
+        workflow: None,
+        is_workflow_defining: false,
+        state_backend: Some(Arc::clone(&setup.state_backend)),
+        parent_invocation_id: None,
+        num_retries: 0,
+    };
+    let mut rust_args = SerializedArguments::new();
+    rust_args.insert("order_id", "ORD-RUST");
+    let rust_invocation_id = RUNNER_CTX
+        .scope(
+            python_worker.clone(),
+            INVOCATION_CTX.scope(
+                python_invocation_context,
+                setup.app.submit(&rust_task_id, rust_args),
+            ),
+        )
+        .await
+        .expect("Python side should submit the Rust task");
+
+    for status in [
+        InvocationStatus::Pending,
+        InvocationStatus::Running,
+        InvocationStatus::Success,
     ] {
-        let mut record =
-            rustvello_proto::status::InvocationStatusRecord::new(status, Some(runner_id.clone()));
-        record.timestamp = now + chrono::Duration::milliseconds(offset);
-        setup
-            .state_backend
-            .add_history(
-                &rustvello_proto::invocation::InvocationHistory::new(inv_id.clone(), record, None)
-                    .with_runner(runner_id.clone()),
-            )
-            .await
-            .expect("store lifecycle history");
+        record_runner_status(
+            &setup.state_backend,
+            &rust_invocation_id,
+            &rust_worker,
+            status,
+        )
+        .await;
     }
+    record_runner_status(
+        &setup.state_backend,
+        &python_invocation_id,
+        &python_worker,
+        InvocationStatus::Success,
+    )
+    .await;
 
     let server = start_test_server(setup).await;
     let body = server
@@ -600,21 +1017,226 @@ async fn test_timeline_renders_complete_invocation_history() {
         "should render an aligned occupancy histogram"
     );
     assert!(
-        body.contains("data-timeline-left=\"320.0\"")
-            && body.contains("data-histogram-left=\"320\"")
-            && body.contains("data-histogram-right=\"1980\""),
+        body.contains("data-timeline-left=\"420.0\"")
+            && body.contains("data-histogram-left=\"420\"")
+            && body.contains("data-histogram-right=\"1956\""),
         "timeline and histogram should share the same plot bounds"
+    );
+    assert!(
+        body.contains("class=\"collapse\" id=\"timeline-filter-fields\"")
+            && body.contains("timeline-filter-summary"),
+        "timeline filters should start as a compact top disclosure"
+    );
+    assert!(
+        body.contains("data-timestamp=")
+            && body.contains("rustvelloSetTimeCursor")
+            && body.contains("class=\"relation-line\"")
+            && body.contains("<path d=\""),
+        "timeline should expose constant-cost linked-time metadata and consolidated paths"
     );
     assert!(
         body.contains("data-statuses=\"pending,running\"") && body.contains("stroke=\"#e9ecef\""),
         "default occupancy should show pending/running with a visible scale"
     );
+    assert!(
+        body.contains(">rust</text>")
+            && body.contains(">python</text>")
+            && body.contains("ExternalRunner")
+            && body.contains("PythonWorker")
+            && body.contains("RustWorker"),
+        "timeline lanes should identify the submitting and executing runtimes"
+    );
+    assert!(
+        body.contains("python") && body.contains("rayon"),
+        "timeline should expose the Python and Rayon executor kinds"
+    );
+    assert!(
+        body.contains("python::test.prepare_order") && body.contains("rust::test.process_order"),
+        "timeline and occupancy should show both canonical task IDs"
+    );
+
+    let client = server.client();
+    let python_history: Vec<serde_json::Value> = client
+        .get(format!(
+            "{}/invocations/{python_invocation_id}/history",
+            server.url
+        ))
+        .send()
+        .await
+        .expect("Python history request")
+        .json()
+        .await
+        .expect("Python history JSON");
+    let rust_history: Vec<serde_json::Value> = client
+        .get(format!(
+            "{}/invocations/{rust_invocation_id}/history",
+            server.url
+        ))
+        .send()
+        .await
+        .expect("Rust history request")
+        .json()
+        .await
+        .expect("Rust history JSON");
+
+    let assert_owner = |history: &[serde_json::Value],
+                        status: &str,
+                        language: &str,
+                        executor: &str,
+                        runner_cls: &str| {
+        let entry = history
+            .iter()
+            .find(|entry| entry["status"] == status)
+            .unwrap_or_else(|| panic!("missing {status} history entry"));
+        assert_eq!(
+            entry["runner_info"]["runner_language"], language,
+            "unexpected runner language for {status}"
+        );
+        assert_eq!(
+            entry["runner_info"]["runner_cls"], runner_cls,
+            "unexpected runner class for {status}"
+        );
+        assert_eq!(
+            entry["runner_info"]["executor_kind"], executor,
+            "unexpected executor kind for {status}"
+        );
+    };
+    assert_owner(
+        &python_history,
+        "Registered",
+        "rust",
+        "tokio",
+        "ExternalRunner",
+    );
+    assert_owner(
+        &python_history,
+        "Pending",
+        "python",
+        "python",
+        "PythonWorker",
+    );
+    assert_owner(
+        &python_history,
+        "Running",
+        "python",
+        "python",
+        "PythonWorker",
+    );
+    assert_owner(
+        &python_history,
+        "Success",
+        "python",
+        "python",
+        "PythonWorker",
+    );
+    assert_owner(
+        &rust_history,
+        "Registered",
+        "python",
+        "python",
+        "PythonWorker",
+    );
+    assert_owner(&rust_history, "Pending", "rust", "rayon", "RustWorker");
+    assert_owner(&rust_history, "Running", "rust", "rayon", "RustWorker");
+    assert_owner(&rust_history, "Success", "rust", "rayon", "RustWorker");
+
+    for history in [&python_history, &rust_history] {
+        let timestamps: Vec<_> = history
+            .iter()
+            .map(|entry| {
+                chrono::DateTime::parse_from_rfc3339(entry["timestamp"].as_str().unwrap()).unwrap()
+            })
+            .collect();
+        assert!(
+            timestamps.windows(2).all(|pair| pair[0] <= pair[1]),
+            "cross-language timeline history must remain chronological"
+        );
+    }
+
+    let python_api: serde_json::Value = client
+        .get(format!(
+            "{}/invocations/{python_invocation_id}/api",
+            server.url
+        ))
+        .send()
+        .await
+        .expect("Python invocation API request")
+        .json()
+        .await
+        .expect("Python invocation API JSON");
+    assert_eq!(python_api["task_id"], "python::test.prepare_order");
+    assert_eq!(python_api["task_language"], "python");
+    assert!(python_api["parent_invocation_id"].is_null());
+
+    let rust_api: serde_json::Value = client
+        .get(format!(
+            "{}/invocations/{rust_invocation_id}/api",
+            server.url
+        ))
+        .send()
+        .await
+        .expect("Rust invocation API request")
+        .json()
+        .await
+        .expect("Rust invocation API JSON");
+    assert_eq!(rust_api["task_id"], "rust::test.process_order");
+    assert_eq!(rust_api["task_language"], "rust");
+    assert_eq!(
+        rust_api["parent_invocation_id"],
+        python_invocation_id.to_string()
+    );
+
+    let family_tree = client
+        .get(format!(
+            "{}/invocations/{python_invocation_id}/family-tree",
+            server.url
+        ))
+        .send()
+        .await
+        .expect("cross-language family tree request")
+        .text()
+        .await
+        .expect("cross-language family tree body");
+    assert!(
+        family_tree.contains("python::test")
+            && family_tree.contains("prepare_order")
+            && family_tree.contains("rust::test")
+            && family_tree.contains("process_order"),
+        "family tree should preserve both sides of the cross-language call"
+    );
+
+    let detail_body = server
+        .client()
+        .get(format!("{}/invocations/{python_invocation_id}", server.url))
+        .send()
+        .await
+        .expect("invocation detail request")
+        .text()
+        .await
+        .expect("invocation detail body");
+    assert!(
+        detail_body.contains("language-python"),
+        "invocation history should use the Python language badge"
+    );
+    let rust_detail_body = server
+        .client()
+        .get(format!("{}/invocations/{rust_invocation_id}", server.url))
+        .send()
+        .await
+        .expect("Rust invocation detail request")
+        .text()
+        .await
+        .expect("Rust invocation detail body");
+    assert!(
+        rust_detail_body.contains("language-rust"),
+        "Rust invocation history should use the Rust language badge"
+    );
 
     let history_filtered = server
         .client()
         .get(format!(
-            "{}/invocations?inv_ids={inv_id}&status=Pending%2CRunning&status_mode=history",
-            server.url
+            "{}/invocations?inv_ids={python_invocation_id},{rust_invocation_id}&status=Pending%2CRunning&status_mode=history",
+            server.url,
         ))
         .send()
         .await
@@ -622,8 +1244,9 @@ async fn test_timeline_renders_complete_invocation_history() {
     assert_eq!(history_filtered.status(), 200);
     let history_body = history_filtered.text().await.expect("history filter body");
     assert!(
-        history_body.contains(&inv_ids[0][..8]),
-        "historical pending/running status should match a completed invocation"
+        history_body.contains(&python_invocation_id.to_string()[..8])
+            && history_body.contains(&rust_invocation_id.to_string()[..8]),
+        "historical pending/running status should match both completed invocations"
     );
 
     handle_keep_alive(server).await;
@@ -656,6 +1279,7 @@ async fn test_timeline_invocation_scope_filter() {
         !body.contains(&format!("data-invocation-id=\"{}\"", inv_ids[1])),
         "scoped timeline should not render unrelated invocations"
     );
+    assert!(body.contains("Invocation scope:"));
 
     handle_keep_alive(server).await;
 }
@@ -675,7 +1299,7 @@ async fn test_timeline_workflow_type_filter() {
 
     let resp = client
         .get(format!(
-            "{}/invocations/timeline?workflow_type=test.grandparent_task",
+            "{}/invocations/timeline?workflow_type=rust::test.grandparent_task",
             server.url
         ))
         .send()
@@ -689,15 +1313,15 @@ async fn test_timeline_workflow_type_filter() {
         .and_then(|rest| rest.split("</div>").next())
         .expect("timeline container markup");
     assert!(
-        timeline_markup.contains("data-task-key=\"test.parent_task\""),
+        timeline_markup.contains("data-task-key=\"rust::test.parent_task\""),
         "workflow filter should keep workflow members"
     );
     assert!(
-        timeline_markup.contains("data-task-key=\"test.child_task\""),
+        timeline_markup.contains("data-task-key=\"rust::test.child_task\""),
         "workflow filter should keep nested workflow members"
     );
     assert!(
-        timeline_markup.contains("data-task-key=\"test.grandparent_task\""),
+        timeline_markup.contains("data-task-key=\"rust::test.grandparent_task\""),
         "workflow filter should keep the defining task"
     );
 
@@ -723,6 +1347,107 @@ async fn test_timeline_workflow_type_filter() {
     assert!(
         !timeline_markup.contains(&format!("data-invocation-id=\"{}\"", grandparent_ids[1])),
         "workflow ID filter should remove a different workflow"
+    );
+
+    let workflow_page = client
+        .get(format!(
+            "{}/workflows/rust::test.grandparent_task?limit=10",
+            server.url
+        ))
+        .send()
+        .await
+        .expect("workflow comparison request");
+    assert_eq!(workflow_page.status(), 200);
+    let workflow_page = workflow_page
+        .text()
+        .await
+        .expect("workflow comparison body");
+    assert!(
+        workflow_page.contains("Workflow Details")
+            && workflow_page.contains("Workflow Runs")
+            && workflow_page.contains("workflow-selection-form"),
+        "workflow detail should provide summary, paginated runs, and selection controls"
+    );
+    assert!(
+        workflow_page.contains("Shared occupancy and elapsed-time axes"),
+        "workflow comparison should communicate its shared scale"
+    );
+    assert!(
+        workflow_page.contains("Run ID (Main Invocation ID)")
+            && workflow_page.contains(">Invocations<")
+            && workflow_page.contains("/invocations/timeline?"),
+        "workflow runs should separate main invocation, run list, and timeline actions"
+    );
+    assert!(
+        !workflow_page.contains(">Compare<"),
+        "workflow rows are selected by row click, so no separate compare button is needed"
+    );
+    assert!(
+        workflow_page.contains("workflow_id="),
+        "workflow run actions should preserve the workflow id filter"
+    );
+
+    let selected_runs = format!("{},{}", grandparent_ids[0], grandparent_ids[1]);
+    let workflow_page = client
+        .get(format!(
+            "{}/workflows/rust::test.grandparent_task?limit=10&histogram_workflow={}",
+            server.url, selected_runs
+        ))
+        .send()
+        .await
+        .expect("multi workflow comparison request");
+    assert_eq!(workflow_page.status(), 200);
+    let workflow_page = workflow_page
+        .text()
+        .await
+        .expect("multi workflow comparison body");
+    assert!(
+        workflow_page.matches("table-primary").count() >= 2,
+        "multiple workflow rows should remain selected at once"
+    );
+    assert!(
+        workflow_page.contains("data-selection-url=")
+            && workflow_page.contains(&grandparent_ids[0].to_string())
+            && workflow_page.contains(&grandparent_ids[1].to_string()),
+        "selected workflow rows should expose immediate row-click selection URLs"
+    );
+
+    let workflow_run_redirect = client
+        .get(format!(
+            "{}/workflows/rust::test.grandparent_task/{}",
+            server.url, grandparent_ids[1]
+        ))
+        .send()
+        .await
+        .expect("workflow run detail redirect");
+    assert_eq!(workflow_run_redirect.status(), 200);
+    let workflow_run_redirect = workflow_run_redirect
+        .text()
+        .await
+        .expect("workflow run redirected body");
+    assert!(
+        workflow_run_redirect.contains(&grandparent_ids[1].to_string()),
+        "workflow run links should land on the page where that run is visible and selected"
+    );
+
+    let invocations_page = client
+        .get(format!(
+            "{}/invocations?workflow_type=rust::test.grandparent_task&workflow_id={}&limit=20",
+            server.url, grandparent_ids[0]
+        ))
+        .send()
+        .await
+        .expect("workflow invocations list request");
+    assert_eq!(invocations_page.status(), 200);
+    let invocations_page = invocations_page
+        .text()
+        .await
+        .expect("workflow invocations list body");
+    assert!(
+        invocations_page.contains("view-in-timeline-link")
+            && invocations_page.contains("workflow_type=rust%3A%3Atest.grandparent_task")
+            && invocations_page.contains(&format!("workflow_id={}", grandparent_ids[0])),
+        "timeline shortcuts from a filtered invocation list should preserve workflow filters"
     );
 
     handle_keep_alive(server).await;
@@ -850,6 +1575,53 @@ async fn test_static_css_served() {
         "should serve CSS with rustvello design variables"
     );
 
+    let resp = client
+        .get(format!("{}/static/js/monitoring.js", server.url))
+        .send()
+        .await
+        .expect("shared monitoring JavaScript request");
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.expect("JavaScript body");
+    assert!(body.contains("timelineFromCurrent") && body.contains("fitWindow"));
+
+    let resp = client
+        .get(format!("{}/static/logo.png", server.url))
+        .send()
+        .await
+        .expect("logo request");
+    assert_eq!(resp.status(), 200);
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        content_type.contains("image/png"),
+        "logo should be served as a PNG asset"
+    );
+
+    handle_keep_alive(server).await;
+}
+
+#[tokio::test]
+async fn test_monitoring_capabilities_api() {
+    let setup = create_test_app("test-monitoring-capabilities");
+    let server = start_test_server(setup).await;
+    let client = server.client();
+
+    let response = client
+        .get(format!("{}/api/capabilities", server.url))
+        .send()
+        .await
+        .expect("capabilities request");
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("capabilities JSON");
+    assert_eq!(body["schema_version"], 1);
+    assert_eq!(body["pagination"]["default_page_size"], 50);
+    assert!(body["timeline"]["filters"]
+        .as_array()
+        .is_some_and(|filters| filters.iter().any(|filter| filter == "runner_ids")));
+
     handle_keep_alive(server).await;
 }
 
@@ -906,7 +1678,7 @@ async fn test_processed_invocations_full_pipeline() {
     // 3. API JSON for one of the invocations
     //    We need to find an invocation ID from the list page.
     //    Get invocations from the orchestrator through the API:
-    //    Since all invocations were for "test::process_order",
+    //    Since all invocations were for "rust::test.process_order",
     //    we can look for invocation IDs in the HTML.
     let resp = client
         .get(format!("{}/invocations?limit=1", server.url))
@@ -975,7 +1747,7 @@ async fn test_processed_invocations_full_pipeline() {
 ///
 /// Runner configuration:
 /// - 2 × PersistentTokioRunner with 10 workers each
-/// - 1 × PerInvocationTokioRunner
+/// - 1 × additional PersistentTokioRunner with lower worker count
 /// - 1 × RayonRunner
 ///
 /// Hierarchy (matching pynmon's test_invocations_timeline_multi_runner.py):
@@ -1010,7 +1782,7 @@ async fn setup_hierarchical_with_runners() -> (TestServer, reqwest::Client) {
     // --- Helper: build a fresh app with the same backends and smart tasks ---
     let make_app =
         |b: std::sync::Arc<dyn rustvello_core::broker::Broker>,
-         o: std::sync::Arc<dyn rustvello_core::orchestrator::Orchestrator>,
+         o: std::sync::Arc<dyn rustvello_core::orchestrator::InvocationControlBackend>,
          s: std::sync::Arc<dyn rustvello_core::state_backend::StateBackend>,
          c: std::sync::Arc<rustvello_core::client_data_store::ClientDataStoreManager>,
          cfg: rustvello_proto::config::AppConfig| {
@@ -1048,25 +1820,15 @@ async fn setup_hierarchical_with_runners() -> (TestServer, reqwest::Client) {
         let _ = runner2.run().await;
     });
 
-    // Runner 3: PerInvocationTokioRunner (shared backends)
-    let mut app3 = make_app(
+    // Runner 3: PersistentTokioRunner with lower concurrency (shared backends)
+    let app3 = make_app(
         broker.clone(),
         orchestrator.clone(),
         state_backend.clone(),
         client_data_store.clone(),
         config.clone(),
     );
-    let task_reg3 = std::sync::Arc::new(std::mem::take(&mut app3.task_registry));
-    drop(app3);
-    let runner3 = PerInvocationTokioRunner::new(
-        config.app_id.clone(),
-        config.clone(),
-        broker.clone(),
-        orchestrator.clone(),
-        state_backend.clone(),
-        task_reg3,
-    )
-    .with_max_concurrent(4);
+    let runner3 = app3.into_runner().with_num_workers(4).with_idle_sleep(20);
     let handle3 = tokio::spawn(async move {
         let _ = runner3.run().await;
     });
@@ -1079,7 +1841,7 @@ async fn setup_hierarchical_with_runners() -> (TestServer, reqwest::Client) {
         client_data_store.clone(),
         config.clone(),
     );
-    let task_reg4 = std::sync::Arc::new(std::mem::take(&mut app4.task_registry));
+    let task_reg4 = std::sync::Arc::new(std::mem::take(app4.task_registry_mut()));
     drop(app4);
     let runner4 = RayonRunner::new(
         config.app_id.clone(),
@@ -1177,7 +1939,7 @@ async fn test_hierarchical_timeline() {
     // 3. Invocation list filter by task_id should work
     let resp = client
         .get(format!(
-            "{}/invocations?task_id=test::child_task",
+            "{}/invocations?task_id=rust::test.child_task",
             server.url
         ))
         .send()
@@ -1194,7 +1956,7 @@ async fn test_hierarchical_timeline() {
     let re = regex::Regex::new(r"/invocations/([0-9a-f-]{36})").unwrap();
     let resp = client
         .get(format!(
-            "{}/invocations?task_id=test::grandparent_task",
+            "{}/invocations?task_id=rust::test.grandparent_task",
             server.url
         ))
         .send()
@@ -1262,7 +2024,24 @@ async fn test_hierarchical_timeline() {
         assert_eq!(api["is_workflow_defining"], true);
         assert_eq!(api["invocation_id"], gp_id);
 
-        // 4d. Family tree should show children
+        // 4d. Investigation API joins provenance, history, and navigation.
+        let resp = client
+            .get(format!("{}/invocations/{gp_id}/investigation", server.url))
+            .send()
+            .await
+            .expect("investigation api");
+        assert_eq!(resp.status(), 200);
+        let investigation: serde_json::Value = resp.json().await.expect("investigation JSON");
+        assert_eq!(investigation["invocation"]["id"], gp_id);
+        assert!(investigation["history"].is_array());
+        assert!(investigation["integrity"]["has_registered_event"]
+            .as_bool()
+            .unwrap());
+        assert!(investigation["links"]["timeline"]
+            .as_str()
+            .is_some_and(|link| link.contains("/invocations/timeline")));
+
+        // 4e. Family tree should show children
         let resp = client
             .get(format!("{}/invocations/{gp_id}/family-tree", server.url))
             .send()
@@ -1280,7 +2059,7 @@ async fn test_hierarchical_timeline() {
     // 5. Check a child invocation has parent_invocation_id set
     let resp = client
         .get(format!(
-            "{}/invocations?task_id=test::child_task&limit=1",
+            "{}/invocations?task_id=rust::test.child_task&limit=1",
             server.url
         ))
         .send()
@@ -1324,7 +2103,7 @@ async fn test_hierarchical_timeline() {
     // Running/Success/etc. get the executing worker's context.
     let resp = client
         .get(format!(
-            "{}/invocations?task_id=test::grandparent_task&limit=1",
+            "{}/invocations?task_id=rust::test.grandparent_task&limit=1",
             server.url
         ))
         .send()
@@ -1409,7 +2188,7 @@ async fn test_every_history_entry_has_runner_context() {
     // Helper to build a fresh app with same backends and smart task closures
     let make_app =
         |b: std::sync::Arc<dyn rustvello_core::broker::Broker>,
-         o: std::sync::Arc<dyn rustvello_core::orchestrator::Orchestrator>,
+         o: std::sync::Arc<dyn rustvello_core::orchestrator::InvocationControlBackend>,
          s: std::sync::Arc<dyn rustvello_core::state_backend::StateBackend>,
          c: std::sync::Arc<rustvello_core::client_data_store::ClientDataStoreManager>,
          cfg: rustvello_proto::config::AppConfig| {
@@ -1538,8 +2317,8 @@ async fn test_every_history_entry_has_runner_context() {
 /// Verifies that all runner_ids seen in invocation histories have stored
 /// RunnerContext entries, and that the SVG timeline contains no "Unknown".
 ///
-/// This is a regression test: PerInvocationTokioRunner and RayonRunner
-/// previously did NOT store per-worker contexts, causing the timeline
+/// This is a regression test: every supported runner must store per-worker
+/// contexts, or the timeline
 /// to fall back to RunnerInfo::from_id() → "Unknown(uuid)" labels.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_no_unknown_workers_in_timeline() {
@@ -1597,6 +2376,8 @@ async fn setup_with_runner_contexts() -> (TestServer, reqwest::Client, String, S
     let parent_id = uuid::Uuid::new_v4().to_string();
     let parent_ctx = rustvello_core::state_backend::StoredRunnerContext {
         runner_cls: "PersistentTokioRunner".to_owned(),
+        runner_language: rustvello_proto::identifiers::TaskLanguage::Rust,
+        executor_kind: rustvello_proto::identifiers::ExecutorKind::Tokio,
         runner_id: parent_id.clone(),
         pid: std::process::id(),
         hostname: "test-host".to_owned(),
@@ -1614,6 +2395,8 @@ async fn setup_with_runner_contexts() -> (TestServer, reqwest::Client, String, S
     let worker_id = uuid::Uuid::new_v4().to_string();
     let worker_ctx = rustvello_core::state_backend::StoredRunnerContext {
         runner_cls: "PersistentTokioWorker".to_owned(),
+        runner_language: rustvello_proto::identifiers::TaskLanguage::Rust,
+        executor_kind: rustvello_proto::identifiers::ExecutorKind::Tokio,
         runner_id: worker_id.clone(),
         pid: std::process::id(),
         hostname: "test-host".to_owned(),
@@ -1661,6 +2444,14 @@ async fn test_runner_detail_page() {
     assert!(
         body.contains("Runner Context"),
         "detail should show Runner Context card"
+    );
+    assert!(
+        body.contains("Language") && body.contains("rust"),
+        "detail should show runner language"
+    );
+    assert!(
+        body.contains("language-rust"),
+        "runner detail should use the Rust language badge"
     );
     assert!(
         body.contains("Heartbeat Status"),
@@ -1777,7 +2568,7 @@ async fn test_invocation_api_status_from_history() {
     // Find a processed invocation
     let resp = client
         .get(format!(
-            "{}/invocations?task_id=test::grandparent_task&limit=1",
+            "{}/invocations?task_id=rust::test.grandparent_task&limit=1",
             server.url
         ))
         .send()
@@ -1974,6 +2765,8 @@ async fn test_log_explorer_resolves_truncated_runner_ids() {
     // Store runner context with the full UUID
     let runner_ctx = StoredRunnerContext {
         runner_cls: "PersistentTokioRunner".to_string(),
+        runner_language: rustvello_proto::identifiers::TaskLanguage::Rust,
+        executor_kind: rustvello_proto::identifiers::ExecutorKind::Tokio,
         runner_id: runner_full_id.to_string(),
         pid: 12345,
         hostname: "test-host".to_string(),
@@ -1990,6 +2783,8 @@ async fn test_log_explorer_resolves_truncated_runner_ids() {
     // Store worker context as a child of the runner
     let worker_ctx = StoredRunnerContext {
         runner_cls: "Worker".to_string(),
+        runner_language: rustvello_proto::identifiers::TaskLanguage::Rust,
+        executor_kind: rustvello_proto::identifiers::ExecutorKind::Tokio,
         runner_id: worker_full_id.to_string(),
         pid: 12345,
         hostname: "test-host".to_string(),
@@ -2009,7 +2804,7 @@ async fn test_log_explorer_resolves_truncated_runner_ids() {
     // Log line with truncated runner/worker IDs (first 8 chars of the UUIDs)
     let log_line = format!(
         "2026-03-27T10:23:45.123Z INFO  [R] test-log-resolve \
-        [PTR(a86ab1f8).W(d1241003){inv_id}:test.process_order] \
+        [PTR(a86ab1f8).W(d1241003){inv_id}:rust::test.process_order] \
         rustvello::runner Invocation completed"
     );
 

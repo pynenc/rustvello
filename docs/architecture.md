@@ -22,54 +22,37 @@ These static maps summarize the ownership and data-flow boundaries described
 in the sections below. They are maintained as documentation assets rather than
 generated from runtime code.
 
-:::{figure} \_static/architecture-crates.svg
-:alt: Rustvello workspace crate dependency map
-:width: 100%
+![Rustvello workspace crate dependency map](_static/architecture-crates.svg)
 
 Workspace dependency direction.
-:::
 
-:::{figure} \_static/architecture-invocation-lifecycle.svg
-:alt: Invocation lifecycle and component ownership flow
-:width: 100%
+![Invocation lifecycle and component ownership flow](_static/architecture-invocation-lifecycle.svg)
 
 Submission, execution, persistence, and recovery ownership.
-:::
 
-:::{figure} \_static/architecture-backend-traits.svg
-:alt: Backend traits, implementations, and compliance suites
-:width: 100%
+![Backend traits, implementations, and compliance suites](_static/architecture-backend-traits.svg)
 
 Backend contracts and deployment boundaries.
-:::
 
-:::{figure} \_static/architecture-python.svg
-:alt: Standalone Python, PyO3, Rust engine, and external Pynenc adapter flow
-:width: 100%
+![Standalone Python, PyO3, Rust engine, and external Pynenc adapter flow](_static/architecture-python.svg)
 
 Python and external Pynenc integration boundaries.
-:::
 
-:::{figure} \_static/architecture-atomic-trigger.svg
-:alt: Trigger and atomic-service coordination flow
-:width: 100%
+![Trigger and atomic-service coordination flow](_static/architecture-atomic-trigger.svg)
 
 Global service election, recovery, and trigger evaluation.
-:::
 
-:::{figure} \_static/architecture-monitoring.svg
-:alt: Monitoring data flow from backend traits to browser views
-:width: 100%
+![Monitoring data flow from backend traits to browser views](_static/architecture-monitoring.svg)
 
 Monitoring reads and operator actions.
-:::
 
-:::{figure} \_static/architecture-workflow.svg
-:alt: Workflow context and deterministic replay data flow
-:width: 100%
+![Workflow context and deterministic replay data flow](_static/architecture-workflow.svg)
 
 Explicit workflow identity and root-scoped deterministic data behavior.
-:::
+
+![Rustvello orchestration module and responsibility boundaries](_static/architecture-orchestration.svg)
+
+Concrete orchestration, backend ports, task catalog, and runner control plane after the 0.5 refactor.
 
 ## Crate Dependency Graph
 
@@ -77,7 +60,7 @@ Explicit workflow identity and root-scoped deterministic data behavior.
 rustvello-proto              Pure data types — DTOs, identifiers, config, status FSM
     │
 rustvello-core               Trait definitions + business logic managers
-    │                        Broker, Orchestrator, StateBackend, TriggerStore,
+    │                        Broker, InvocationControlBackend, StateBackend, TriggerStore,
     │                        ClientDataStore, Task, DynTask, InvocationHandle,
     │                        TriggerManager, Context system
     │
@@ -158,14 +141,14 @@ Each layer has a single responsibility:
 
 ### Identifiers
 
-| Type                  | Structure                                            | Purpose                                                              |
-| --------------------- | ---------------------------------------------------- | -------------------------------------------------------------------- |
-| `TaskId`              | `{ module: String, name: String, language: String }` | Uniquely identifies a task definition; language defaults to `"rust"` |
-| `CallId`              | `{ task_id: TaskId, args_id: String }`               | Deterministic identity for task + args (SHA-256 of serialized args)  |
-| `InvocationId`        | newtype `String` (UUID v4)                           | Unique execution instance                                            |
-| `RunnerId`            | newtype `String` (UUID v4)                           | Identifies a runner process                                          |
-| `ConditionId`         | newtype `String` (SHA-256)                           | Identifies a trigger condition                                       |
-| `TriggerDefinitionId` | newtype `String` (SHA-256)                           | Identifies a trigger definition                                      |
+| Type                  | Structure                                  | Purpose                                                                 |
+| --------------------- | ------------------------------------------ | ----------------------------------------------------------------------- |
+| `TaskId`              | `{ language: TaskLanguage, module, name }` | Uniquely identifies an executable definition as `language::module.name` |
+| `CallId`              | `{ task_id: TaskId, args_id: String }`     | Deterministic identity for task + args (SHA-256 of serialized args)     |
+| `InvocationId`        | newtype `String` (UUID v4)                 | Unique execution instance                                               |
+| `RunnerId`            | newtype `String` (UUID v4)                 | Identifies a runner process                                             |
+| `ConditionId`         | newtype `String` (SHA-256)                 | Identifies a trigger condition                                          |
+| `TriggerDefinitionId` | newtype `String` (SHA-256)                 | Identifies a trigger definition                                         |
 
 ### Invocation Status — Finite State Machine
 
@@ -269,12 +252,14 @@ pub trait Broker: Send + Sync {
 }
 ```
 
-### Orchestrator
+### InvocationControlBackend
 
-Manages invocation lifecycle, concurrency control, heartbeats, and recovery.
+Persists atomic invocation control decisions: lifecycle transitions, execution
+ownership, concurrency indexes, wait graphs, heartbeats, and recovery claims.
+It does not publish work or persist calls, results, or history.
 
 ```rust
-pub trait Orchestrator: Send + Sync {
+pub trait InvocationControlBackend: Send + Sync {
     // Lifecycle
     async fn register_invocation(&self, call: &CallDTO, id: &InvocationId) -> RustvelloResult<()>;
     async fn set_invocation_status(
@@ -325,10 +310,82 @@ condition source.
 
 ## Application Layer (`rustvello`)
 
+### Orchestration Boundaries
+
+The concrete `Orchestrator` is the application service that sequences complete
+invocation use cases. `InvocationControlBackend` is the replaceable persistence
+port for authoritative control state. The names now describe their boundaries:
+the backend controls atomic invocation state, while the concrete orchestrator
+orders multi-port application operations.
+
+| Component                  | Owns                                                                                                 | Must not own                                                        |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `InvocationControlBackend` | Status FSM, execution ownership, concurrency indexes, wait graph, runner heartbeats, recovery claims | Invocation payloads/results/history, broker delivery, task registry |
+| `StateBackend`             | Calls, invocation DTOs, results, exceptions, history, workflow data                                  | Status-transition authority, queue delivery                         |
+| `Broker`                   | Pending delivery and queue/priority ordering                                                         | Invocation lifecycle or result state                                |
+| concrete `Orchestrator`    | Ordering and error propagation for cross-backend use cases                                           | Durable state of its own, task definitions, backend-specific policy |
+| `TaskCatalog`              | Registration, foreign declarations, executable lookup, effective task configuration                  | Invocation lifecycle and worker scheduling                          |
+| `RustvelloApp`             | Configuration, task catalog, public application API, composition                                     | Backend implementation details                                      |
+
+```text
+RustvelloApp (public facade and composition root)
+    |-- TaskCatalog (definitions, language, config, executable lookup)
+    `-- Orchestrator (cross-backend use cases; owns no durable state)
+          |-- InvocationControlBackend  atomic control-state operations
+          |-- StateBackend              calls, outcomes, and history
+          |-- Broker                    language/queue work delivery
+          |-- ClientDataStore           large argument/result payloads
+          `-- TriggerManager            trigger evidence and evaluation
+
+Runner process
+    `-- RunnerControlPlane (language, dispatch, heartbeat, recovery, shutdown)
+          |-- Orchestrator (claim and invocation lifecycle use cases)
+          |-- TaskCatalog (local executable lookup)
+          `-- TaskExecutor
+                |-- TokioExecutor (direct or bounded spawn_blocking)
+                `-- RayonExecutor (bounded dedicated pool)
+```
+
+The concrete orchestrator modules are split by use case:
+
+| Module           | Responsibility                                                         |
+| ---------------- | ---------------------------------------------------------------------- |
+| `backends.rs`    | Private `RuntimeBackends` bundle of shared backend ports               |
+| `submission.rs`  | Submit/register use cases, workflow identity, runner-context history   |
+| `routing.rs`     | Caller-owned routing, registration concurrency, and explicit rerouting |
+| `dispatch.rs`    | Queue polling, language-aware retrieval, and execution admission       |
+| `maintenance.rs` | Retry, recovery, auto-purge, and helper maintenance operations         |
+| `retrieval.rs`   | Query helpers and trigger context lookup                               |
+| `triggers.rs`    | Trigger-loop execution and atomic global service scheduling            |
+
+For example, `InvocationControlBackend::set_invocation_status` atomically
+validates and stores one control-state transition. The concrete orchestrator's
+corresponding operation also records history, releases waiters, schedules
+auto-purge, and reports the transition to triggers. Those effects do not belong
+inside a persistence adapter because they span several ports.
+
+The concrete orchestrator is therefore the use-case boundary, while the
+control backend remains an atomic persistence boundary. `RustvelloApp` methods
+are thin facade methods on one Rust type, even though their `impl` blocks are
+split across focused source files.
+
+Orchestration operations are not distributed transactions. Only operations
+explicitly guaranteed by an individual backend are atomic. A composite may
+partially complete if a later backend call fails, so its steps must remain
+retryable and idempotent where practical.
+
+Broker delivery is at least once. `route_call`, which accepts a caller-owned
+`InvocationId`, can be retried with the same ID after a publication failure;
+control and state writes are upserts. A broker acknowledgement lost after a
+successful publish can still produce duplicate messages, so atomic execution
+ownership is the final duplicate-execution guard. A transactional outbox would
+be required to make persistence and publication one atomic operation.
+
 ### `RustvelloApp`
 
-The central application object. Owns all subsystems and coordinates task registration,
-invocation, and execution. Analogous to pynenc's `Pynenc` class.
+The central public facade and composition root. It owns configuration and the
+task catalog, constructs the runtime services, and exposes ergonomic submission
+and execution methods. Analogous to pynenc's `Pynenc` class.
 
 ```rust
 let app = Rustvello::builder()
@@ -354,34 +411,56 @@ fn process(data: String) -> String {
 
 Supported attributes:
 
-| Attribute                  | Type     | Description                                           |
-| -------------------------- | -------- | ----------------------------------------------------- |
-| `max_retries`              | `u32`    | Retry attempts on failure                             |
-| `module`                   | `&str`   | Override the module component of `TaskId`             |
-| `concurrency`              | `&str`   | `"unlimited"` \| `"task"` \| `"argument"` \| `"none"` |
-| `registration_concurrency` | `&str`   | Registration-time dedup mode                          |
-| `key_arguments`            | `[&str]` | Argument names used as concurrency key                |
-| `cache_results`            | `bool`   | Cache results for identical args                      |
-| `is_workflow_task`         | `bool`   | Workflow marker set by the workflow macro or adapters |
-| `reroute_on_cc`            | `bool`   | Reroute when hitting concurrency limits               |
-| `blocking`                 | `bool`   | Run on a blocking thread (for CPU-bound work)         |
+| Attribute                  | Type     | Description                                                          |
+| -------------------------- | -------- | -------------------------------------------------------------------- |
+| `max_retries`              | `u32`    | Retry attempts on failure                                            |
+| `module`                   | `&str`   | Override the module component of `TaskId`                            |
+| `concurrency`              | `&str`   | `"unlimited"` \| `"task"` \| `"argument"` \| `"none"`                |
+| `registration_concurrency` | `&str`   | Registration-time dedup mode                                         |
+| `key_arguments`            | `[&str]` | Argument names used as concurrency key                               |
+| `cache_results`            | `bool`   | Cache results for identical args                                     |
+| `is_workflow_task`         | `bool`   | Workflow marker set by the workflow macro or adapters                |
+| `reroute_on_cc`            | `bool`   | Reroute when hitting concurrency limits                              |
+| `blocking`                 | `bool`   | Move potentially blocking synchronous work off Tokio runtime threads |
 
-### TaskRunner
+### Runner Control Plane and Executors
 
-The `TaskRunner` spawns N async workers (configurable via `num_workers`) that
-race to retrieve invocations from the broker and execute them concurrently.
-Before claiming `Pending` ownership, a worker atomically reserves the matching
-backend concurrency slot. Failed claims and retries release that reservation;
-terminal transitions prune it as part of status persistence. A separate
-management loop handles heartbeats, recovery checks, and trigger evaluations.
+Every runner has an immutable `TaskLanguage` and `ExecutorKind`. Shared process
+behavior lives in `RunnerControlPlane`: language/queue polling, concurrency
+admission, heartbeat, stale-work recovery, trigger evaluation, cancellation,
+and graceful shutdown. A `TaskExecutor` implementation owns only bounded local
+execution of task code.
 
 ```text
-TaskRunner (runner_id = "uuid")
-├── management_loop()   — heartbeats, recovery, trigger evaluation
-├── worker_loop(0)      — polls broker, executes tasks
-├── worker_loop(1)
-└── worker_loop(N-1)
+PersistentTokioRunner (default)       RayonRunner (dedicated CPU fleet)
+             |                                      |
+             +---------- RunnerControlPlane --------+
+                              |
+                    Orchestrator::claim_next
+                              |
+             physical <language, logical queue>
+                              |
+                    admitted invocation
+                              |
+                 +------------+------------+
+                 |                         |
+          TokioExecutor              RayonExecutor
+       direct / spawn_blocking       bounded Rayon pool
 ```
+
+`PersistentTokioRunner` is the general-purpose default. Its executor runs short
+synchronous callbacks directly and sends tasks configured with `blocking = true`
+to Tokio's bounded blocking pool. `RayonRunner` remains an explicit deployment
+choice for CPU-focused logical queues. Rayon schedules independent invocation
+closures; it does not split one invocation's input unless task code itself uses
+Rayon parallel iterators, `join`, or `scope`.
+
+The public runner set is intentionally small. `PersistentTokioRunner` is the
+default and covers general workloads, including `blocking = true` tasks through
+Tokio's blocking pool. `RayonRunner` is available for dedicated CPU-focused
+logical queues. The previous per-invocation Tokio and always-blocking runner
+surfaces were removed before 0.5 because they did not add a clear execution
+model beyond those two supported choices.
 
 ---
 
@@ -395,15 +474,18 @@ and Rust workers share the same broker and orchestrator under one `app_id`.
 Each `TaskId` carries a `language` field:
 
 ```text
-rs::my_crate.add      ← Rust task (handled by rustvello workers)
-py::my_module.add     ← Python task (handled by pynenc workers)
+rust::my_crate.add       ← Rust task (handled by Rust workers)
+python::my_module.add    ← Python task (handled by Python workers)
 ```
 
 ### Routing
 
-The broker maintains per-language queues. Each worker fetches only from its own
-language queue via `retrieve_invocation_for_language()`. This keeps Rust workers
-and Python workers isolated while sharing all other state.
+The broker maintains a separate physical execution lane for each language and
+logical queue. Each worker fetches only from its immutable language via
+`retrieve_invocation_for_language()`. Native queue brokers such as RabbitMQ use
+separate physical queues; database-backed brokers may use indexed partitions.
+This keeps Rust workers and Python workers isolated while sharing lifecycle and
+result state.
 
 ### Wire Format
 
@@ -484,9 +566,10 @@ To see how these composites are used by the native Python orchestrator, see [Pyn
 :::
 
 Composite operations bundle multiple trait calls (orchestrator, state backend,
-history, trigger store, waiter, autopurge) into a single method. They exist on the
-`OrchestratorComposite` trait and are the mechanism that enables native-mode
-orchestration in the pynenc Python binding.
+history, trigger store, waiter, autopurge) into a single method. They are
+implemented by the concrete `Orchestrator` application service and
+are the mechanism that enables native-mode orchestration in the pynenc Python
+binding.
 
 ### Why Composites?
 
@@ -506,7 +589,7 @@ With composites (native mode):
   Python ──FFI──▶ set_invocation_status_full()  ← all 5 steps in one call
 ```
 
-### `OrchestratorComposite` Trait — Hot-Path Composites
+### Coordinator Hot-Path Composites
 
 The 5 hot-path composites cover the most frequently executed orchestration paths:
 
@@ -687,7 +770,7 @@ In native mode, the Rust engine drives the runner loop:
 
 ```text
 ┌─────────────────────────────────────────────┐
-│              Rust Runner Loop                │
+│          RunnerControlPlane + Executor       │
 │                                              │
 │  poll broker → set RUNNING → callback Python │
 │       ↑                         ↓            │
@@ -718,6 +801,6 @@ flag between iterations. Python's `signal.signal()` cooperates via registration 
 To add a new backend (e.g., Redis):
 
 1. Create a new crate `crates/rustvello-redis/`
-2. Implement the `Broker`, `Orchestrator`, and `StateBackend` traits from `rustvello-core`
+2. Implement the `Broker`, `InvocationControlBackend`, and `StateBackend` traits from `rustvello-core`
 3. Add its dependency to the workspace and wire it into `App` construction
 4. Keep any build-time feature flags separate from the required trait contract

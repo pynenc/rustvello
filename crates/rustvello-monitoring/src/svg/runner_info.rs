@@ -13,6 +13,10 @@ use rustvello_core::state_backend::StoredRunnerContext;
 pub struct RunnerInfo {
     /// Runner class/type name (e.g. "TaskRunner", "PPRWorker").
     pub runner_cls: String,
+    /// Runtime language this runner executes.
+    pub runner_language: String,
+    /// Local executor family used by the runner.
+    pub executor_kind: String,
     /// Full runner identifier (UUID).
     pub runner_id: String,
     /// Hostname where the runner is executing.
@@ -32,6 +36,8 @@ impl RunnerInfo {
     pub fn from_id(runner_id: &str) -> Self {
         Self {
             runner_cls: "Unknown".to_owned(),
+            runner_language: "unknown".to_owned(),
+            executor_kind: "unknown".to_owned(),
             runner_id: runner_id.to_owned(),
             hostname: "unknown".to_owned(),
             pid: 0,
@@ -45,6 +51,8 @@ impl RunnerInfo {
     pub fn from_context(ctx: &StoredRunnerContext) -> Self {
         Self {
             runner_cls: ctx.runner_cls.clone(),
+            runner_language: ctx.runner_language.to_string(),
+            executor_kind: ctx.executor_kind.to_string(),
             runner_id: ctx.runner_id.clone(),
             hostname: ctx.hostname.clone(),
             pid: ctx.pid,
@@ -58,6 +66,8 @@ impl RunnerInfo {
     pub fn external_runner() -> Self {
         Self {
             runner_cls: "ExternalRunner".to_owned(),
+            runner_language: "external".to_owned(),
+            executor_kind: "external".to_owned(),
             runner_id: "unassigned".to_owned(),
             hostname: String::new(),
             pid: 0,
@@ -80,14 +90,29 @@ impl RunnerInfo {
     /// Display label: RunnerClass(short_id).
     pub fn label(&self) -> String {
         let short = crate::util::formatting::truncate_id(&self.runner_id);
+        if self.runner_language == "unknown" {
+            format!("{}({})", self.runner_cls, short)
+        } else {
+            format!("{}: {}({})", self.runner_language, self.runner_cls, short)
+        }
+    }
+
+    /// Display label without the language prefix, for views that render the
+    /// language as a separate badge.
+    pub fn name_label(&self) -> String {
+        let short = crate::util::formatting::truncate_id(&self.runner_id);
         format!("{}({})", self.runner_cls, short)
     }
 
-    /// Details line: hostname (pid:X) — matches pynmon.
+    /// Secondary lane label with location and local executor metadata.
     pub fn details(&self) -> String {
-        if self.hostname.is_empty() || self.hostname == "unknown" {
-            return String::new();
+        let mut parts = Vec::new();
+        if !self.hostname.is_empty() && self.hostname != "unknown" {
+            parts.push(format!("{} (pid:{})", self.hostname, self.pid));
         }
-        format!("{} (pid:{})", self.hostname, self.pid)
+        if self.executor_kind != "unknown" && self.executor_kind != "external" {
+            parts.push(self.executor_kind.clone());
+        }
+        parts.join(" | ")
     }
 }

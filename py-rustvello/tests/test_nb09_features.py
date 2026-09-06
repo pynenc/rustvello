@@ -3,7 +3,7 @@
 import pytest
 
 from rustvello import App
-from rustvello.app import TaskHandle, _TriggerBuilder, _TriggerDef
+from rustvello.app import ForeignTaskHandle, TaskHandle, TaskLanguage, _TriggerBuilder, _TriggerDef
 from rustvello.backends import _BACKEND_NAMES, create_backends
 
 # ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ class TestExtendedTaskConfig:
             return x
 
         assert isinstance(single_at_a_time, TaskHandle)
-        key = f"{single_at_a_time._module}.{single_at_a_time._name}"
+        key = f"{single_at_a_time._language}::{single_at_a_time._module}.{single_at_a_time._name}"
         assert sync_app._task_configs[key]["concurrency"] == "task"
 
     def test_key_arguments(self, sync_app: App) -> None:
@@ -147,7 +147,7 @@ class TestExtendedTaskConfig:
         def per_user(user_id: str, data: str) -> str:
             return f"{user_id}:{data}"
 
-        key = f"{per_user._module}.{per_user._name}"
+        key = f"{per_user._language}::{per_user._module}.{per_user._name}"
         assert sync_app._task_configs[key]["key_arguments"] == ["user_id"]
         assert sync_app._task_configs[key]["concurrency"] == "keys"
 
@@ -156,7 +156,7 @@ class TestExtendedTaskConfig:
         def blocker(x: int) -> int:
             return x
 
-        key = f"{blocker._module}.{blocker._name}"
+        key = f"{blocker._language}::{blocker._module}.{blocker._name}"
         assert sync_app._task_configs[key]["blocking"] is True
 
     def test_parallel_batch_size(self, sync_app: App) -> None:
@@ -164,7 +164,7 @@ class TestExtendedTaskConfig:
         def batchy(x: int) -> int:
             return x
 
-        key = f"{batchy._module}.{batchy._name}"
+        key = f"{batchy._language}::{batchy._module}.{batchy._name}"
         assert sync_app._task_configs[key]["parallel_batch_size"] == 50
 
     def test_reroute_on_cc(self, sync_app: App) -> None:
@@ -172,7 +172,7 @@ class TestExtendedTaskConfig:
         def rerouter(x: int) -> int:
             return x
 
-        key = f"{rerouter._module}.{rerouter._name}"
+        key = f"{rerouter._language}::{rerouter._module}.{rerouter._name}"
         assert sync_app._task_configs[key]["reroute_on_cc"] is True
 
     def test_default_config_values(self, sync_app: App) -> None:
@@ -180,7 +180,7 @@ class TestExtendedTaskConfig:
         def defaults(x: int) -> int:
             return x
 
-        key = f"{defaults._module}.{defaults._name}"
+        key = f"{defaults._language}::{defaults._module}.{defaults._name}"
         cfg = sync_app._task_configs[key]
         assert cfg["concurrency"] == "unlimited"
         assert cfg["key_arguments"] == []
@@ -222,6 +222,7 @@ class TestTriggerBuilder:
         assert isinstance(tdef, _TriggerDef)
         assert tdef.kind == "cron"
         assert tdef.schedule == "0 */5 * * * *"
+        assert tdef.task_key == f"python::{cleanup._module}.{cleanup._name}"
         assert len(sync_app._triggers) == 1
 
     def test_on_interval_register(self, sync_app: App) -> None:
@@ -232,6 +233,7 @@ class TestTriggerBuilder:
         tdef = sync_app.trigger(heartbeat).on_interval(30).register()
         assert tdef.kind == "interval"
         assert tdef.schedule == "30"
+        assert tdef.task_key == f"python::{heartbeat._module}.{heartbeat._name}"
 
     def test_with_args(self, sync_app: App) -> None:
         @sync_app.task
@@ -240,6 +242,16 @@ class TestTriggerBuilder:
 
         tdef = sync_app.trigger(process).on_cron("0 0 * * * *").with_args(region="us-east").register()
         assert tdef.kwargs == {"region": "us-east"}
+
+    def test_foreign_task_decorator_registers_typed_proxy(self, sync_app: App) -> None:
+        @sync_app.foreign_task(TaskLanguage.Rust, module="rust_side")
+        def rust_reverse(text: str) -> str:
+            raise NotImplementedError
+
+        assert isinstance(rust_reverse, ForeignTaskHandle)
+        assert rust_reverse._language == "rust"
+        assert rust_reverse._module == "rust_side"
+        assert rust_reverse._name == "rust_reverse"
 
     def test_register_without_type_raises(self, sync_app: App) -> None:
         @sync_app.task

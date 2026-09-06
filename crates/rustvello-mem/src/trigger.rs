@@ -322,10 +322,19 @@ impl TriggerStore for MemTriggerStore {
                         .is_none_or(|id| event.emitted_by_invocation_id.as_ref() == Some(id))
                     && query.start.is_none_or(|start| event.timestamp >= start)
                     && query.end.is_none_or(|end| event.timestamp <= end)
+                    && query
+                        .matched
+                        .is_none_or(|matched| event.is_matched() == matched)
+                    && query
+                        .triggered
+                        .is_none_or(|triggered| event.is_triggered() == triggered)
             })
             .cloned()
             .collect();
         events.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+        if let Some(offset) = query.offset {
+            events = events.into_iter().skip(offset).collect();
+        }
         if let Some(limit) = query.limit {
             events.truncate(limit);
         }

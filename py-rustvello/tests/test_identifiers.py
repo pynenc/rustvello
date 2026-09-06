@@ -8,12 +8,14 @@ from rustvello import InvocationId, TaskId
 class TestTaskId:
     def test_create_valid(self):
         t = TaskId("my_module", "my_func")
+        assert t.language == "python"
         assert t.module == "my_module"
         assert t.name == "my_func"
 
     def test_str_contains_both(self):
         t = TaskId("mod", "fn")
         s = str(t)
+        assert s.startswith("python::")
         assert "mod" in s
         assert "fn" in s
 

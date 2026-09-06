@@ -31,6 +31,20 @@ Monitor{% endblock %} {% block content %}
                       <th>Task ID:</th>
                       <td><strong>{{ task_id }}</strong></td>
                     </tr>
+                    {% if !language.is_empty() %}
+                    <tr>
+                      <th>Language:</th>
+                      <td><span class="badge language-badge language-{{ language }}">{{ language }}</span></td>
+                    </tr>
+                    <tr>
+                      <th>Module:</th>
+                      <td><code>{{ module }}</code></td>
+                    </tr>
+                    <tr>
+                      <th>Function:</th>
+                      <td><code>{{ function }}</code></td>
+                    </tr>
+                    {% endif %}
                     <tr>
                       <th>Application:</th>
                       <td><span class="badge bg-info">{{ app_id }}</span></td>
@@ -45,7 +59,7 @@ Monitor{% endblock %} {% block content %}
               <div class="card-header compact-header">Quick Actions</div>
               <div class="card-body">
                 <div class="d-flex gap-2 flex-wrap">
-                  <a href="/invocations" class="btn btn-sm btn-outline-primary">
+                  <a href="{{ invocations_url }}" class="btn btn-sm btn-outline-primary">
                     <span
                       class="material-icons align-middle me-1"
                       style="font-size: 16px"
@@ -54,7 +68,7 @@ Monitor{% endblock %} {% block content %}
                     All Invocations
                   </a>
                   <a
-                    href="/invocations/timeline"
+                    href="{{ timeline_url }}"
                     class="btn btn-sm btn-outline-secondary"
                   >
                     <span
@@ -74,41 +88,12 @@ Monitor{% endblock %} {% block content %}
           <div class="col-12">
             <div class="card pynmon-card">
               <div class="card-header compact-header">
-                Invocations ({{ invocation_ids.len() }})
+                Invocations ({{ invocation_count }})
               </div>
               <div class="card-body">
-                {% if !invocation_ids.is_empty() %}
-                <div class="table-responsive">
-                  <table class="table table-hover pynmon-table">
-                    <thead>
-                      <tr>
-                        <th>Invocation ID</th>
-                        <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {% for inv_id in invocation_ids %}
-                      <tr>
-                        <td>
-                          <a
-                            href="/invocations/{{ inv_id }}"
-                            class="text-decoration-none"
-                          >
-                            <code class="small text-primary">{{ inv_id }}</code>
-                          </a>
-                        </td>
-                        <td>
-                          <a
-                            href="/invocations/{{ inv_id }}"
-                            class="btn btn-sm btn-outline-primary"
-                            >Details</a
-                          >
-                        </td>
-                      </tr>
-                      {% endfor %}
-                    </tbody>
-                  </table>
-                </div>
+                {% if !invocations.is_empty() %}
+                {% include "components/invocation_table.html" %}
+                {% include "components/pagination.html" %}
                 {% else %}
                 <p class="text-muted">No invocations for this task.</p>
                 {% endif %}

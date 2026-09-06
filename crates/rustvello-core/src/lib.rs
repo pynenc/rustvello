@@ -3,7 +3,7 @@
 //! This crate defines the abstract interfaces that all backend implementations
 //! must satisfy:
 //! - [`Broker`] — message routing between producers and runners
-//! - [`Orchestrator`] — invocation lifecycle and status management
+//! - [`InvocationControlBackend`] — atomic invocation control-state persistence
 //! - [`StateBackend`] — persistence of invocations and results
 //! - [`Runner`] — task execution engine
 //! - [`ClientDataStore`] — external storage for large serialized values
@@ -42,14 +42,15 @@ pub mod prelude {
     pub use crate::error::{RustvelloError, RustvelloResult};
     pub use crate::invocation::{Invocation, InvocationHandle, SyncInvocation};
     pub use crate::orchestrator::{
-        Orchestrator, OrchestratorBlocking, OrchestratorConcurrency, OrchestratorQuery,
+        InvocationControlBackend, OrchestratorBlocking, OrchestratorConcurrency, OrchestratorQuery,
         OrchestratorRecovery, OrchestratorStatus,
     };
     pub use crate::runner::Runner;
     pub use crate::serializer::{SerdeSerializer, Serializer};
     pub use crate::state_backend::StateBackend;
     pub use crate::task::{
-        CrossLanguageSafe, DynTask, ForeignTask, Task, TaskDefinition, TaskModule, TaskRegistry,
+        CrossLanguageSafe, DynTask, ForeignTask, ForeignTaskProxy, Task, TaskDefinition,
+        TaskModule, TaskRegistry,
     };
     pub use crate::trigger::{TriggerManager, TriggerStore};
     pub use crate::workflow::WorkflowRoot;

@@ -6,8 +6,11 @@ use axum::response::IntoResponse;
 use axum::Router;
 use chrono::Utc;
 
+use crate::navigation::{MonitoringDestination, MonitoringLink, MonitoringScope};
+use crate::query::{load_invocation_rows, PageRequest, TotalCount};
 use crate::state::AppState;
 use crate::util::view_helpers::{get_active_app, AppResult, HtmlTemplate};
+use crate::view::{InvocationRowView, PaginationView};
 
 #[derive(serde::Deserialize, Default)]
 pub struct RunnerDetailQuery {
@@ -37,6 +40,8 @@ struct RunnerRow {
     runner_id: String,
     short_id: String,
     runner_cls: String,
+    runner_language: String,
+    executor_kind: String,
     hostname: String,
     pid: String,
     started_at: String,
@@ -59,6 +64,8 @@ struct RunnerDetailTemplate {
     nav_path: &'static str,
     runner_id: String,
     runner_cls: String,
+    runner_language: String,
+    executor_kind: String,
     hostname: String,
     pid: String,
     thread_id: String,
@@ -80,29 +87,24 @@ struct RunnerDetailTemplate {
     workers: Vec<RunnerWorkerRow>,
     // Invocations
     invocation_count: usize,
-    invocations: Vec<RunnerInvocationRow>,
+    invocations: Vec<InvocationRowView>,
     // Pagination
-    current_page: usize,
-    total_pages: usize,
-    page_limit: usize,
+    pagination: PaginationView,
+    pagination_path: String,
+    pagination_query: String,
+    timeline_url: String,
 }
 
 struct RunnerWorkerRow {
     runner_id: String,
     short_id: String,
     runner_cls: String,
+    runner_language: String,
+    executor_kind: String,
     hostname: String,
     pid: String,
     is_active: bool,
     last_heartbeat_secs_ago: u64,
-}
-
-struct RunnerInvocationRow {
-    invocation_id: String,
-    short_id: String,
-    task_id: String,
-    status: String,
-    status_class: String,
 }
 
 pub fn router() -> Router<AppState> {
@@ -154,6 +156,12 @@ async fn collect_runner_rows(app: &crate::AppInstance) -> Vec<RunnerRow> {
             runner_cls: ctx
                 .as_ref()
                 .map_or_else(|| "Unknown".to_owned(), |c| c.runner_cls.clone()),
+            runner_language: ctx
+                .as_ref()
+                .map_or_else(|| "unknown".to_owned(), |c| c.runner_language.to_string()),
+            executor_kind: ctx
+                .as_ref()
+                .map_or_else(|| "unknown".to_owned(), |c| c.executor_kind.to_string()),
             hostname: ctx
                 .as_ref()
                 .map_or_else(|| "—".to_owned(), |c| c.hostname.clone()),
@@ -298,6 +306,8 @@ async fn detail(
                 runner_id: cctx.runner_id.clone(),
                 short_id: crate::util::formatting::truncate_id(&cctx.runner_id),
                 runner_cls: cctx.runner_cls.clone(),
+                runner_language: cctx.runner_language.to_string(),
+                executor_kind: cctx.executor_kind.to_string(),
                 hostname: cctx.hostname.clone(),
                 pid: cctx.pid.to_string(),
                 is_active,
@@ -331,7 +341,7 @@ async fn detail(
     let offset = (page - 1) * limit;
 
     // Gather paginated invocation IDs across all runner IDs
-    let mut invocations = Vec::new();
+    let mut invocation_ids = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut remaining = limit;
     let mut skip = offset;
@@ -362,40 +372,15 @@ async fn detail(
             if !seen.insert(inv_id.to_string()) {
                 continue;
             }
-            // Get the latest status from history
-            let history = app
-                .state_backend
-                .get_history(&inv_id)
-                .await
-                .unwrap_or_default();
-            let status = if let Some(last) = history.last() {
-                last.status_record.status
-            } else {
-                app.orchestrator
-                    .get_invocation_status(&inv_id)
-                    .await
-                    .map(|r| r.status)
-                    .unwrap_or(rustvello_proto::status::InvocationStatus::Registered)
-            };
-            // Derive task_id from invocation DTO
-            let task_id_str = app
-                .state_backend
-                .get_invocation(&inv_id)
-                .await
-                .map_or_else(|_| "—".to_string(), |inv| inv.task_id.to_string());
-            let badge = crate::util::status_colors::badge_class(&status);
-            let full_id = inv_id.to_string();
-            let short = crate::util::formatting::truncate_id(&full_id);
-            invocations.push(RunnerInvocationRow {
-                invocation_id: full_id,
-                short_id: short,
-                task_id: task_id_str,
-                status: format!("{status:?}"),
-                status_class: badge.to_owned(),
-            });
+            invocation_ids.push(inv_id);
             remaining -= 1;
         }
     }
+    let runner_scope = MonitoringScope {
+        runner_ids: all_runner_ids.clone(),
+        ..MonitoringScope::default()
+    };
+    let invocations = load_invocation_rows(&app, invocation_ids, runner_scope).await;
 
     Ok(HtmlTemplate(RunnerDetailTemplate {
         app_id: app.app_id.clone(),
@@ -405,6 +390,12 @@ async fn detail(
         runner_cls: ctx
             .as_ref()
             .map_or_else(|| "Unknown".to_string(), |c| c.runner_cls.clone()),
+        runner_language: ctx
+            .as_ref()
+            .map_or_else(|| "unknown".to_string(), |c| c.runner_language.to_string()),
+        executor_kind: ctx
+            .as_ref()
+            .map_or_else(|| "unknown".to_string(), |c| c.executor_kind.to_string()),
         hostname: ctx
             .as_ref()
             .map_or_else(|| "—".to_string(), |c| c.hostname.clone()),
@@ -432,8 +423,18 @@ async fn detail(
         workers,
         invocation_count: total_count,
         invocations,
-        current_page: page,
-        total_pages,
-        page_limit: limit,
+        pagination: PaginationView::new(
+            PageRequest::new(Some(page), Some(limit)),
+            TotalCount::Exact(total_count),
+            page < total_pages,
+        ),
+        pagination_path: format!("/runners/{runner_id}"),
+        pagination_query: format!("limit={limit}"),
+        timeline_url: MonitoringLink::new(MonitoringDestination::Timeline)
+            .with_scope(MonitoringScope {
+                runner_ids: vec![runner_id.clone()],
+                ..MonitoringScope::default()
+            })
+            .href(),
     }))
 }

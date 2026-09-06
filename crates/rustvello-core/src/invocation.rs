@@ -15,8 +15,9 @@ use serde::de::DeserializeOwned;
 use rustvello_proto::identifiers::InvocationId;
 use rustvello_proto::status::InvocationStatus;
 
+use crate::context::get_invocation_context;
 use crate::error::{RustvelloError, RustvelloResult};
-use crate::orchestrator::Orchestrator;
+use crate::orchestrator::InvocationControlBackend;
 use crate::state_backend::StateBackend;
 
 /// Handle to a submitted invocation with typed result access.
@@ -38,7 +39,7 @@ use crate::state_backend::StateBackend;
 /// ```
 pub struct InvocationHandle<R: DeserializeOwned = String> {
     invocation_id: InvocationId,
-    orchestrator: Arc<dyn Orchestrator>,
+    orchestrator: Arc<dyn InvocationControlBackend>,
     state_backend: Arc<dyn StateBackend>,
     _result_type: PhantomData<R>,
 }
@@ -47,7 +48,7 @@ impl<R: DeserializeOwned> InvocationHandle<R> {
     /// Create a new handle from raw parts.
     pub fn new(
         invocation_id: InvocationId,
-        orchestrator: Arc<dyn Orchestrator>,
+        orchestrator: Arc<dyn InvocationControlBackend>,
         state_backend: Arc<dyn StateBackend>,
     ) -> Self {
         Self {
@@ -121,6 +122,13 @@ impl<R: DeserializeOwned> InvocationHandle<R> {
     /// **Note:** Uses a fixed poll interval with no backoff. For long-running
     /// tasks, prefer a longer interval (e.g., 500ms–2s) to reduce backend load.
     pub async fn wait(&self, poll_interval: Duration) -> RustvelloResult<R> {
+        if let Some(ctx) = get_invocation_context() {
+            if ctx.invocation_id != self.invocation_id {
+                self.orchestrator
+                    .set_waiting_for(&ctx.invocation_id, &self.invocation_id)
+                    .await?;
+            }
+        }
         loop {
             if self.is_done().await? {
                 return self.result().await;

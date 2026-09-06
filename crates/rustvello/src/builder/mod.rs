@@ -10,7 +10,7 @@ use cistell_core::{ConfigValue, MapSource};
 use rustvello_core::broker::Broker;
 use rustvello_core::client_data_store::ClientDataStore;
 use rustvello_core::error::{RustvelloError, RustvelloResult};
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::task::TaskModule;
 use rustvello_core::trigger::TriggerStore;
@@ -101,7 +101,7 @@ pub struct RustvelloBuilder {
     /// Whether to include env vars in the resolver chain (opt-in via `from_env()`).
     pub(super) use_env: bool,
     pub(super) broker: Option<Arc<dyn Broker>>,
-    pub(super) orchestrator: Option<Arc<dyn Orchestrator>>,
+    pub(super) orchestrator: Option<Arc<dyn InvocationControlBackend>>,
     pub(super) state_backend: Option<Arc<dyn StateBackend>>,
     pub(super) client_data_store: Option<Arc<dyn ClientDataStore>>,
     pub(super) trigger_store: Option<Arc<dyn TriggerStore>>,
@@ -342,7 +342,7 @@ impl RustvelloBuilder {
     }
 
     /// Use a custom orchestrator.
-    pub fn orchestrator(mut self, orch: Arc<dyn Orchestrator>) -> Self {
+    pub fn orchestrator(mut self, orch: Arc<dyn InvocationControlBackend>) -> Self {
         self.orchestrator = Some(orch);
         self
     }

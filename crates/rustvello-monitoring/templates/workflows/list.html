@@ -17,7 +17,7 @@ endblock %} {% block content %}
           </span>
           <button
             class="btn btn-sm btn-outline-primary"
-            hx-get="/workflows/refresh"
+            hx-get="/workflows/refresh?{{ pagination_query }}&page={{ pagination.page }}"
             hx-target="#workflows-content"
             hx-swap="innerHTML"
           >
@@ -30,7 +30,7 @@ endblock %} {% block content %}
         <div class="card-body pynmon-card-body">
           <div
             id="workflows-content"
-            hx-get="/workflows/refresh"
+            hx-get="/workflows/refresh?{{ pagination_query }}&page={{ pagination.page }}"
             hx-trigger="every 10s"
             hx-swap="innerHTML"
           >

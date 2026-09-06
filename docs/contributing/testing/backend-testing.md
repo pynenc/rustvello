@@ -6,7 +6,7 @@ extending an existing one.
 ## Adding a New Backend
 
 When you create a new backend crate (e.g., `rustvello-dynamodb`) that implements
-one or more core traits (`Broker`, `Orchestrator`, `StateBackend`,
+one or more core traits (`Broker`, `InvocationControlBackend`, `StateBackend`,
 `TriggerStore`, `ClientDataStore`), follow these steps to wire up the shared
 test suite.
 

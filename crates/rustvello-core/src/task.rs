@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
@@ -198,7 +199,7 @@ impl<K: CrossLanguageSafe + Eq + std::hash::Hash, V: CrossLanguageSafe> CrossLan
 {
 }
 
-/// A foreign task stub — represents a task implemented in another language.
+/// A typed task proxy for a task implemented by another runtime.
 ///
 /// Unlike [`Task`], a `ForeignTask` has no `run()` method because execution
 /// happens in the foreign language worker. The Rust side only creates
@@ -206,6 +207,9 @@ impl<K: CrossLanguageSafe + Eq + std::hash::Hash, V: CrossLanguageSafe> CrossLan
 ///
 /// The `CrossLanguageSafe` bound on `Params` and `Result` ensures that
 /// only JSON-compatible types are used for cross-language serialization.
+///
+/// Implement this trait when a proxy needs custom behavior or metadata. For
+/// ordinary cross-language calls, [`ForeignTaskProxy`] avoids the boilerplate.
 ///
 /// # Example
 ///
@@ -241,8 +245,7 @@ pub trait ForeignTask: Send + Sync + 'static {
     /// The return type (must be cross-language safe).
     type Result: CrossLanguageSafe + Send + Sync + 'static;
 
-    /// Unique identifier for this foreign task.
-    /// Must return a qualified `TaskId` (with non-empty `language`).
+    /// Unique language-qualified identifier for this task.
     fn task_id(&self) -> TaskId;
 
     /// Per-task configuration (optional override).
@@ -251,32 +254,83 @@ pub trait ForeignTask: Send + Sync + 'static {
     }
 }
 
-/// Adapter: wraps a [`ForeignTask`] as a [`DynTask`].
+/// A reusable typed proxy for a task executed by another language worker.
 ///
-/// Since foreign tasks have no `run()` implementation, `execute()` returns
-/// an error indicating the task must be processed by a foreign worker.
-///
-/// The adapter caches `task_id` and `config` from the inner [`ForeignTask`]
-/// at construction time so that [`DynTask`] can return references.
-struct ForeignTaskAdapter<F: ForeignTask> {
-    _inner: F,
+/// The proxy carries the canonical task identity and its Rust-visible input
+/// and output types. Register it on the application just like a local task;
+/// matching runner-language routing ensures it can only execute remotely.
+pub struct ForeignTaskProxy<P, R> {
     task_id: TaskId,
     config: TaskConfig,
+    _types: PhantomData<fn(P) -> R>,
 }
 
-impl<F: ForeignTask> ForeignTaskAdapter<F> {
-    fn new(task: F) -> Self {
-        let task_id = task.task_id();
-        let config = task.config();
+impl<P, R> Clone for ForeignTaskProxy<P, R> {
+    fn clone(&self) -> Self {
         Self {
-            _inner: task,
-            task_id,
-            config,
+            task_id: self.task_id.clone(),
+            config: self.config.clone(),
+            _types: PhantomData,
         }
     }
 }
 
-impl<F: ForeignTask> DynTask for ForeignTaskAdapter<F> {
+impl<P, R> fmt::Debug for ForeignTaskProxy<P, R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ForeignTaskProxy")
+            .field("task_id", &self.task_id)
+            .field("config", &self.config)
+            .finish()
+    }
+}
+
+impl<P, R> ForeignTaskProxy<P, R> {
+    /// Create a proxy with the default task configuration.
+    pub fn new(task_id: TaskId) -> Self {
+        Self {
+            task_id,
+            config: TaskConfig::default(),
+            _types: PhantomData,
+        }
+    }
+
+    /// Override the task configuration used when registering this proxy.
+    pub fn with_config(mut self, config: TaskConfig) -> Self {
+        self.config = config;
+        self
+    }
+}
+
+impl<P, R> ForeignTask for ForeignTaskProxy<P, R>
+where
+    P: CrossLanguageSafe + Send + Sync + 'static,
+    R: CrossLanguageSafe + Send + Sync + 'static,
+{
+    type Params = P;
+    type Result = R;
+
+    fn task_id(&self) -> TaskId {
+        self.task_id.clone()
+    }
+
+    fn config(&self) -> TaskConfig {
+        self.config.clone()
+    }
+}
+
+/// Runtime registry entry for a task implemented by another worker language.
+struct TaskProxy {
+    task_id: TaskId,
+    config: TaskConfig,
+}
+
+impl TaskProxy {
+    fn new(task_id: TaskId, config: TaskConfig) -> Self {
+        Self { task_id, config }
+    }
+}
+
+impl DynTask for TaskProxy {
     fn task_id(&self) -> &TaskId {
         &self.task_id
     }
@@ -288,7 +342,7 @@ impl<F: ForeignTask> DynTask for ForeignTaskAdapter<F> {
     fn execute(&self, _args: &SerializedArguments) -> RustvelloResult<String> {
         Err(RustvelloError::Configuration {
             message: format!(
-                "foreign task {} cannot be executed locally — must be processed by a {} worker",
+                "task proxy {} cannot execute in this worker; it must be processed by a {} worker",
                 self.task_id,
                 self.task_id.language(),
             ),
@@ -370,7 +424,7 @@ impl DynTask for LegacyTaskAdapter {
 ///
 /// Tasks must be registered before they can be invoked. Supports both
 /// typed tasks (via [`Task`] trait) and legacy closure-based tasks.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TaskRegistry {
     tasks: HashMap<TaskId, Arc<dyn DynTask>>,
     /// Legacy index for backward-compatible `get_legacy()` access.
@@ -394,26 +448,9 @@ impl TaskRegistry {
         Ok(())
     }
 
-    /// Register a foreign task stub. Returns error if the task ID is already registered
-    /// or if the task ID does not have a non-empty language (i.e. is not foreign).
+    /// Register a typed proxy for a task implemented by another runtime.
     pub fn register_foreign<F: ForeignTask>(&mut self, task: F) -> RustvelloResult<()> {
-        let task_id = task.task_id();
-        if !task_id.is_foreign() {
-            return Err(RustvelloError::Configuration {
-                message: format!(
-                    "ForeignTask must have a non-empty language, got: {}",
-                    task_id
-                ),
-            });
-        }
-        if self.tasks.contains_key(&task_id) {
-            return Err(RustvelloError::Configuration {
-                message: format!("task already registered: {}", task_id),
-            });
-        }
-        self.tasks
-            .insert(task_id, Arc::new(ForeignTaskAdapter::new(task)));
-        Ok(())
+        self.register_task_proxy(task.task_id(), task.config())
     }
 
     /// Register a legacy task definition. Returns error if already registered.
@@ -430,6 +467,25 @@ impl TaskRegistry {
         };
         self.tasks.insert(task_id.clone(), Arc::new(adapter));
         self.legacy_tasks.insert(task_id, def);
+        Ok(())
+    }
+
+    /// Register a language-qualified task proxy from a dynamic API boundary.
+    ///
+    /// The stub keeps routing metadata in this registry while making accidental
+    /// local execution fail loudly.
+    pub fn register_task_proxy(
+        &mut self,
+        task_id: TaskId,
+        config: TaskConfig,
+    ) -> RustvelloResult<()> {
+        if self.tasks.contains_key(&task_id) {
+            return Err(RustvelloError::Configuration {
+                message: format!("task already registered: {}", task_id),
+            });
+        }
+        self.tasks
+            .insert(task_id.clone(), Arc::new(TaskProxy::new(task_id, config)));
         Ok(())
     }
 
@@ -514,6 +570,7 @@ pub trait TaskModule: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustvello_proto::identifiers::TaskLanguage;
 
     fn dummy_fn() -> TaskFn {
         Arc::new(|_| Ok("ok".to_string()))
@@ -610,52 +667,49 @@ mod tests {
     }
     impl CrossLanguageSafe for TestParams {}
 
-    struct TestForeignTask;
-
-    impl ForeignTask for TestForeignTask {
-        type Params = TestParams;
-        type Result = String;
-
-        fn task_id(&self) -> TaskId {
-            TaskId::foreign("python", "analytics.tasks", "train_model")
-        }
+    fn test_foreign_task() -> ForeignTaskProxy<TestParams, String> {
+        ForeignTaskProxy::new(TaskId::for_language(
+            TaskLanguage::Python,
+            "analytics.tasks",
+            "train_model",
+        ))
     }
 
     #[test]
     fn register_foreign_task() {
         let mut reg = TaskRegistry::new();
-        reg.register_foreign(TestForeignTask).unwrap();
+        reg.register_foreign(test_foreign_task()).unwrap();
 
-        let tid = TaskId::foreign("python", "analytics.tasks", "train_model");
+        let tid = TaskId::for_language(TaskLanguage::Python, "analytics.tasks", "train_model");
         assert!(reg.contains(&tid));
         assert_eq!(reg.len(), 1);
 
         let dyn_task = reg.get_dyn(&tid).unwrap();
         assert_eq!(dyn_task.task_id(), &tid);
-        assert!(dyn_task.task_id().is_foreign());
+        assert_eq!(dyn_task.task_id().language(), TaskLanguage::Python);
     }
 
     #[test]
     fn foreign_task_execute_returns_error() {
         let mut reg = TaskRegistry::new();
-        reg.register_foreign(TestForeignTask).unwrap();
+        reg.register_foreign(test_foreign_task()).unwrap();
 
-        let tid = TaskId::foreign("python", "analytics.tasks", "train_model");
+        let tid = TaskId::for_language(TaskLanguage::Python, "analytics.tasks", "train_model");
         let dyn_task = reg.get_dyn(&tid).unwrap();
 
         let args = SerializedArguments::default();
         let result = dyn_task.execute(&args);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("foreign task"));
+        assert!(err_msg.contains("task proxy"));
         assert!(err_msg.contains("python"));
     }
 
     #[test]
     fn register_foreign_duplicate_errors() {
         let mut reg = TaskRegistry::new();
-        reg.register_foreign(TestForeignTask).unwrap();
-        let result = reg.register_foreign(TestForeignTask);
+        reg.register_foreign(test_foreign_task()).unwrap();
+        let result = reg.register_foreign(test_foreign_task());
         assert!(result.is_err());
     }
 

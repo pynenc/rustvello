@@ -1,0 +1,18 @@
+{% if pagination.has_prev || pagination.has_next %}
+<div class="monitor-pagination">
+  <div class="monitor-pagination-summary">
+    {% if let Some(total_count) = pagination.total_count %}{{ total_count }} results · {% endif %}Page {{ pagination.page }}{% if let Some(total_pages) = pagination.total_pages %} of {{ total_pages }}{% endif %}
+  </div>
+  <nav aria-label="List pagination">
+    <ul class="pagination pagination-sm mb-0">
+      <li class="page-item{% if !pagination.has_prev %} disabled{% endif %}">
+        <a class="page-link" href="{{ pagination_path }}?{{ pagination_query }}{% if !pagination_query.is_empty() %}&{% endif %}page={{ pagination.page - 1 }}" aria-label="Previous page">Previous</a>
+      </li>
+      <li class="page-item active"><span class="page-link">{{ pagination.page }}</span></li>
+      <li class="page-item{% if !pagination.has_next %} disabled{% endif %}">
+        <a class="page-link" href="{{ pagination_path }}?{{ pagination_query }}{% if !pagination_query.is_empty() %}&{% endif %}page={{ pagination.page + 1 }}" aria-label="Next page">Next</a>
+      </li>
+    </ul>
+  </nav>
+</div>
+{% endif %}

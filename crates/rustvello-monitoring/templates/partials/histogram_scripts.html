@@ -1,72 +1,212 @@
 <script>
 (function () {
+  function cssEscape(value) {
+    if (window.CSS && CSS.escape) return CSS.escape(value);
+    return String(value).replace(/["\\]/g, "\\$&");
+  }
+
+  function formatNumber(value) {
+    return (Number(value) || 0).toLocaleString();
+  }
+
   function tooltip() {
-    var node = document.getElementById('histogram-tooltip');
+    var node = document.getElementById("histogram-tooltip");
     if (!node) {
-      node = document.createElement('div');
-      node.id = 'histogram-tooltip';
-      node.className = 'histogram-tooltip';
+      node = document.createElement("div");
+      node.id = "histogram-tooltip";
+      node.className = "histogram-tooltip";
       document.body.appendChild(node);
     }
     return node;
   }
-  function highlight(bucket, enabled) {
-    (bucket.dataset.invocationIds || '').split(/\s+/).filter(Boolean).forEach(function (id) {
-      document.querySelectorAll('[data-invocation-id="' + CSS.escape(id) + '"]').forEach(function (element) {
-        if (!element.closest('.histogram-bucket')) element.classList.toggle('invocation-highlight', enabled);
-      });
+
+  function panelData(panel) {
+    if (panel._histogramData) return panel._histogramData;
+    var script = document.getElementById(panel.dataset.histogramData || "");
+    if (!script) return null;
+    try {
+      panel._histogramData = JSON.parse(script.textContent || "{}");
+    } catch (_) {
+      panel._histogramData = null;
+    }
+    return panel._histogramData;
+  }
+
+  function setBucketHover(panel, index, enabled) {
+    panel.querySelectorAll('.histogram-bucket[data-bucket-index="' + cssEscape(index) + '"]').forEach(function (peer) {
+      peer.classList.toggle("histogram-hovered", enabled);
     });
   }
-  function bind(root) {
-    root.querySelectorAll('.histogram-bucket').forEach(function (bucket) {
-      if (bucket.dataset.histogramBound) return;
-      bucket.dataset.histogramBound = '1';
+
+  function restoreLegend(panel) {
+    var time = panel.querySelector("[data-histogram-time]");
+    if (time) time.textContent = "";
+    panel.querySelectorAll("[data-total]").forEach(function (cell) {
+      var value = Number(cell.dataset.total) || 0;
+      cell.textContent = formatNumber(value);
+      if (cell.dataset.histogramCell && cell.dataset.histogramCell !== "total") {
+        cell.classList.toggle("histogram-muted", value === 0);
+      }
+      cell.classList.remove("histogram-hot");
+    });
+  }
+
+  function updateLegend(panel, index) {
+    var data = panelData(panel);
+    if (!data || index === null || index === undefined) {
+      restoreLegend(panel);
+      return;
+    }
+    var time = panel.querySelector("[data-histogram-time]");
+    if (time) time.textContent = data.labels[index] || "";
+
+    data.tasks.forEach(function (task) {
+      var row = panel.querySelector('[data-histogram-task-id="' + cssEscape(task.id) + '"]');
+      if (!row) return;
+      var rowTotal = 0;
+      data.groups.forEach(function (group) {
+        var series = (task.counts_by_runtime || {})[group.id] || [];
+        var count = Number(series[index]) || 0;
+        rowTotal += count;
+        var cell = row.querySelector('[data-histogram-cell="' + cssEscape(group.id) + '"]');
+        if (cell) {
+          cell.textContent = formatNumber(count);
+          cell.classList.toggle("histogram-muted", count === 0);
+          cell.classList.add("histogram-hot");
+        }
+      });
+      var totalCell = row.querySelector('[data-histogram-cell="total"]');
+      if (totalCell) {
+        totalCell.textContent = formatNumber(rowTotal);
+        totalCell.classList.add("histogram-hot");
+      }
+    });
+
+    var grandTotal = 0;
+    data.groups.forEach(function (group) {
+      var columnTotal = 0;
+      data.tasks.forEach(function (task) {
+        var series = (task.counts_by_runtime || {})[group.id] || [];
+        columnTotal += Number(series[index]) || 0;
+      });
+      grandTotal += columnTotal;
+      var footer = panel.querySelector('[data-histogram-footer="' + cssEscape(group.id) + '"]');
+      if (footer) {
+        footer.textContent = formatNumber(columnTotal);
+        footer.classList.add("histogram-hot");
+      }
+      var badge = panel.querySelector('[data-histogram-worker-badge="' + cssEscape(group.id) + '"]');
+      if (badge) {
+        var workers = Number((group.worker_counts || [])[index]) || 0;
+        badge.textContent = formatNumber(workers);
+        badge.classList.add("histogram-hot");
+      }
+    });
+
+    var grand = panel.querySelector('[data-histogram-footer="total"]');
+    if (grand) {
+      grand.textContent = formatNumber(grandTotal);
+      grand.classList.add("histogram-hot");
+    }
+  }
+
+  function tooltipLeft(clientX) {
+    return Math.max(8, Math.min(clientX + 12, window.innerWidth - 460));
+  }
+
+  function enterBucket(panel, bucket, event) {
+    var tip = tooltip();
+    var clientX = Number.isFinite(event.clientX) ? event.clientX : window.innerWidth / 2;
+    var clientY = Number.isFinite(event.clientY) ? event.clientY : 48;
+    tip.textContent = bucket.dataset.tooltip || "";
+    tip.style.display = "block";
+    tip.style.left = tooltipLeft(clientX) + "px";
+    tip.style.top = Math.max(8, clientY - 38) + "px";
+    setBucketHover(panel, bucket.dataset.bucketIndex, true);
+    updateLegend(panel, Number(bucket.dataset.bucketIndex));
+    if (window.rustvelloSetTimeCursor) {
+      window.rustvelloSetTimeCursor(bucket.dataset.bucketStart, bucket.dataset.bucketEnd, true);
+    }
+  }
+
+  function leaveBucket(panel, bucket) {
+    tooltip().style.display = "none";
+    setBucketHover(panel, bucket.dataset.bucketIndex, false);
+    updateLegend(panel, null);
+    if (window.rustvelloSetTimeCursor) window.rustvelloSetTimeCursor(null, null, false);
+  }
+
+  function bind(panel) {
+    if (panel.dataset.histogramBound) return;
+    panel.dataset.histogramBound = "1";
+    panelData(panel);
+
+    panel.addEventListener("mouseover", function (event) {
+      var bucket = event.target.closest(".histogram-bucket");
+      if (!bucket || !panel.contains(bucket) || bucket.contains(event.relatedTarget)) return;
+      enterBucket(panel, bucket, event);
+    });
+    panel.addEventListener("mouseout", function (event) {
+      var bucket = event.target.closest(".histogram-bucket");
+      if (!bucket || !panel.contains(bucket) || bucket.contains(event.relatedTarget)) return;
+      leaveBucket(panel, bucket);
+    });
+    panel.addEventListener("mousemove", function (event) {
+      if (!event.target.closest(".histogram-bucket")) return;
       var tip = tooltip();
-      bucket.addEventListener('mouseenter', function (event) {
-        tip.textContent = bucket.dataset.tooltip || '';
-        tip.style.display = 'block';
-        tip.style.left = Math.min(event.clientX + 12, window.innerWidth - 440) + 'px';
-        tip.style.top = Math.max(8, event.clientY - 38) + 'px';
-        highlight(bucket, true);
-      });
-      bucket.addEventListener('mousemove', function (event) {
-        tip.style.left = Math.min(event.clientX + 12, window.innerWidth - 440) + 'px';
-        tip.style.top = Math.max(8, event.clientY - 38) + 'px';
-      });
-      bucket.addEventListener('mouseleave', function () {
-        tip.style.display = 'none';
-        highlight(bucket, false);
+      tip.style.left = tooltipLeft(event.clientX) + "px";
+      tip.style.top = Math.max(8, event.clientY - 38) + "px";
+    });
+    panel.addEventListener("focusin", function (event) {
+      var bucket = event.target.closest(".histogram-bucket");
+      if (bucket) enterBucket(panel, bucket, event);
+    });
+    panel.addEventListener("focusout", function (event) {
+      var bucket = event.target.closest(".histogram-bucket");
+      if (bucket) leaveBucket(panel, bucket);
+    });
+    panel.addEventListener("click", function (event) {
+      var row = event.target.closest(".histogram-task-row");
+      if (!row || !panel.contains(row)) return;
+      var taskId = row.dataset.histogramTaskId;
+      if (!taskId) return;
+      row.classList.toggle("histogram-row-hidden");
+      var muted = row.classList.contains("histogram-row-hidden");
+      panel.querySelectorAll('.histogram-task-segment[data-task-id="' + cssEscape(taskId) + '"]').forEach(function (segment) {
+        segment.classList.toggle("histogram-series-muted", muted);
       });
     });
-    root.querySelectorAll('.histogram-status-toggle').forEach(function (input) {
-      if (input.dataset.histogramBound) return;
-      input.dataset.histogramBound = '1';
-      input.addEventListener('change', function () {
-        var panel = input.closest('[data-histogram-panel]');
-        var selected = Array.from(panel.querySelectorAll('.histogram-status-toggle:checked')).map(function (item) { return item.value; });
+    panel.addEventListener("change", function (event) {
+      var input = event.target.closest(".histogram-status-toggle");
+      if (!input || !panel.contains(input)) return;
+        var selected = Array.from(panel.querySelectorAll(".histogram-status-toggle:checked")).map(function (item) { return item.value; });
         if (panel.dataset.histogramForm) {
           var form = document.getElementById(panel.dataset.histogramForm);
           if (form) {
             var hidden = form.querySelector('input[name="histogram_status"]');
             if (!hidden) {
-              hidden = document.createElement('input');
-              hidden.type = 'hidden';
-              hidden.name = 'histogram_status';
+              hidden = document.createElement("input");
+              hidden.type = "hidden";
+              hidden.name = "histogram_status";
               form.appendChild(hidden);
             }
-            hidden.value = selected.join(',');
+            hidden.value = selected.join(",");
             form.requestSubmit();
             return;
           }
         }
         var url = new URL(window.location.href);
-        url.searchParams.set('histogram_status', selected.join(','));
+        url.searchParams.set("histogram_status", selected.join(","));
         window.location.assign(url.toString());
-      });
     });
+    restoreLegend(panel);
   }
-  function bindAll() { document.querySelectorAll('[data-histogram-panel]').forEach(bind); }
-  document.addEventListener('DOMContentLoaded', bindAll);
-  document.body.addEventListener('htmx:afterSwap', bindAll);
+
+  function bindAll() {
+    document.querySelectorAll("[data-histogram-panel]").forEach(bind);
+  }
+
+  document.addEventListener("DOMContentLoaded", bindAll);
+  document.body.addEventListener("htmx:afterSwap", bindAll);
 })();
 </script>

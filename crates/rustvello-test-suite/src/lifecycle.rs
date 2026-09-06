@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use rustvello_core::broker::Broker;
 use rustvello_core::error::TaskError;
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::identifiers::RunnerId;
@@ -20,7 +20,7 @@ use crate::helpers::test_task_id;
 /// Convenience bundle for passing all three backends.
 pub struct BackendTriple {
     pub broker: Arc<dyn Broker>,
-    pub orchestrator: Arc<dyn Orchestrator>,
+    pub orchestrator: Arc<dyn InvocationControlBackend>,
     pub state_backend: Arc<dyn StateBackend>,
 }
 

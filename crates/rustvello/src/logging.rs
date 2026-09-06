@@ -571,7 +571,7 @@ mod tests {
         let _i = inv_span.enter();
 
         // Record task_id after span creation (mirrors real runner code)
-        tracing::Span::current().record("task_id", tracing::field::display("test.my_task"));
+        tracing::Span::current().record("task_id", tracing::field::display("rust::test.my_task"));
 
         tracing::info!("Hello from test");
 
@@ -600,13 +600,13 @@ mod tests {
         );
         // Invocation + task (full UUID)
         assert!(
-            output.contains("bbbb1111-2222-3333-4444-555566667777:test.my_task"),
+            output.contains("bbbb1111-2222-3333-4444-555566667777:rust::test.my_task"),
             "Should contain full inv_uuid:task_key. Got: {output}"
         );
         // Full bracket in correct order (app_id NOT in bracket)
         assert!(
             output.contains(
-                "[PTR(aaaa1111).W(wwww1111)bbbb1111-2222-3333-4444-555566667777:test.my_task]"
+                "[PTR(aaaa1111).W(wwww1111)bbbb1111-2222-3333-4444-555566667777:rust::test.my_task]"
             ),
             "Should contain full bracket context. Got: {output}"
         );
@@ -689,7 +689,7 @@ mod tests {
 
                     async {
                         tracing::Span::current()
-                            .record("task_id", tracing::field::display("test.my_task"));
+                            .record("task_id", tracing::field::display("rust::test.my_task"));
                         tracing::info!("Invocation completed status:success");
                     }
                     .instrument(inv_span)
@@ -728,13 +728,13 @@ mod tests {
         );
         // Invocation + task (full UUID)
         assert!(
-            output.contains("bbbb1111-2222-3333-4444-555566667777:test.my_task"),
+            output.contains("bbbb1111-2222-3333-4444-555566667777:rust::test.my_task"),
             "Should contain invocation context. Got: {output}"
         );
         // Full bracket (app_id NOT in bracket)
         assert!(
             output.contains(
-                "[PTR(aaaa1111).W(wwww1111)bbbb1111-2222-3333-4444-555566667777:test.my_task]"
+                "[PTR(aaaa1111).W(wwww1111)bbbb1111-2222-3333-4444-555566667777:rust::test.my_task]"
             ),
             "Should contain full bracket context. Got: {output}"
         );
@@ -792,7 +792,7 @@ mod tests {
         );
         let _i = inv_span.enter();
 
-        tracing::Span::current().record("task_id", tracing::field::display("test.my_task"));
+        tracing::Span::current().record("task_id", tracing::field::display("rust::test.my_task"));
 
         tracing::info!("ANSI regression test");
 
@@ -821,13 +821,13 @@ mod tests {
         );
         // Invocation ID + task_id (full UUID)
         assert!(
-            output.contains("bbbb1111-2222-3333-4444-555566667777:test.my_task"),
+            output.contains("bbbb1111-2222-3333-4444-555566667777:rust::test.my_task"),
             "invocation_id or task_id missing. Got: {output}"
         );
         // Full bracket context — all fields present and correctly ordered
         assert!(
             output.contains(
-                "[PTR(aaaa1111).W(wwww1111)bbbb1111-2222-3333-4444-555566667777:test.my_task]"
+                "[PTR(aaaa1111).W(wwww1111)bbbb1111-2222-3333-4444-555566667777:rust::test.my_task]"
             ),
             "Full bracket context missing or malformed. Got: {output}"
         );
@@ -920,7 +920,7 @@ mod tests {
         );
         let _i = inv_span.enter();
 
-        tracing::Span::current().record("task_id", tracing::field::display("test.my_task"));
+        tracing::Span::current().record("task_id", tracing::field::display("rust::test.my_task"));
 
         tracing::info!("Context JSON test");
 
@@ -934,7 +934,7 @@ mod tests {
         assert_eq!(obj["runner_id"], "aaaa1111-2222-3333-4444-555566667777");
         assert_eq!(obj["worker_id"], "wwww1111-2222-3333-4444-555566667777");
         assert_eq!(obj["invocation_id"], "bbbb1111-2222-3333-4444-555566667777");
-        assert_eq!(obj["task_id"], "test.my_task");
+        assert_eq!(obj["task_id"], "rust::test.my_task");
         assert_eq!(obj["severity"], "INFO");
         assert_eq!(obj["system"], "rust");
 

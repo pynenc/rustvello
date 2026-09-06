@@ -31,15 +31,15 @@ impl Default for TimelineConfig {
     fn default() -> Self {
         Self {
             width: 2000.0,
-            lane_height: 32.0,
-            left_margin: 320.0,
-            right_margin: 20.0,
-            top_margin: 40.0,
-            bottom_margin: 70.0,
-            lane_padding: 4.0,
-            point_radius: 5.0,
-            line_stroke_width: 1.5,
-            segment_height: 20.0,
+            lane_height: 22.0,
+            left_margin: 420.0,
+            right_margin: 44.0,
+            top_margin: 32.0,
+            bottom_margin: 46.0,
+            lane_padding: 1.5,
+            point_radius: 3.2,
+            line_stroke_width: 1.15,
+            segment_height: 12.0,
             min_segment_width: 2.0,
         }
     }

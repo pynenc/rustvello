@@ -1,6 +1,8 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use crate::utils::parse_task_id;
+
 /// Python wrapper for TaskId
 #[pyclass(name = "TaskId")]
 #[derive(Clone)]
@@ -11,10 +13,15 @@ pub struct PyTaskId {
 #[pymethods]
 impl PyTaskId {
     #[new]
-    fn new(module: String, name: String) -> PyResult<Self> {
-        let inner = rustvello_proto::identifiers::TaskId::try_new(module, name)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    #[pyo3(signature = (module, name, language = "python".to_owned()))]
+    fn new(module: String, name: String, language: String) -> PyResult<Self> {
+        let inner = parse_task_id(&language, &module, &name)?;
         Ok(Self { inner })
+    }
+
+    #[getter]
+    fn language(&self) -> &str {
+        self.inner.language().as_str()
     }
 
     #[getter]
@@ -32,7 +39,12 @@ impl PyTaskId {
     }
 
     fn __repr__(&self) -> String {
-        format!("TaskId('{}', '{}')", self.inner.module(), self.inner.name())
+        format!(
+            "TaskId('{}', '{}', language='{}')",
+            self.inner.module(),
+            self.inner.name(),
+            self.inner.language()
+        )
     }
 }
 
@@ -79,7 +91,8 @@ mod tests {
     #[test]
     fn task_id_valid() {
         Python::with_gil(|_py| {
-            let tid = PyTaskId::new("my_module".into(), "my_func".into()).unwrap();
+            let tid = PyTaskId::new("my_module".into(), "my_func".into(), "python".into()).unwrap();
+            assert_eq!(tid.language(), "python");
             assert_eq!(tid.module(), "my_module");
             assert_eq!(tid.name(), "my_func");
             assert!(tid.__str__().contains("my_module"));
@@ -90,7 +103,7 @@ mod tests {
     #[test]
     fn task_id_repr() {
         Python::with_gil(|_py| {
-            let tid = PyTaskId::new("mod".into(), "fn".into()).unwrap();
+            let tid = PyTaskId::new("mod".into(), "fn".into(), "python".into()).unwrap();
             let repr = tid.__repr__();
             assert!(repr.starts_with("TaskId("));
             assert!(repr.contains("mod"));

@@ -40,14 +40,18 @@ pub struct ActiveRunnerInfo {
     pub last_service_end: Option<DateTime<Utc>>,
 }
 
-/// Orchestrator interface — manages the invocation lifecycle.
+/// Persistence port for atomic invocation-control state.
 ///
 /// Mirrors pynenc's `BaseOrchestrator`. Responsible for:
-/// - Creating and registering invocations
+/// - Registering invocation control state and indexes
 /// - Managing status transitions (atomic state machine)
-/// - Routing calls to the broker
-/// - Concurrency control
+/// - Concurrency control and execution ownership
 /// - Blocking control (waiting for results)
+/// - Runner heartbeats, recovery, and global-service coordination
+///
+/// This backend does not publish broker messages or persist invocation
+/// payloads, results, or history. Cross-backend use cases are sequenced by the
+/// concrete orchestrator in the `rustvello` crate.
 ///
 /// This is a composite trait combining five sub-traits:
 /// - [`OrchestratorStatus`] — registration, status, retries, cleanup
@@ -58,7 +62,7 @@ pub struct ActiveRunnerInfo {
 ///
 /// Implementations should implement the sub-traits directly.
 /// This supertrait is auto-implemented via a blanket impl.
-pub trait Orchestrator:
+pub trait InvocationControlBackend:
     OrchestratorStatus
     + OrchestratorConcurrency
     + OrchestratorBlocking
@@ -73,7 +77,7 @@ impl<
             + OrchestratorBlocking
             + OrchestratorQuery
             + OrchestratorRecovery,
-    > Orchestrator for T
+    > InvocationControlBackend for T
 {
 }
 

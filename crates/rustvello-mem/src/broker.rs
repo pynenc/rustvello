@@ -7,7 +7,7 @@ use tracing::instrument;
 
 use rustvello_core::broker::{validate_routing, Broker, DEFAULT_QUEUE};
 use rustvello_core::error::RustvelloResult;
-use rustvello_proto::identifiers::{InvocationId, TaskId};
+use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
 /// In-memory broker with a global queue and per-task queues.
 ///
 /// Not suitable for production — all data is lost on process exit.
@@ -124,7 +124,7 @@ impl Broker for MemBroker {
 
     async fn retrieve_invocation_for_language_from_queue(
         &self,
-        language: &str,
+        language: TaskLanguage,
         queue_name: &str,
     ) -> RustvelloResult<Option<InvocationId>> {
         validate_routing(queue_name, 0.0)?;
@@ -136,11 +136,11 @@ impl Broker for MemBroker {
                 if item.queue_name != queue_name {
                     return false;
                 }
-                match &item.task_id {
-                    None => true,
-                    Some(task_id) if language.is_empty() => task_id.language().is_empty(),
-                    Some(task_id) => task_id.language() == language,
-                }
+                item.task_id
+                    .as_ref()
+                    .map_or(language == TaskLanguage::Rust, |task_id| {
+                        task_id.language() == language
+                    })
             })
             .max_by(|(left_index, left), (right_index, right)| {
                 left.priority
@@ -153,7 +153,7 @@ impl Broker for MemBroker {
 
     async fn retrieve_invocation_for_language(
         &self,
-        language: &str,
+        language: TaskLanguage,
     ) -> RustvelloResult<Option<InvocationId>> {
         self.retrieve_invocation_for_language_from_queue(language, DEFAULT_QUEUE)
             .await
@@ -202,6 +202,7 @@ impl Broker for MemBroker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustvello_proto::identifiers::TaskLanguage;
 
     #[tokio::test]
     async fn test_route_and_retrieve() {
@@ -298,7 +299,7 @@ mod tests {
     #[tokio::test]
     async fn test_language_routing_foreign_task() {
         let broker = MemBroker::new();
-        let py_task = TaskId::foreign("python", "analytics.tasks", "train");
+        let py_task = TaskId::for_language(TaskLanguage::Python, "analytics.tasks", "train");
         let rs_task = TaskId::new("math", "add");
         let py_inv = InvocationId::new();
         let rs_inv = InvocationId::new();
@@ -314,34 +315,42 @@ mod tests {
 
         // Python worker should get only the python invocation
         let got = broker
-            .retrieve_invocation_for_language("python")
+            .retrieve_invocation_for_language(TaskLanguage::Python)
             .await
             .unwrap();
         assert_eq!(got, Some(py_inv));
 
         // Python queue is now empty
         let got = broker
-            .retrieve_invocation_for_language("python")
+            .retrieve_invocation_for_language(TaskLanguage::Python)
             .await
             .unwrap();
         assert_eq!(got, None);
 
-        // Local (empty lang) worker should get the rust task (no "::" in key)
-        let got = broker.retrieve_invocation_for_language("").await.unwrap();
+        // Rust worker should get only the Rust invocation.
+        let got = broker
+            .retrieve_invocation_for_language(TaskLanguage::Rust)
+            .await
+            .unwrap();
         assert_eq!(got, Some(rs_inv));
     }
 
     #[tokio::test]
-    async fn test_language_routing_global_queue_serves_all() {
+    async fn test_task_less_routing_defaults_to_rust() {
         let broker = MemBroker::new();
         let inv = InvocationId::new();
 
-        // Route via global queue (no task ID)
+        // Route through the legacy API with no task identity.
         broker.route_invocation(&inv).await.unwrap();
 
-        // Any language worker should be able to get it
         let got = broker
-            .retrieve_invocation_for_language("python")
+            .retrieve_invocation_for_language(TaskLanguage::Python)
+            .await
+            .unwrap();
+        assert_eq!(got, None);
+
+        let got = broker
+            .retrieve_invocation_for_language(TaskLanguage::Rust)
             .await
             .unwrap();
         assert_eq!(got, Some(inv));

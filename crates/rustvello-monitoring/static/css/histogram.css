@@ -1,19 +1,23 @@
 .histogram-panel {
-  border-top: 1px solid #e5e7eb;
-  margin-top: 0.35rem;
-  padding-top: 0.4rem;
+  --histogram-label-rail: 21%;
+  background: #fff;
+  border: 1px solid #dfe4ea;
+  border-radius: 6px;
+  margin-top: 0.45rem;
+  padding: 0.45rem 0 0.5rem;
 }
 .histogram-toolbar {
   align-items: center;
   display: flex;
   gap: 0.75rem;
   justify-content: space-between;
-  min-height: 28px;
+  min-height: 24px;
+  padding-inline: 0.65rem;
 }
 .histogram-title {
-  color: #495057;
+  color: #343a40;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
 }
 .histogram-status-selector {
   display: flex;
@@ -40,22 +44,35 @@
 }
 .histogram-svg-container svg {
   display: block;
+  min-width: 1600px;
+}
+.histogram-layout {
+  min-height: 0;
   min-width: 0;
+  position: relative;
 }
 .histogram-bucket {
   cursor: pointer;
   outline: none;
 }
-.histogram-bucket rect {
-  opacity: 0.86;
+.histogram-bucket rect.histogram-task-segment {
+  opacity: 0.9;
+  shape-rendering: crispEdges;
 }
-.histogram-bucket:hover rect,
-.histogram-bucket:focus rect,
-.histogram-bucket.invocation-highlight rect {
+.histogram-bucket:hover rect.histogram-task-segment,
+.histogram-bucket:focus rect.histogram-task-segment,
+.histogram-bucket.invocation-highlight rect.histogram-task-segment,
+.histogram-bucket.histogram-hovered rect.histogram-task-segment {
   filter: brightness(0.9);
   opacity: 1;
   stroke: #212529;
   stroke-width: 0.8px;
+}
+.histogram-task-segment.histogram-series-muted {
+  opacity: 0.12;
+}
+.histogram-worker-line {
+  pointer-events: none;
 }
 .histogram-empty {
   color: #6c757d;
@@ -66,15 +83,127 @@
 .histogram-panel-compact .histogram-toolbar {
   min-height: 24px;
 }
+.histogram-legend {
+  background: rgba(255, 255, 255, 0.98);
+  border-right: 1px solid #dfe4ea;
+  bottom: 0;
+  left: 0;
+  overflow: auto;
+  padding: 0.15rem 0.55rem 0;
+  position: absolute;
+  top: 0;
+  width: var(--histogram-label-rail);
+  z-index: 2;
+}
+.histogram-legend-head {
+  align-items: center;
+  color: #6c757d;
+  display: flex;
+  font-size: 10px;
+  gap: 0.5rem;
+  line-height: 1.25;
+  margin: 0.1rem 0 0.25rem;
+}
+.histogram-legend-time {
+  color: #212529;
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: auto;
+}
+.histogram-legend-table {
+  border-collapse: collapse;
+  font-size: 10px;
+  table-layout: auto;
+  width: 100%;
+}
+.histogram-legend-table th,
+.histogram-legend-table td {
+  border-bottom: 1px solid #f1f3f5;
+  padding: 0.16rem 0.22rem;
+  text-align: right;
+  vertical-align: middle;
+}
+.histogram-legend-table th {
+  background: #f8f9fa;
+  border-bottom-color: #dee2e6;
+  color: #495057;
+  font-weight: 700;
+}
+.histogram-legend-table .histogram-swatch-col {
+  width: 16px;
+}
+.histogram-legend-table .histogram-task-col {
+  text-align: left;
+  overflow-wrap: anywhere;
+  width: 100%;
+}
+.histogram-task-row {
+  cursor: pointer;
+}
+.histogram-task-row.histogram-row-hidden td {
+  opacity: 0.38;
+}
+.histogram-swatch {
+  border-radius: 2px;
+  display: inline-block;
+  height: 10px;
+  width: 10px;
+}
+.histogram-runtime-marker {
+  border-radius: 1px;
+  display: inline-block;
+  height: 2px;
+  margin-right: 0.25rem;
+  vertical-align: middle;
+  width: 14px;
+}
+.histogram-worker-badge {
+  background: #e9ecef;
+  border: 1px solid #dee2e6;
+  border-radius: 3px;
+  color: #495057;
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  margin-left: 0.25rem;
+  min-width: 1.25rem;
+  padding: 0.02rem 0.25rem;
+  text-align: center;
+}
+.histogram-worker-badge.histogram-hot {
+  background: #212529;
+  border-color: #212529;
+  color: #fff;
+}
+.histogram-count.histogram-hot {
+  color: #212529;
+  font-weight: 700;
+}
+.histogram-muted {
+  color: #adb5bd;
+}
+.histogram-footer-row td {
+  background: #f8f9fa;
+  border-top: 1px solid #dee2e6;
+  font-weight: 700;
+}
 .histogram-tooltip {
   background: rgba(33, 37, 41, 0.96);
   border-radius: 4px;
   color: #fff;
   display: none;
   font-size: 11px;
+  line-height: 1.35;
   max-width: 430px;
   padding: 0.35rem 0.5rem;
   pointer-events: none;
   position: fixed;
+  white-space: pre-line;
   z-index: 1090;
+}
+
+@media (max-width: 1100px) {
+  .histogram-panel {
+    --histogram-label-rail: 21%;
+  }
 }

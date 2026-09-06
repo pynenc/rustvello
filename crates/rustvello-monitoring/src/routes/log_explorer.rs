@@ -9,9 +9,11 @@ use axum::Router;
 
 use crate::histogram::{
     build_histogram, parse_categories, HistogramCategory, HistogramEntry, HistogramPanel,
+    HistogramPanelOptions,
 };
 use crate::log_explorer::parser::{self, EntityRef, ParsedLogLine};
 use crate::log_explorer::render;
+use crate::navigation::{MonitoringDestination, MonitoringLink, MonitoringScope, TimeWindow};
 use crate::state::AppState;
 use crate::util::view_helpers::{get_active_app, AppResult, HtmlTemplate};
 use crate::AppInstance;
@@ -38,7 +40,15 @@ pub struct LineAnalysis {
     /// CSS class for the card level coloring.
     pub level_class: String,
     /// Entity references from the message body (not from bracket).
-    pub extra_entity_refs: Vec<EntityRef>,
+    pub extra_entity_refs: Vec<EntityRefView>,
+    pub invocation_timeline_url: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct EntityRefView {
+    pub kind: String,
+    pub value: String,
+    pub timeline_url: Option<String>,
 }
 
 /// Full analysis of a multi-line log block.
@@ -58,7 +68,7 @@ pub struct MultiLogAnalysis {
     /// Inline SVG timeline of referenced invocations (empty if none).
     pub svg_content: String,
     /// Query string for linking to the full timeline view.
-    pub timeline_qs: String,
+    pub timeline_url: String,
     /// Map of invocation ID → task key for cross-highlighting.
     pub inv_task_map: std::collections::HashMap<String, String>,
     /// Occupancy histogram for the same invocation scope.
@@ -77,6 +87,7 @@ struct LogExplorerTemplate {
     log_text: String,
     has_input: bool,
     analysis: Option<MultiLogAnalysis>,
+    timeline_url_template: String,
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -96,6 +107,7 @@ async fn index(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
         log_text: String::new(),
         has_input: false,
         analysis: None,
+        timeline_url_template: invocation_timeline_link("__INVOCATION_ID__"),
     }))
 }
 
@@ -119,6 +131,7 @@ async fn analyze(
         log_text,
         has_input: true,
         analysis,
+        timeline_url_template: invocation_timeline_link("__INVOCATION_ID__"),
     }))
 }
 
@@ -147,7 +160,20 @@ async fn analyse_logs(
                 .map_or("", render::level_card_class)
                 .to_owned();
 
-            let extra_entity_refs = parsed.entity_refs.clone();
+            let extra_entity_refs = parsed
+                .entity_refs
+                .iter()
+                .map(|entity| EntityRefView {
+                    kind: entity.kind.clone(),
+                    value: entity.value.clone(),
+                    timeline_url: is_invocation_ref(&entity.kind)
+                        .then(|| invocation_timeline_link(&entity.value)),
+                })
+                .collect();
+            let invocation_timeline_url = parsed
+                .invocation_id
+                .as_deref()
+                .map(invocation_timeline_link);
 
             LineAnalysis {
                 parsed,
@@ -155,6 +181,7 @@ async fn analyse_logs(
                 message_html,
                 level_class,
                 extra_entity_refs,
+                invocation_timeline_url,
             }
         })
         .collect();
@@ -178,7 +205,7 @@ async fn analyse_logs(
     let task_ref_count = all_entity_refs.iter().filter(|r| r.kind == "task").count();
 
     // Build inline SVG timeline from referenced invocations
-    let (svg_content, timeline_qs, inv_task_map) =
+    let (svg_content, timeline_url, inv_task_map) =
         build_log_timeline(&all_entity_refs, &lines, app).await;
     let histogram = build_log_histogram(&all_entity_refs, &lines, app, categories).await;
 
@@ -190,7 +217,7 @@ async fn analyse_logs(
         runner_ref_count,
         task_ref_count,
         svg_content,
-        timeline_qs,
+        timeline_url,
         inv_task_map,
         histogram,
     }
@@ -253,17 +280,19 @@ async fn build_log_timeline(
         })
         .collect();
 
-    // Build timeline query string
     let time_window = log_time_window(&timestamps);
-    let timeline_qs = if let Some((start, end)) = time_window {
-        format!(
-            "time_range=custom&start_date={}&end_date={}",
-            start.format("%Y-%m-%dT%H:%M:%S"),
-            end.format("%Y-%m-%dT%H:%M:%S"),
-        )
-    } else {
-        "time_range=5m".to_owned()
+    let mut scoped_ids = inv_ids.iter().cloned().collect::<Vec<_>>();
+    scoped_ids.sort();
+    let mut timeline_scope = MonitoringScope {
+        invocation_ids: scoped_ids,
+        ..MonitoringScope::default()
     };
+    if let Some((start, end)) = time_window {
+        timeline_scope = timeline_scope.with_time(TimeWindow::new(start, end));
+    }
+    let timeline_url = MonitoringLink::new(MonitoringDestination::Timeline)
+        .with_scope(timeline_scope)
+        .href();
 
     // Fetch invocation history from state backend
     let mut builder = crate::svg::TimelineDataBuilder::new(crate::svg::TimelineConfig::default());
@@ -307,7 +336,7 @@ async fn build_log_timeline(
     }
 
     if !found_any {
-        return (String::new(), timeline_qs, inv_task_map);
+        return (String::new(), timeline_url, inv_task_map);
     }
 
     // Fetch runner contexts for enriched labels (hostname, PID, runner class)
@@ -321,7 +350,21 @@ async fn build_log_timeline(
 
     let data = builder.build();
     let svg = crate::svg::TimelineSvgRenderer::render(&data);
-    (svg, timeline_qs, inv_task_map)
+    (svg, timeline_url, inv_task_map)
+}
+
+fn is_invocation_ref(kind: &str) -> bool {
+    matches!(
+        kind,
+        "invocation" | "parent-invocation" | "child-invocation" | "new-invocation"
+    )
+}
+
+fn invocation_timeline_link(invocation_id: &str) -> String {
+    MonitoringLink::new(MonitoringDestination::Timeline)
+        .with_scope(MonitoringScope::default().with_invocation(invocation_id))
+        .with_selected_invocation(invocation_id)
+        .href()
 }
 
 fn log_time_window(
@@ -407,14 +450,16 @@ async fn build_log_histogram(
     scoped_ids.sort();
     let common_params = vec![("inv_ids".to_owned(), scoped_ids.join(","))];
     let timeline_config = crate::svg::TimelineConfig::default();
-    HistogramPanel::from_data_with_y_axis_and_plot_bounds(
+    HistogramPanel::from_data_with_options(
         &data,
         &common_params,
         "/invocations/timeline",
         true,
-        None,
-        Some(timeline_config.left_margin),
-        Some(timeline_config.left_margin + timeline_config.drawable_width()),
+        HistogramPanelOptions {
+            plot_left: Some(timeline_config.left_margin),
+            plot_right: Some(timeline_config.left_margin + timeline_config.drawable_width()),
+            ..HistogramPanelOptions::default()
+        },
     )
     .with_form_id("log-form")
 }
@@ -531,7 +576,10 @@ fn collect_all_entity_refs(lines: &[LineAnalysis]) -> Vec<EntityRef> {
         for r in &la.extra_entity_refs {
             let key = (r.kind.clone(), r.value.clone());
             if seen.insert(key) {
-                refs.push(r.clone());
+                refs.push(EntityRef {
+                    kind: r.kind.clone(),
+                    value: r.value.clone(),
+                });
             }
         }
     }

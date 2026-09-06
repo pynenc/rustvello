@@ -52,7 +52,7 @@ class TestDecorator:
             return x
 
         assert isinstance(serial, TaskHandle)
-        key = f"{serial._module}.{serial._name}"
+        key = f"{serial._language}::{serial._module}.{serial._name}"
         assert sync_app._task_configs[key]["running_concurrency"] == 1
 
     def test_runner_config_retains_retry_and_cache_settings(self, sync_app: App) -> None:
@@ -60,7 +60,7 @@ class TestDecorator:
         def configured(x: int) -> int:
             return x
 
-        key = f"{configured._module}.{configured._name}"
+        key = f"{configured._language}::{configured._module}.{configured._name}"
         assert sync_app._task_configs[key]["max_retries"] == 3
         assert sync_app._task_configs[key]["cache_results"] is True
 

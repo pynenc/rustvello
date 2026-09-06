@@ -71,14 +71,14 @@ pub fn render_grid(
     total_height: f64,
 ) {
     let ticks = tick_positions(bounds);
-    let stroke_color = "#e0e0e0";
+    let stroke_color = "#edf0f3";
     for t in &ticks {
         let x = bounds.time_to_x(*t);
         let top = config.top_margin;
         let bot = total_height - config.bottom_margin;
         let _ = write!(
             buf,
-            "<line x1=\"{x:.1}\" y1=\"{top}\" x2=\"{x:.1}\" y2=\"{bot}\" stroke=\"{stroke_color}\" stroke-width=\"1\" stroke-dasharray=\"4,4\"/>",
+            "<line x1=\"{x:.1}\" y1=\"{top}\" x2=\"{x:.1}\" y2=\"{bot}\" stroke=\"{stroke_color}\" stroke-width=\"0.8\" stroke-dasharray=\"3,5\"/>",
         );
     }
 }
@@ -91,32 +91,32 @@ pub fn render_time_axis(buf: &mut String, config: &TimelineConfig, bounds: &Time
         return;
     }
     let ticks = tick_positions(bounds);
-    let axis_y = config.top_margin - 5.0;
-    let axis_color = "#999";
-    let text_fill = "#666";
+    let axis_y = config.top_margin - 4.0;
+    let axis_color = "#adb5bd";
+    let text_fill = "#6c757d";
 
     // Axis line
     let _ = write!(
         buf,
-        "<line x1=\"{left:.1}\" y1=\"{axis_y}\" x2=\"{right:.1}\" y2=\"{axis_y}\" stroke=\"{axis_color}\" stroke-width=\"1\"/>",
+        "<line x1=\"{left:.1}\" y1=\"{axis_y}\" x2=\"{right:.1}\" y2=\"{axis_y}\" stroke=\"{axis_color}\" stroke-width=\"0.8\"/>",
         left = config.left_margin,
-        right = config.width,
+        right = config.width - config.right_margin,
     );
 
     for t in &ticks {
         let x = bounds.time_to_x(*t);
         let label = format_tick_label(*t, dur_secs);
-        let tick_top = axis_y - 5.0;
+        let tick_top = axis_y - 4.0;
         // Tick mark
         let _ = write!(
             buf,
-            "<line x1=\"{x:.1}\" y1=\"{axis_y}\" x2=\"{x:.1}\" y2=\"{tick_top}\" stroke=\"{axis_color}\" stroke-width=\"1\"/>",
+            "<line x1=\"{x:.1}\" y1=\"{axis_y}\" x2=\"{x:.1}\" y2=\"{tick_top}\" stroke=\"{axis_color}\" stroke-width=\"0.8\"/>",
         );
         // Label
-        let label_y = axis_y - 10.0;
+        let label_y = axis_y - 8.0;
         let _ = write!(
             buf,
-            "<text x=\"{x:.1}\" y=\"{label_y}\" text-anchor=\"middle\" font-size=\"10\" fill=\"{text_fill}\">{label}</text>",
+            "<text x=\"{x:.1}\" y=\"{label_y}\" text-anchor=\"middle\" font-size=\"9\" fill=\"{text_fill}\">{label}</text>",
         );
     }
 }
@@ -155,12 +155,12 @@ pub fn render_legend(buf: &mut String, config: &TimelineConfig, total_height: f6
         let ry = y - 9.0;
         let _ = write!(
             buf,
-            "<rect x=\"{x:.1}\" y=\"{ry}\" width=\"12\" height=\"12\" fill=\"{color}\" rx=\"2\"/>",
+            "<rect x=\"{x:.1}\" y=\"{ry}\" width=\"10\" height=\"10\" fill=\"{color}\" rx=\"2\"/>",
         );
-        let tx = x + 16.0;
+        let tx = x + 14.0;
         let _ = write!(
             buf,
-            "<text x=\"{tx}\" y=\"{y}\" font-size=\"11\" fill=\"{label_fill}\">{status_name}</text>",
+            "<text x=\"{tx}\" y=\"{y}\" font-size=\"10\" fill=\"{label_fill}\">{status_name}</text>",
         );
         x += label_width;
     }
@@ -251,7 +251,7 @@ mod tests {
         render_grid(&mut buf, &config, &bounds, 400.0);
         // Should produce grid lines
         assert!(buf.contains("<line"));
-        assert!(buf.contains("stroke-dasharray=\"4,4\""));
+        assert!(buf.contains("stroke-dasharray=\"3,5\""));
     }
 
     #[test]

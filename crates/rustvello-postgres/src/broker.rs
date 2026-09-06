@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use rustvello_core::broker::{validate_routing, Broker, DEFAULT_QUEUE};
 use rustvello_core::error::RustvelloResult;
-use rustvello_proto::identifiers::{InvocationId, TaskId};
+use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
 
 use crate::db::{pg_err, Database};
 
@@ -106,45 +106,32 @@ impl Broker for PostgresBroker {
 
     async fn retrieve_invocation_for_language_from_queue(
         &self,
-        language: &str,
+        language: TaskLanguage,
         queue_name: &str,
     ) -> RustvelloResult<Option<InvocationId>> {
         validate_routing(queue_name, 0.0)?;
         let client = self.db.conn().await?;
-        let row = if language.is_empty() {
-            client
-                .query_opt(
-                    "DELETE FROM broker_queue WHERE id = (\
-                       SELECT id FROM broker_queue \
-                       WHERE queue_name = $1 AND (task_id IS NULL OR task_id NOT LIKE '%::%') \
-                       ORDER BY priority DESC, id ASC LIMIT 1 \
-                       FOR UPDATE SKIP LOCKED\
-                     ) RETURNING invocation_id",
-                    &[&queue_name],
-                )
-                .await
-                .map_err(pg_err)?
-        } else {
-            let prefix = format!("{language}::%");
-            client
-                .query_opt(
-                    "DELETE FROM broker_queue WHERE id = (\
-                       SELECT id FROM broker_queue \
-                       WHERE queue_name = $1 AND (task_id IS NULL OR task_id LIKE $2) \
-                       ORDER BY priority DESC, id ASC LIMIT 1 \
-                       FOR UPDATE SKIP LOCKED\
-                     ) RETURNING invocation_id",
-                    &[&queue_name, &prefix],
-                )
-                .await
-                .map_err(pg_err)?
-        };
+        let language = language.to_string();
+        let prefix = format!("{language}::%");
+        let row = client
+            .query_opt(
+                "DELETE FROM broker_queue WHERE id = (\
+                   SELECT id FROM broker_queue \
+                   WHERE queue_name = $1 \
+                     AND ((task_id IS NULL AND $2 = 'rust') OR task_id LIKE $3) \
+                   ORDER BY priority DESC, id ASC LIMIT 1 \
+                   FOR UPDATE SKIP LOCKED\
+                 ) RETURNING invocation_id",
+                &[&queue_name, &language, &prefix],
+            )
+            .await
+            .map_err(pg_err)?;
         Ok(row.map(|row| InvocationId::from_string(row.get::<_, String>(0))))
     }
 
     async fn retrieve_invocation_for_language(
         &self,
-        language: &str,
+        language: TaskLanguage,
     ) -> RustvelloResult<Option<InvocationId>> {
         self.retrieve_invocation_for_language_from_queue(language, DEFAULT_QUEUE)
             .await

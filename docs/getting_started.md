@@ -23,7 +23,7 @@ application, and a running worker.
 | **Task**         | A Rust function annotated with `#[rustvello::task]` — typed, serializable, auto-registered |
 | **Invocation**   | One execution request for a task + argument set; tracks status through an FSM              |
 | **Broker**       | Routes invocations into queues and delivers them to workers                                |
-| **Orchestrator** | Manages invocation lifecycle, concurrency control, heartbeats, and recovery                |
+| **Orchestrator** | Sequences complete invocation use cases across control, state, broker, and trigger ports   |
 | **StateBackend** | Stores results and errors persistently                                                     |
 | **TriggerStore** | Persists cron / event trigger state                                                        |
 | **TaskRunner**   | Pulls invocations from the broker and executes them concurrently                           |
@@ -155,7 +155,7 @@ Switch from in-memory to SQLite by enabling the feature flag and using the build
 
 ```toml
 # Cargo.toml
-rustvello = { version = "0.4.0", features = ["sqlite"] }
+rustvello = { version = "0.5.0", features = ["sqlite"] }
 ```
 
 ```bash
@@ -166,7 +166,7 @@ RUSTVELLO__DB_PATH=./my_app.db rustvello run --app-id my-app
 For Redis in production:
 
 ```toml
-rustvello = { version = "0.4.0", features = ["redis"] }
+rustvello = { version = "0.5.0", features = ["redis"] }
 ```
 
 ```bash
@@ -196,9 +196,25 @@ result = inv.result(timeout=30)  # 3
 ```
 
 Standalone Python tasks must be synchronous callables declared with `def`.
-Use the pynenc integration when a Python workflow needs framework-level import
-discovery or asynchronous task declarations. Argument binding follows the Python
-function signature, and arguments and results must be JSON serializable.
+Use `@app.workflow` for explicit workflow roots; call `rustvello.workflow_root()`
+inside the workflow body for deterministic `random()`, `utc_now()`, and `uuid()`
+operations. Use the pynenc integration when a Python application needs
+framework-level import discovery or asynchronous task declarations. Argument
+binding follows the Python function signature, and arguments and results must be
+JSON serializable.
+
+```python
+from rustvello import workflow_root
+
+@app.workflow
+def process_order(order_id: str) -> dict[str, str]:
+    root = workflow_root()
+    return {
+        "order_id": order_id,
+        "run_id": root.uuid(),
+        "recorded_at": root.utc_now(),
+    }
+```
 
 ### Backend selection
 

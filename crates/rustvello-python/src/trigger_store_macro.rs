@@ -113,7 +113,7 @@ macro_rules! impl_py_trigger_store {
             ) -> pyo3::PyResult<Vec<(String, String)>> {
                 use rustvello_core::trigger::TriggerStore;
                 let task_id =
-                    rustvello_proto::identifiers::TaskId::try_new(task_module, task_name)
+                    rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python, task_module, task_name)
                         .map_err(|e| {
                             pyo3::exceptions::PyValueError::new_err(e.to_string())
                         })?;
@@ -160,7 +160,7 @@ macro_rules! impl_py_trigger_store {
             ) -> pyo3::PyResult<u32> {
                 use rustvello_core::trigger::TriggerStore;
                 let task_id =
-                    rustvello_proto::identifiers::TaskId::try_new(task_module, task_name)
+                    rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python, task_module, task_name)
                         .map_err(|e| {
                             pyo3::exceptions::PyValueError::new_err(e.to_string())
                         })?;
@@ -316,7 +316,7 @@ macro_rules! impl_py_trigger_store {
                 let inv_status = crate::orchestrator::parse_status(status)?;
                 let ctx = StatusContext {
                     invocation_id: crate::utils::parse_invocation_id(invocation_id)?,
-                    task_id: rustvello_proto::identifiers::TaskId::try_new(
+                    task_id: rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python,
                         task_module,
                         task_name,
                     )
@@ -343,7 +343,7 @@ macro_rules! impl_py_trigger_store {
                 use rustvello_proto::trigger::ResultContext;
                 let ctx = ResultContext {
                     invocation_id: crate::utils::parse_invocation_id(invocation_id)?,
-                    task_id: rustvello_proto::identifiers::TaskId::try_new(
+                    task_id: rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python,
                         task_module,
                         task_name,
                     )
@@ -371,7 +371,7 @@ macro_rules! impl_py_trigger_store {
                 use rustvello_proto::trigger::ExceptionContext;
                 let ctx = ExceptionContext {
                     invocation_id: crate::utils::parse_invocation_id(invocation_id)?,
-                    task_id: rustvello_proto::identifiers::TaskId::try_new(
+                    task_id: rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python,
                         task_module,
                         task_name,
                     )
@@ -446,7 +446,7 @@ macro_rules! impl_py_trigger_store {
                 use rustvello_core::trigger::TriggerStore;
                 use rustvello_proto::trigger::{StatusCondition, TriggerCondition};
                 let task_id =
-                    rustvello_proto::identifiers::TaskId::try_new(task_module, task_name)
+                    rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python, task_module, task_name)
                         .map_err(|e| {
                             pyo3::exceptions::PyValueError::new_err(e.to_string())
                         })?;
@@ -526,7 +526,7 @@ macro_rules! impl_py_trigger_store {
                     ResultCondition, TriggerCondition,
                 };
                 let task_id =
-                    rustvello_proto::identifiers::TaskId::try_new(task_module, task_name)
+                    rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python, task_module, task_name)
                         .map_err(|e| {
                             pyo3::exceptions::PyValueError::new_err(e.to_string())
                         })?;
@@ -559,7 +559,7 @@ macro_rules! impl_py_trigger_store {
                     ExceptionCondition, TriggerCondition,
                 };
                 let task_id =
-                    rustvello_proto::identifiers::TaskId::try_new(task_module, task_name)
+                    rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python, task_module, task_name)
                         .map_err(|e| {
                             pyo3::exceptions::PyValueError::new_err(e.to_string())
                         })?;
@@ -591,7 +591,7 @@ macro_rules! impl_py_trigger_store {
             ) -> pyo3::PyResult<()> {
                 use rustvello_core::trigger::TriggerStore;
                 let task_id =
-                    rustvello_proto::identifiers::TaskId::try_new(task_module, task_name)
+                    rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python, task_module, task_name)
                         .map_err(|e| {
                             pyo3::exceptions::PyValueError::new_err(e.to_string())
                         })?;

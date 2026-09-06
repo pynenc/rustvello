@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use rustvello_core::broker::{validate_routing, Broker, DEFAULT_QUEUE};
 use rustvello_core::error::RustvelloResult;
-use rustvello_proto::identifiers::{InvocationId, TaskId};
+use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
 
 use crate::db::{blocking, lock_err, sql_err, Database};
 
@@ -114,36 +114,27 @@ impl Broker for SqliteBroker {
 
     async fn retrieve_invocation_for_language_from_queue(
         &self,
-        language: &str,
+        language: TaskLanguage,
         queue_name: &str,
     ) -> RustvelloResult<Option<InvocationId>> {
         validate_routing(queue_name, 0.0)?;
         let db = Arc::clone(&self.db);
-        let language = language.to_owned();
+        let language = language.to_string();
         let queue_name = queue_name.to_owned();
         blocking(move || {
             let conn = db.conn.lock().map_err(lock_err)?;
             let tx = conn.unchecked_transaction().map_err(sql_err)?;
-            let row: Option<(i64, String)> = if language.is_empty() {
-                tx.query_row(
+            let prefix = format!("{language}::%");
+            let row: Option<(i64, String)> = tx
+                .query_row(
                     "SELECT id, invocation_id FROM broker_queue \
-                     WHERE queue_name = ?1 AND (task_id IS NULL OR task_id NOT LIKE '%::%') \
+                     WHERE queue_name = ?1 \
+                       AND ((task_id IS NULL AND ?2 = 'rust') OR task_id LIKE ?3) \
                      ORDER BY priority DESC, id ASC LIMIT 1",
-                    [queue_name],
+                    rusqlite::params![queue_name, language, prefix],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
-                .ok()
-            } else {
-                let prefix = format!("{language}::%");
-                tx.query_row(
-                    "SELECT id, invocation_id FROM broker_queue \
-                     WHERE queue_name = ?1 AND (task_id IS NULL OR task_id LIKE ?2) \
-                     ORDER BY priority DESC, id ASC LIMIT 1",
-                    rusqlite::params![queue_name, prefix],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok()
-            };
+                .ok();
             if let Some((row_id, invocation_id)) = row {
                 tx.execute("DELETE FROM broker_queue WHERE id = ?1", [row_id])
                     .map_err(sql_err)?;
@@ -158,7 +149,7 @@ impl Broker for SqliteBroker {
 
     async fn retrieve_invocation_for_language(
         &self,
-        language: &str,
+        language: TaskLanguage,
     ) -> RustvelloResult<Option<InvocationId>> {
         self.retrieve_invocation_for_language_from_queue(language, DEFAULT_QUEUE)
             .await

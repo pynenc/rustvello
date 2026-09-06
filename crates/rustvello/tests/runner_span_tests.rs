@@ -1,7 +1,7 @@
 //! Tests that runner span context is preserved in tracing output
 //! when invocations are processed via the `run()` path (JoinSet::spawn).
 //!
-//! The PersistentTokioRunner, PerInvocationTokioRunner, and RayonRunner
+//! The PersistentTokioRunner and RayonRunner
 //! all spawn tasks via JoinSet. This test verifies that the runner span
 //! remains as a parent of the worker/invocation spans in the log output.
 
@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use rustvello::prelude::*;
 use rustvello_core::broker::Broker;
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::task::TaskDefinition;
 use rustvello_proto::call::{CallDTO, SerializedArguments};
@@ -42,7 +42,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufWriter {
 
 struct TestSetup {
     broker: Arc<dyn Broker>,
-    orchestrator: Arc<dyn Orchestrator>,
+    orchestrator: Arc<dyn InvocationControlBackend>,
     state_backend: Arc<dyn StateBackend>,
     task_id: TaskId,
     registry: Arc<TaskRegistry>,
@@ -51,7 +51,7 @@ struct TestSetup {
 impl TestSetup {
     fn new() -> Self {
         let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-        let orchestrator: Arc<dyn Orchestrator> =
+        let orchestrator: Arc<dyn InvocationControlBackend> =
             Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
         let state_backend: Arc<dyn StateBackend> =
             Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
@@ -137,31 +137,6 @@ async fn persistent_tokio_runner_preserves_runner_span_in_logs() {
     assert!(
         output.contains("}:invocation{"),
         "Log output should show invocation span nested under worker span.\nCaptured output:\n{output}"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn per_invocation_runner_preserves_runner_span_in_logs() {
-    let setup = TestSetup::new();
-    setup.seed_invocation().await;
-
-    let runner = PerInvocationTokioRunner::new(
-        "test-app".to_string(),
-        AppConfig::default(),
-        setup.broker.clone(),
-        setup.orchestrator.clone(),
-        setup.state_backend.clone(),
-        setup.registry.clone(),
-    );
-
-    let (_guard, buf) = setup_captured_tracing();
-    let shutdown = async { tokio::time::sleep(std::time::Duration::from_millis(1000)).await };
-    let _ = runner.with_graceful_shutdown(shutdown).await;
-    let output = captured_output(&buf);
-
-    assert!(
-        output.contains("runner{") && output.contains("}:worker{"),
-        "Log output should show runner span as parent of worker span.\nCaptured output:\n{output}"
     );
 }
 

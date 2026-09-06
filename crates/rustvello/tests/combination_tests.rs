@@ -4,13 +4,13 @@
 //! and error propagation across all backend and runner combinations.
 //!
 //! Backends: Mem, SQLite (feature-gated)
-//! Runners:  PersistentTokio, PerInvocationTokio, Process, Rayon (feature-gated)
+//! Runners:  PersistentTokio, Rayon (feature-gated)
 
 use std::sync::Arc;
 
 use rustvello::prelude::*;
 use rustvello_core::broker::Broker;
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::runner::Runner;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_proto::call::{CallDTO, SerializedArguments};
@@ -48,7 +48,7 @@ fn combo_error(msg: String) -> RustvelloResult<String> {
 
 struct Backends {
     broker: Arc<dyn Broker>,
-    orchestrator: Arc<dyn Orchestrator>,
+    orchestrator: Arc<dyn InvocationControlBackend>,
     state_backend: Arc<dyn StateBackend>,
 }
 
@@ -78,8 +78,6 @@ fn sqlite_backends() -> Backends {
 
 enum RunnerKind {
     PersistentTokio,
-    PerInvocation,
-    Process,
     #[cfg(feature = "rayon")]
     Rayon,
 }
@@ -94,22 +92,6 @@ fn make_runner(kind: &RunnerKind, b: &Backends, registry: Arc<TaskRegistry>) -> 
             Arc::clone(&b.state_backend),
             Arc::clone(&registry),
             None,
-        )),
-        RunnerKind::PerInvocation => Box::new(PerInvocationTokioRunner::new(
-            "combo-test".to_string(),
-            AppConfig::default(),
-            Arc::clone(&b.broker),
-            Arc::clone(&b.orchestrator),
-            Arc::clone(&b.state_backend),
-            Arc::clone(&registry),
-        )),
-        RunnerKind::Process => Box::new(SpawnBlockingRunner::new(
-            "combo-test".to_string(),
-            AppConfig::default(),
-            Arc::clone(&b.broker),
-            Arc::clone(&b.orchestrator),
-            Arc::clone(&b.state_backend),
-            Arc::clone(&registry),
         )),
         #[cfg(feature = "rayon")]
         RunnerKind::Rayon => Box::new(
@@ -185,16 +167,6 @@ macro_rules! combo_test {
                 $test_fn(mem_backends(), RunnerKind::PersistentTokio).await;
             }
 
-            #[tokio::test]
-            async fn mem_per_invocation() {
-                $test_fn(mem_backends(), RunnerKind::PerInvocation).await;
-            }
-
-            #[tokio::test]
-            async fn mem_process() {
-                $test_fn(mem_backends(), RunnerKind::Process).await;
-            }
-
             #[cfg(feature = "rayon")]
             #[tokio::test]
             async fn mem_rayon() {
@@ -205,18 +177,6 @@ macro_rules! combo_test {
             #[tokio::test]
             async fn sqlite_persistent_tokio() {
                 $test_fn(sqlite_backends(), RunnerKind::PersistentTokio).await;
-            }
-
-            #[cfg(feature = "sqlite")]
-            #[tokio::test]
-            async fn sqlite_per_invocation() {
-                $test_fn(sqlite_backends(), RunnerKind::PerInvocation).await;
-            }
-
-            #[cfg(feature = "sqlite")]
-            #[tokio::test]
-            async fn sqlite_process() {
-                $test_fn(sqlite_backends(), RunnerKind::Process).await;
             }
 
             #[cfg(all(feature = "sqlite", feature = "rayon"))]

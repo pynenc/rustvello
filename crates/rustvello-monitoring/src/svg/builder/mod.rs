@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use rustvello_core::orchestrator::AtomicServiceExecution;
 use rustvello_core::state_backend::StoredRunnerContext;
 use rustvello_proto::invocation::InvocationHistory;
 use rustvello_proto::status::InvocationStatus;
@@ -11,7 +12,9 @@ use super::bounds::TimelineBounds;
 use super::color::ColorScheme;
 use super::config::TimelineConfig;
 use super::data::TimelineData;
+use super::lane::LaneGroup;
 use super::lane_assign::{self, ElementChain};
+use super::runner_info::RunnerInfo;
 
 mod global_lines;
 mod lanes;
@@ -34,6 +37,7 @@ pub struct TimelineDataBuilder {
     /// Explicit time bounds (if set, overrides computed bounds).
     pub(crate) explicit_start: Option<DateTime<Utc>>,
     pub(crate) explicit_end: Option<DateTime<Utc>>,
+    pub(crate) atomic_service_executions: Vec<AtomicServiceExecution>,
 }
 
 impl TimelineDataBuilder {
@@ -47,6 +51,7 @@ impl TimelineDataBuilder {
             worker_lane_offsets: HashMap::new(),
             explicit_start: None,
             explicit_end: None,
+            atomic_service_executions: Vec::new(),
         }
     }
 
@@ -59,6 +64,11 @@ impl TimelineDataBuilder {
     /// Set runner contexts for enriching runner labels with hostname/PID.
     pub fn set_runner_contexts(&mut self, contexts: HashMap<String, StoredRunnerContext>) {
         self.runner_contexts = contexts;
+    }
+
+    /// Add recorded atomic-service executions for correlation with task activity.
+    pub fn set_atomic_service_executions(&mut self, executions: Vec<AtomicServiceExecution>) {
+        self.atomic_service_executions = executions;
     }
 
     /// Add a batch of history entries with their associated task ID.
@@ -104,7 +114,10 @@ impl TimelineDataBuilder {
             };
             let bounds =
                 TimelineBounds::new(s, e, self.config.left_margin, self.config.drawable_width());
-            return TimelineData::new(self.config, bounds, Vec::new());
+            let mut data =
+                TimelineData::new(self.config.clone(), bounds, self.atomic_lane_groups());
+            data.atomic_service_executions = self.atomic_service_executions;
+            return data;
         }
 
         // Sort each invocation's history by timestamp
@@ -128,14 +141,64 @@ impl TimelineDataBuilder {
         lane_assign::assign_lanes(&mut chains);
 
         // Build lane groups from assigned chains
-        let groups = self.build_lane_groups(&chains, &bounds);
+        let mut groups = self.build_lane_groups(&chains, &bounds);
+        self.add_missing_atomic_lane_groups(&mut groups);
 
         let mut data = TimelineData::new(self.config.clone(), bounds, groups);
 
         // Generate cross-lane connecting lines for invocations spanning multiple runners
         self.build_global_lines(&chains, &mut data);
+        data.atomic_service_executions = self.atomic_service_executions;
 
         data
+    }
+
+    fn atomic_lane_groups(&self) -> Vec<LaneGroup> {
+        let mut runner_ids = self
+            .atomic_service_executions
+            .iter()
+            .map(|execution| execution.runner_id.clone())
+            .collect::<Vec<_>>();
+        runner_ids.sort();
+        runner_ids.dedup();
+        runner_ids
+            .into_iter()
+            .map(|runner_id| {
+                let runner_info = self
+                    .runner_contexts
+                    .get(&runner_id)
+                    .map_or_else(|| RunnerInfo::from_id(&runner_id), RunnerInfo::from_context);
+                let mut group = LaneGroup::new(runner_info);
+                group.control_plane = Some(super::lane::RunnerLane::new());
+                group
+            })
+            .collect()
+    }
+
+    fn add_missing_atomic_lane_groups(&self, groups: &mut Vec<LaneGroup>) {
+        let mut present = groups
+            .iter()
+            .map(|group| group.runner_info.runner_id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        let mut missing = self
+            .atomic_service_executions
+            .iter()
+            .filter_map(|execution| {
+                (!present.contains(&execution.runner_id)).then_some(execution.runner_id.clone())
+            })
+            .collect::<Vec<_>>();
+        missing.sort();
+        missing.dedup();
+        for runner_id in missing {
+            present.insert(runner_id.clone());
+            let runner_info = self
+                .runner_contexts
+                .get(&runner_id)
+                .map_or_else(|| RunnerInfo::from_id(&runner_id), RunnerInfo::from_context);
+            let mut group = LaneGroup::new(runner_info);
+            group.control_plane = Some(super::lane::RunnerLane::new());
+            groups.push(group);
+        }
     }
 
     /// Compute the global time bounds across all history entries.

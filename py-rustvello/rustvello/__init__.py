@@ -53,6 +53,7 @@ from rustvello.rustvello import (
     Rustvello,
     TaskConfig,
     TaskId,
+    WorkflowRoot,
     compute_args_id,
     get_current_invocation_id,
     get_current_num_retries,
@@ -61,17 +62,20 @@ from rustvello.rustvello import (
     init_logging,
     status_from_serde,
     status_to_serde,
+    workflow_root,
 )
 
 __version__: str = get_version()
 
-from rustvello.app import App, Invocation, TaskHandle
+from rustvello.app import App, ForeignTaskHandle, Invocation, TaskHandle, TaskLanguage
 
 __all__ = [
     # Standalone DX layer
     "App",
+    "ForeignTaskHandle",
     "Invocation",
     "TaskHandle",
+    "TaskLanguage",
     # Public API — types and configuration
     "AppConfig",
     "ConcurrencyControlType",
@@ -81,6 +85,7 @@ __all__ = [
     "Rustvello",
     "TaskConfig",
     "TaskId",
+    "WorkflowRoot",
     "get_version",
     "init_logging",
     # Utility functions
@@ -88,6 +93,7 @@ __all__ = [
     "get_current_invocation_id",
     "get_current_num_retries",
     "get_current_workflow_info",
+    "workflow_root",
     "status_from_serde",
     "status_to_serde",
     # Runner

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use rustvello_proto::call::CallDTO;
-use rustvello_proto::identifiers::{CallId, InvocationId};
+use rustvello_proto::identifiers::{CallId, ExecutorKind, InvocationId, TaskLanguage};
 use rustvello_proto::invocation::{InvocationDTO, InvocationHistory};
 
 use crate::context::RunnerContext;
@@ -12,7 +12,7 @@ use crate::error::{RustvelloResult, TaskError};
 ///
 /// Mirrors pynenc's `RunnerContext`: captures runner type, PID, hostname,
 /// thread ID, and optional parent context for hierarchical runner relationships
-/// (e.g., PersistentProcessRunner → PPRWorker).
+/// (e.g., PersistentTokioRunner -> PersistentTokioWorker).
 ///
 /// Named `StoredRunnerContext` to distinguish from `context::RunnerContext` (the
 /// runtime task-local context used during invocation execution).
@@ -20,6 +20,12 @@ use crate::error::{RustvelloResult, TaskError};
 pub struct StoredRunnerContext {
     /// Class/type name of the runner (e.g. "TaskRunner", "PPRWorker").
     pub runner_cls: String,
+    /// Runtime language this runner executes.
+    #[serde(default = "default_runner_language")]
+    pub runner_language: TaskLanguage,
+    /// Local executor family used by this runner or worker.
+    #[serde(default)]
+    pub executor_kind: ExecutorKind,
     /// Unique identifier for this runner instance.
     pub runner_id: String,
     pub pid: u32,
@@ -42,6 +48,8 @@ impl StoredRunnerContext {
             .unwrap_or(0);
         Self {
             runner_cls: runner_cls.into(),
+            runner_language: TaskLanguage::Rust,
+            executor_kind: ExecutorKind::Tokio,
             runner_id: runner_id.into(),
             pid: std::process::id(),
             hostname: hostname::get().map_or_else(
@@ -62,9 +70,32 @@ impl StoredRunnerContext {
         child_runner_cls: impl Into<String>,
     ) -> Self {
         let mut child = Self::current(child_runner_id, child_runner_cls);
+        child.runner_language = self.runner_language;
+        child.executor_kind = self.executor_kind;
         child.parent_runner_id = Some(self.runner_id.clone());
         child.parent_runner_cls = Some(self.runner_cls.clone());
         child
+    }
+
+    pub fn current_with_language(
+        runner_id: impl Into<String>,
+        runner_cls: impl Into<String>,
+        runner_language: TaskLanguage,
+    ) -> Self {
+        let mut context = Self::current(runner_id, runner_cls);
+        context.runner_language = runner_language;
+        context
+    }
+
+    pub fn current_with_runtime(
+        runner_id: impl Into<String>,
+        runner_cls: impl Into<String>,
+        runner_language: TaskLanguage,
+        executor_kind: ExecutorKind,
+    ) -> Self {
+        let mut context = Self::current_with_language(runner_id, runner_cls, runner_language);
+        context.executor_kind = executor_kind;
+        context
     }
 
     /// Convert a runtime `RunnerContext` into a `StoredRunnerContext`.
@@ -74,6 +105,8 @@ impl StoredRunnerContext {
     pub fn from_runtime(ctx: &RunnerContext) -> Self {
         Self {
             runner_cls: ctx.runner_cls.as_ref().to_string(),
+            runner_language: ctx.runner_language,
+            executor_kind: ctx.executor_kind,
             runner_id: ctx.runner_id.to_string(),
             pid: ctx.pid,
             hostname: ctx.hostname.clone(),
@@ -86,6 +119,10 @@ impl StoredRunnerContext {
                 .map(|p| p.runner_cls.as_ref().to_string()),
         }
     }
+}
+
+const fn default_runner_language() -> TaskLanguage {
+    TaskLanguage::Rust
 }
 
 /// State backend interface — persistence of invocations and results.
@@ -210,6 +247,29 @@ pub trait StateBackendQuery: Send + Sync {
         &self,
         workflow_type: &rustvello_proto::identifiers::TaskId,
     ) -> RustvelloResult<Vec<rustvello_proto::invocation::WorkflowIdentity>>;
+
+    /// Count workflow runs for a type without materializing their members.
+    async fn count_workflow_runs(
+        &self,
+        workflow_type: &rustvello_proto::identifiers::TaskId,
+    ) -> RustvelloResult<usize> {
+        Ok(self.get_workflow_runs(workflow_type).await?.len())
+    }
+
+    /// Retrieve one stable page of workflow runs.
+    ///
+    /// Backends should override this compatibility implementation and apply
+    /// ordering, limit, and offset in storage.
+    async fn get_workflow_runs_paginated(
+        &self,
+        workflow_type: &rustvello_proto::identifiers::TaskId,
+        limit: usize,
+        offset: usize,
+    ) -> RustvelloResult<Vec<rustvello_proto::invocation::WorkflowIdentity>> {
+        let mut runs = self.get_workflow_runs(workflow_type).await?;
+        runs.sort_by(|left, right| right.workflow_id.as_str().cmp(left.workflow_id.as_str()));
+        Ok(runs.into_iter().skip(offset).take(limit).collect())
+    }
 
     // --- Workflow data (key-value store scoped to a workflow) ---
 

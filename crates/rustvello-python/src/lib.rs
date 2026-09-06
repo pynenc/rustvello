@@ -38,6 +38,7 @@ pub mod state_backend;
 pub mod status;
 pub mod trigger;
 pub mod utils;
+pub mod workflow;
 
 // Backend-specific modules (feature-gated)
 #[cfg(feature = "mongodb")]

@@ -7,7 +7,7 @@
 //! - Sentinel empty-args behavior
 //! - Slot release re-enables acquisition
 
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::config::TaskConfig;
 use rustvello_proto::status::{ConcurrencyControlType, InvocationStatus};
@@ -15,7 +15,7 @@ use rustvello_proto::status::{ConcurrencyControlType, InvocationStatus};
 use crate::helpers::test_task_id;
 
 /// `try_acquire_concurrency_slot` returns true and indexes when under the limit.
-pub async fn test_try_acquire_slot_under_limit(orch: &dyn Orchestrator) {
+pub async fn test_try_acquire_slot_under_limit(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("cc_acquire_ok");
     let mut config = TaskConfig::default();
     config.concurrency_control = ConcurrencyControlType::Task;
@@ -39,7 +39,7 @@ pub async fn test_try_acquire_slot_under_limit(orch: &dyn Orchestrator) {
 }
 
 /// `try_acquire_concurrency_slot` returns false when at the limit.
-pub async fn test_try_acquire_slot_at_limit(orch: &dyn Orchestrator) {
+pub async fn test_try_acquire_slot_at_limit(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("cc_acquire_full");
     let mut config = TaskConfig::default();
     config.concurrency_control = ConcurrencyControlType::Task;
@@ -76,7 +76,7 @@ pub async fn test_try_acquire_slot_at_limit(orch: &dyn Orchestrator) {
 }
 
 /// After releasing a slot, a new invocation can acquire it.
-pub async fn test_try_acquire_after_release(orch: &dyn Orchestrator) {
+pub async fn test_try_acquire_after_release(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("cc_release");
     let mut config = TaskConfig::default();
     config.concurrency_control = ConcurrencyControlType::Task;
@@ -113,7 +113,7 @@ pub async fn test_try_acquire_after_release(orch: &dyn Orchestrator) {
 }
 
 /// Unlimited CC type always acquires the slot.
-pub async fn test_unlimited_cc_always_acquires(orch: &dyn Orchestrator) {
+pub async fn test_unlimited_cc_always_acquires(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("cc_unlimited");
     let mut config = TaskConfig::default();
     config.concurrency_control = ConcurrencyControlType::Unlimited;
@@ -138,7 +138,7 @@ pub async fn test_unlimited_cc_always_acquires(orch: &dyn Orchestrator) {
 }
 
 /// Multi-pair arguments: intersection logic blocks only when all pairs match.
-pub async fn test_multi_pair_argument_cc(orch: &dyn Orchestrator) {
+pub async fn test_multi_pair_argument_cc(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("cc_multipair");
     let mut config = TaskConfig::default();
     config.concurrency_control = ConcurrencyControlType::Argument;
@@ -194,7 +194,7 @@ pub async fn test_multi_pair_argument_cc(orch: &dyn Orchestrator) {
 }
 
 /// Empty args use the sentinel `("", "")` pair — task-scoped CC behavior.
-pub async fn test_sentinel_empty_args(orch: &dyn Orchestrator) {
+pub async fn test_sentinel_empty_args(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("cc_sentinel");
     let mut config = TaskConfig::default();
     config.concurrency_control = ConcurrencyControlType::Task;
@@ -230,7 +230,7 @@ pub async fn test_sentinel_empty_args(orch: &dyn Orchestrator) {
 }
 
 /// Empty task-level arguments reserve one atomic slot just like populated arguments.
-pub async fn test_atomic_sentinel_empty_args(orch: &dyn Orchestrator) {
+pub async fn test_atomic_sentinel_empty_args(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("cc_atomic_sentinel");
     let mut config = TaskConfig::default();
     config.concurrency_control = ConcurrencyControlType::Task;

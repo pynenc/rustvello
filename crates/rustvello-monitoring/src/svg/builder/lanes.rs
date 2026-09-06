@@ -82,6 +82,12 @@ impl TimelineDataBuilder {
 
         for group_key in &group_keys {
             let workers = &grouped[group_key];
+            let has_child_workers = workers.iter().any(|(runner_id, _)| {
+                self.runner_contexts
+                    .get(runner_id.as_str())
+                    .and_then(|context| context.parent_runner_id.as_deref())
+                    == Some(group_key.as_str())
+            });
 
             // Build RunnerInfo for the group header
             let runner_info = if group_key == "unassigned" {
@@ -102,6 +108,8 @@ impl TimelineDataBuilder {
                             .parent_runner_cls
                             .clone()
                             .unwrap_or_else(|| "Runner".to_owned()),
+                        runner_language: child_ctx.runner_language.to_string(),
+                        executor_kind: child_ctx.executor_kind.to_string(),
                         runner_id: group_key.clone(),
                         hostname: child_ctx.hostname.clone(),
                         pid: child_ctx.pid,
@@ -123,6 +131,7 @@ impl TimelineDataBuilder {
             // Assign lanes: each worker's lanes are offset by previous workers' lane counts
             let mut lane_offset = 0usize;
             for (worker_runner_id, worker_chains) in &sorted_workers {
+                let is_parent_control_plane = has_child_workers && *worker_runner_id == *group_key;
                 let max_lane = worker_chains
                     .iter()
                     .map(|c| c.lane_index)
@@ -130,7 +139,38 @@ impl TimelineDataBuilder {
                     .unwrap_or(0);
                 let num_lanes = max_lane + 1;
 
-                // Record the offset for cross-lane line lookups
+                // Parent-runner transitions are control-plane work, not an
+                // invented worker. They occupy the runner header alongside
+                // atomic-service windows.
+                if is_parent_control_plane {
+                    let control_plane = group.control_plane.get_or_insert_with(RunnerLane::new);
+                    for chain in worker_chains.iter() {
+                        self.worker_lane_offsets
+                            .insert(((*worker_runner_id).clone(), chain.lane_index), usize::MAX);
+                        let entries = self
+                            .histories
+                            .get(&chain.invocation_id)
+                            .map(|all| all[chain.entry_start..chain.entry_end].to_vec());
+                        if let Some(entries) = entries {
+                            let task_id = self
+                                .task_ids
+                                .get(&chain.invocation_id)
+                                .cloned()
+                                .unwrap_or_default();
+                            self.populate_lane_elements(
+                                control_plane,
+                                &chain.invocation_id,
+                                &task_id,
+                                &entries,
+                                bounds,
+                                true,
+                            );
+                        }
+                    }
+                    continue;
+                }
+
+                // Record the offset for cross-lane line lookups.
                 for lane_idx in 0..num_lanes {
                     self.worker_lane_offsets.insert(
                         ((*worker_runner_id).clone(), lane_idx),
@@ -170,6 +210,7 @@ impl TimelineDataBuilder {
                             &task_id,
                             &entries,
                             bounds,
+                            false,
                         );
                     }
                 }
@@ -191,6 +232,7 @@ impl TimelineDataBuilder {
         task_id: &str,
         entries: &[InvocationHistory],
         bounds: &TimelineBounds,
+        control_plane: bool,
     ) {
         let y_center = self.config.lane_height / 2.0; // center within the lane row
         let segment_statuses = status_colors::SEGMENT_STATUSES;
@@ -200,13 +242,13 @@ impl TimelineDataBuilder {
             let status = entry.status_record.status;
             let timestamp = entry.status_record.timestamp;
             let runner_id = entry
-                .status_record
                 .runner_id
                 .as_ref()
+                .or(entry.status_record.runner_id.as_ref())
                 .map(std::string::ToString::to_string);
 
             // Always create a point for every status
-            let point = elements::create_status_point(
+            let mut point = elements::create_status_point(
                 inv_id,
                 task_id,
                 &status,
@@ -216,6 +258,20 @@ impl TimelineDataBuilder {
                 &self.config,
                 y_center,
             );
+            if control_plane
+                && status == InvocationStatus::Registered
+                && runner_id.as_ref().is_some_and(|runner_id| {
+                    self.atomic_service_executions.iter().any(|execution| {
+                        execution.runner_id == *runner_id
+                            && execution.start <= timestamp
+                            && timestamp <= execution.end
+                    })
+                })
+            {
+                point
+                    .tooltip
+                    .push_str("\nOrigin: atomic service trigger evaluation");
+            }
 
             if let Some(px) = prev_x {
                 lane.lines.push(StatusLine {

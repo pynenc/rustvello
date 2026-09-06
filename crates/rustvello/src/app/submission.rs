@@ -1,98 +1,14 @@
-use std::sync::Arc;
-
-use rustvello_core::call::Call;
-use rustvello_core::context::{get_or_create_runner_context, with_invocation_context};
+use rustvello_core::call::{params_to_serialized_arguments, Call};
 use rustvello_core::error::{RustvelloError, RustvelloResult};
 use rustvello_core::invocation::{Invocation, InvocationHandle, SyncInvocation};
-use rustvello_core::state_backend::StoredRunnerContext;
-use rustvello_core::task::Task;
+use rustvello_core::task::{ForeignTask, Task};
 use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::identifiers::{InvocationId, TaskId};
-use rustvello_proto::invocation::{InvocationDTO, InvocationHistory, WorkflowIdentity};
-use rustvello_proto::status::{
-    ConcurrencyControlType, InvocationStatus, InvocationStatusRecord, ALL_STATUSES,
-};
+use rustvello_proto::status::InvocationStatus;
 
 use super::RustvelloApp;
 
 impl RustvelloApp {
-    /// Resolve the workflow identity for a new invocation.
-    ///
-    /// Ordinary tasks inherit workflow membership from their caller and remain
-    /// standalone at top level. Workflow tasks define a root at top level and
-    /// a sub-workflow when invoked from an existing workflow.
-    fn resolve_workflow(
-        &self,
-        invocation_id: &InvocationId,
-        task_id: &TaskId,
-        is_workflow_task: bool,
-    ) -> (Option<InvocationId>, Option<WorkflowIdentity>) {
-        let parent_info =
-            with_invocation_context(|ctx| (ctx.invocation_id.clone(), ctx.workflow.clone()));
-
-        match (parent_info, is_workflow_task) {
-            (Some((parent_inv_id, Some(parent_workflow))), false) => (
-                Some(parent_inv_id.clone()),
-                Some(WorkflowIdentity::child(
-                    parent_workflow.workflow_id,
-                    parent_workflow.workflow_type,
-                    parent_inv_id,
-                    parent_workflow.depth + 1,
-                )),
-            ),
-            (Some((parent_inv_id, Some(parent_workflow))), true) => (
-                Some(parent_inv_id),
-                Some(WorkflowIdentity::sub_workflow(
-                    invocation_id.clone(),
-                    task_id.clone(),
-                    parent_workflow.workflow_id,
-                )),
-            ),
-            (Some((parent_inv_id, None)), false) => (Some(parent_inv_id), None),
-            (Some((parent_inv_id, None)), true) => (
-                Some(parent_inv_id),
-                Some(WorkflowIdentity::root(
-                    invocation_id.clone(),
-                    task_id.clone(),
-                )),
-            ),
-            (None, false) => (None, None),
-            (None, true) => (
-                None,
-                Some(WorkflowIdentity::root(
-                    invocation_id.clone(),
-                    task_id.clone(),
-                )),
-            ),
-        }
-    }
-
-    /// Ensure the runner context for the given runtime context is persisted
-    /// in the state backend, so monitoring can look it up. Uses an in-memory
-    /// cache to avoid redundant writes (mirrors pynenc's `_runner_context_cache`).
-    async fn ensure_runner_context_stored(
-        &self,
-        ctx: &rustvello_core::context::RunnerContext,
-    ) -> RustvelloResult<()> {
-        let rid = ctx.runner_id.to_string();
-        {
-            let cache = self.stored_runner_cache.lock().await;
-            if cache.contains(&rid) {
-                return Ok(());
-            }
-        }
-        let stored = StoredRunnerContext::from_runtime(ctx);
-        self.coordinator
-            .state_backend
-            .store_runner_context(&stored)
-            .await?;
-        {
-            let mut cache = self.stored_runner_cache.lock().await;
-            cache.insert(rid);
-        }
-        Ok(())
-    }
-
     /// Submit a task for distributed execution.
     ///
     /// Creates a call from the task and arguments, registers an invocation
@@ -103,91 +19,13 @@ impl RustvelloApp {
         task_id: &TaskId,
         args: SerializedArguments,
     ) -> RustvelloResult<InvocationId> {
-        // Verify task is registered and get config in one lookup
-        let task = self.task_registry.get_dyn(task_id).ok_or_else(|| {
-            RustvelloError::TaskNotRegistered {
-                task_id: task_id.clone(),
-            }
-        })?;
-        let task_config = self.resolve_task_config(task_id, task.config());
-        let is_workflow_task = task_config.is_workflow_task;
-
-        // Create the call DTO
-        let call = CallDTO::new(task_id.clone(), args);
-
-        // Register invocation with orchestrator
-        let invocation_id = self
-            .coordinator
-            .orchestrator
-            .register_invocation(&call)
-            .await?;
-
-        // Resolve workflow identity
-        let (parent_id, workflow) =
-            self.resolve_workflow(&invocation_id, task_id, is_workflow_task);
-
-        // Store in state backend
-        let inv_dto = match workflow.clone() {
-            Some(workflow) => InvocationDTO::with_workflow(
-                invocation_id.clone(),
-                task_id.clone(),
-                call.call_id.clone(),
-                parent_id.clone(),
-                workflow,
-            ),
-            None => {
-                let mut dto = InvocationDTO::new(
-                    invocation_id.clone(),
-                    task_id.clone(),
-                    call.call_id.clone(),
-                );
-                dto.parent_invocation_id = parent_id.clone();
-                dto
-            }
-        };
-        self.coordinator
-            .state_backend
-            .upsert_invocation(&inv_dto, &call)
-            .await?;
-        if is_workflow_task {
-            if let Some(workflow) = workflow.as_ref() {
-                self.coordinator
-                    .state_backend
-                    .store_workflow_run(workflow)
-                    .await?;
-            }
-        }
-
-        // Record the initial Registered history entry.
-        // Always capture the caller's runner identity — never None.
-        // Inside a runner task: returns the worker's runner_id.
-        // Outside (scripts/CLI): returns an ExternalRunner-style hostname-pid id.
-        let caller_ctx = get_or_create_runner_context();
-        self.ensure_runner_context_stored(&caller_ctx).await?;
-        let caller_runner_id = caller_ctx.runner_id.clone();
-        let history = InvocationHistory::new(
-            invocation_id.clone(),
-            InvocationStatusRecord::new(
-                InvocationStatus::Registered,
-                Some(caller_runner_id.clone()),
-            ),
-            None,
-        )
-        .with_runner(caller_runner_id);
-        self.coordinator.state_backend.add_history(&history).await?;
-
-        // Route to broker — runner will transition Registered → Pending → Running
-        self.coordinator
-            .broker
-            .route_invocation_with_options(
-                &invocation_id,
-                Some(task_id),
-                &task_config.queue,
-                task_config.priority,
+        self.orchestrator
+            .submit(
+                &self.config,
+                &self.task_catalog,
+                CallDTO::new(task_id.clone(), args),
             )
-            .await?;
-
-        Ok(invocation_id)
+            .await
     }
 
     /// Submit a task with registration concurrency control.
@@ -208,59 +46,9 @@ impl RustvelloApp {
         args: SerializedArguments,
         _key_args: Option<&SerializedArguments>,
     ) -> RustvelloResult<InvocationId> {
-        // Look up config to check registration_concurrency
-        let task = self.task_registry.get_dyn(task_id).ok_or_else(|| {
-            RustvelloError::TaskNotRegistered {
-                task_id: task_id.clone(),
-            }
-        })?;
-        let config = self.resolve_task_config(task_id, task.config());
-
-        if config.registration_concurrency != ConcurrencyControlType::Unlimited {
-            // Collect non-terminal statuses for the dedup check
-            let non_terminal: Vec<InvocationStatus> = ALL_STATUSES
-                .iter()
-                .copied()
-                .filter(|s| !s.is_terminal())
-                .collect();
-
-            let existing = self
-                .coordinator
-                .orchestrator
-                .get_existing_invocations(task_id, None, &non_terminal)
-                .await?;
-
-            let requested_key = crate::task_config::concurrency_arguments(
-                config.registration_concurrency,
-                &config.key_arguments,
-                &args,
-            );
-            for inv_id in existing {
-                if config.registration_concurrency == ConcurrencyControlType::Task {
-                    return Ok(inv_id);
-                }
-                let invocation = self
-                    .coordinator
-                    .state_backend
-                    .get_invocation(&inv_id)
-                    .await?;
-                let call = self
-                    .coordinator
-                    .state_backend
-                    .get_call(&invocation.call_id)
-                    .await?;
-                let existing_key = crate::task_config::concurrency_arguments(
-                    config.registration_concurrency,
-                    &config.key_arguments,
-                    &call.serialized_arguments,
-                );
-                if existing_key == requested_key {
-                    return Ok(inv_id);
-                }
-            }
-        }
-
-        self.submit(task_id, args).await
+        self.orchestrator
+            .submit_with_registration_control(&self.config, &self.task_catalog, task_id, args)
+            .await
     }
 
     /// Execute a task synchronously (dev mode).
@@ -271,12 +59,11 @@ impl RustvelloApp {
         task_id: &TaskId,
         args: SerializedArguments,
     ) -> RustvelloResult<String> {
-        let task_def =
-            self.task_registry
-                .get(task_id)
-                .ok_or_else(|| RustvelloError::TaskNotRegistered {
-                    task_id: task_id.clone(),
-                })?;
+        let task_def = self.task_catalog.registry().get(task_id).ok_or_else(|| {
+            RustvelloError::TaskNotRegistered {
+                task_id: task_id.clone(),
+            }
+        })?;
 
         let args_json =
             serde_json::to_string(&args.0).map_err(|e| RustvelloError::Serialization {
@@ -292,8 +79,8 @@ impl RustvelloApp {
         invocation_id: &InvocationId,
     ) -> RustvelloResult<InvocationStatus> {
         let record = self
-            .coordinator
             .orchestrator
+            .invocation_control()
             .get_invocation_status(invocation_id)
             .await?;
         Ok(record.status)
@@ -304,8 +91,8 @@ impl RustvelloApp {
         &self,
         invocation_id: &InvocationId,
     ) -> RustvelloResult<Option<String>> {
-        self.coordinator
-            .state_backend
+        self.orchestrator
+            .state_backend()
             .get_result(invocation_id)
             .await
     }
@@ -322,93 +109,49 @@ impl RustvelloApp {
     ) -> RustvelloResult<InvocationHandle<T::Result>> {
         let task_id = task.task_id();
 
-        // Verify task is registered
-        if !self.task_registry.contains(task_id) {
+        if !self.task_catalog.contains(task_id) {
             return Err(RustvelloError::TaskNotRegistered {
                 task_id: task_id.clone(),
             });
         }
 
-        // Create typed call and convert to DTO
-        let call = Call::new(task, params);
-        let call_dto = call.to_dto()?;
-
-        // Register invocation with orchestrator
         let invocation_id = self
-            .coordinator
             .orchestrator
-            .register_invocation(&call_dto)
-            .await?;
-
-        // Resolve workflow identity from the explicit workflow-task marker.
-        let task_config = self.resolve_task_config(task_id, task.config());
-        let is_workflow_task = task_config.is_workflow_task;
-        let (parent_id, workflow) =
-            self.resolve_workflow(&invocation_id, task_id, is_workflow_task);
-
-        // Store in state backend
-        let inv_dto = match workflow.clone() {
-            Some(workflow) => InvocationDTO::with_workflow(
-                invocation_id.clone(),
-                task_id.clone(),
-                call_dto.call_id.clone(),
-                parent_id.clone(),
-                workflow,
-            ),
-            None => {
-                let mut dto = InvocationDTO::new(
-                    invocation_id.clone(),
-                    task_id.clone(),
-                    call_dto.call_id.clone(),
-                );
-                dto.parent_invocation_id = parent_id.clone();
-                dto
-            }
-        };
-        self.coordinator
-            .state_backend
-            .upsert_invocation(&inv_dto, &call_dto)
-            .await?;
-        if is_workflow_task {
-            if let Some(workflow) = workflow.as_ref() {
-                self.coordinator
-                    .state_backend
-                    .store_workflow_run(workflow)
-                    .await?;
-            }
-        }
-
-        // Record the initial Registered history entry.
-        // Always capture the caller's runner identity — never None.
-        let caller_ctx = get_or_create_runner_context();
-        self.ensure_runner_context_stored(&caller_ctx).await?;
-        let caller_runner_id = caller_ctx.runner_id.clone();
-        let history = InvocationHistory::new(
-            invocation_id.clone(),
-            InvocationStatusRecord::new(
-                InvocationStatus::Registered,
-                Some(caller_runner_id.clone()),
-            ),
-            None,
-        )
-        .with_runner(caller_runner_id);
-        self.coordinator.state_backend.add_history(&history).await?;
-
-        // Route to broker — runner will transition Registered → Pending → Running
-        self.coordinator
-            .broker
-            .route_invocation_with_options(
-                &invocation_id,
-                Some(task_id),
-                &task_config.queue,
-                task_config.priority,
+            .submit(
+                &self.config,
+                &self.task_catalog,
+                Call::new(task, params).to_dto()?,
             )
             .await?;
 
         Ok(InvocationHandle::new(
             invocation_id,
-            Arc::clone(&self.coordinator.orchestrator),
-            Arc::clone(&self.coordinator.state_backend),
+            self.orchestrator.invocation_control(),
+            self.orchestrator.state_backend(),
+        ))
+    }
+
+    /// Submit a typed foreign task for distributed execution.
+    ///
+    /// The task is registered and routed exactly like any other task, but only
+    /// a runner whose language matches the task ID can execute it.
+    pub async fn submit_foreign_call<F: ForeignTask>(
+        &self,
+        task: &F,
+        params: F::Params,
+    ) -> RustvelloResult<InvocationHandle<F::Result>> {
+        let task_id = task.task_id();
+        if !self.task_catalog.contains(&task_id) {
+            return Err(RustvelloError::TaskNotRegistered { task_id });
+        }
+
+        let args = params_to_serialized_arguments(&params)?;
+        let invocation_id = self.submit(&task_id, args).await?;
+
+        Ok(InvocationHandle::new(
+            invocation_id,
+            self.orchestrator.invocation_control(),
+            self.orchestrator.state_backend(),
         ))
     }
 
@@ -439,7 +182,7 @@ impl RustvelloApp {
         let task_id = task.task_id();
 
         // Verify task is registered
-        if !self.task_registry.contains(task_id) {
+        if !self.task_catalog.contains(task_id) {
             return Err(RustvelloError::TaskNotRegistered {
                 task_id: task_id.clone(),
             });

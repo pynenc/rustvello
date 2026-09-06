@@ -464,6 +464,8 @@ impl Database {
             CREATE TABLE IF NOT EXISTS runner_contexts (
                 runner_id TEXT PRIMARY KEY,
                 runner_cls TEXT NOT NULL,
+                runner_language TEXT NOT NULL DEFAULT 'rust',
+                executor_kind TEXT NOT NULL DEFAULT 'tokio',
                 pid INTEGER NOT NULL,
                 hostname TEXT NOT NULL,
                 thread_id BIGINT NOT NULL,
@@ -476,6 +478,8 @@ impl Database {
 
             -- Add history_timestamp for time-range queries
             ALTER TABLE history ADD COLUMN IF NOT EXISTS history_timestamp TIMESTAMPTZ;
+            ALTER TABLE runner_contexts ADD COLUMN IF NOT EXISTS runner_language TEXT NOT NULL DEFAULT 'rust';
+            ALTER TABLE runner_contexts ADD COLUMN IF NOT EXISTS executor_kind TEXT NOT NULL DEFAULT 'tokio';
             CREATE INDEX IF NOT EXISTS idx_history_runner
                 ON history(runner_id);
             ",

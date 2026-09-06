@@ -104,7 +104,7 @@ macro_rules! impl_py_orchestrator {
                 serialized_arguments: std::collections::BTreeMap<String, String>,
             ) -> pyo3::PyResult<String> {
                 use rustvello_core::orchestrator::OrchestratorStatus;
-                let task_id = rustvello_proto::identifiers::TaskId::try_new(
+                let task_id = rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python,
                     task_module, task_name,
                 )
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -131,7 +131,7 @@ macro_rules! impl_py_orchestrator {
             ) -> pyo3::PyResult<(String, Option<String>, f64)> {
                 use rustvello_core::orchestrator::OrchestratorStatus;
                 let inv_id = crate::utils::parse_invocation_id(invocation_id)?;
-                let task_id = rustvello_proto::identifiers::TaskId::try_new(
+                let task_id = rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python,
                     task_module, task_name,
                 )
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -215,7 +215,7 @@ macro_rules! impl_py_orchestrator {
                 cc_args: Option<std::collections::BTreeMap<String, String>>,
             ) -> pyo3::PyResult<bool> {
                 use rustvello_core::orchestrator::OrchestratorConcurrency;
-                let task_id = rustvello_proto::identifiers::TaskId::try_new(
+                let task_id = rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python,
                     task_module, task_name,
                 )
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -248,7 +248,7 @@ macro_rules! impl_py_orchestrator {
             ) -> pyo3::PyResult<()> {
                 use rustvello_core::orchestrator::OrchestratorConcurrency;
                 let inv_id = crate::utils::parse_invocation_id(invocation_id)?;
-                let task_id = rustvello_proto::identifiers::TaskId::try_new(
+                let task_id = rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python,
                     task_module, task_name,
                 )
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -318,7 +318,7 @@ macro_rules! impl_py_orchestrator {
                 let s = crate::orchestrator::parse_status(status)?;
                 let task_id = match (task_module, task_name) {
                     (Some(m), Some(n)) => Some(
-                        rustvello_proto::identifiers::TaskId::try_new(m, n).map_err(
+                        rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python, m, n).map_err(
                             |e| pyo3::exceptions::PyValueError::new_err(e.to_string()),
                         )?,
                     ),
@@ -342,7 +342,7 @@ macro_rules! impl_py_orchestrator {
                 task_name: &str,
             ) -> pyo3::PyResult<Vec<String>> {
                 use rustvello_core::orchestrator::OrchestratorQuery;
-                let task_id = rustvello_proto::identifiers::TaskId::try_new(
+                let task_id = rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python,
                     task_module, task_name,
                 )
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -378,7 +378,7 @@ macro_rules! impl_py_orchestrator {
                 use rustvello_core::orchestrator::OrchestratorQuery;
                 let task_id = match (task_module, task_name) {
                     (Some(m), Some(n)) => Some(
-                        rustvello_proto::identifiers::TaskId::try_new(m, n).map_err(
+                        rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python, m, n).map_err(
                             |e| pyo3::exceptions::PyValueError::new_err(e.to_string()),
                         )?,
                     ),
@@ -418,7 +418,7 @@ macro_rules! impl_py_orchestrator {
                 use rustvello_core::orchestrator::OrchestratorQuery;
                 let task_id = match (task_module, task_name) {
                     (Some(m), Some(n)) => Some(
-                        rustvello_proto::identifiers::TaskId::try_new(m, n).map_err(
+                        rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python, m, n).map_err(
                             |e| pyo3::exceptions::PyValueError::new_err(e.to_string()),
                         )?,
                     ),
@@ -493,7 +493,7 @@ macro_rules! impl_py_orchestrator {
                 cc_args: Option<std::collections::BTreeMap<String, String>>,
             ) -> pyo3::PyResult<Vec<String>> {
                 use rustvello_core::orchestrator::OrchestratorQuery;
-                let task_id = rustvello_proto::identifiers::TaskId::try_new(
+                let task_id = rustvello_proto::identifiers::TaskId::try_for_language(rustvello_proto::identifiers::TaskLanguage::Python,
                     task_module, task_name,
                 )
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
