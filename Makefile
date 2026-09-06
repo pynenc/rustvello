@@ -1,5 +1,6 @@
 # Interpreter used by the Python compatibility metadata helper.
 PYTHON_BIN ?= $(CURDIR)/.venv/bin/python
+MONITORING_LOAD_LOG ?= rustvello=debug,rustvello_monitoring=debug
 
 .PHONY: install
 install: ## Install dependencies, build the Python extension, and set up pre-commit hooks
@@ -8,12 +9,12 @@ install: ## Install dependencies, build the Python extension, and set up pre-com
 	@echo "🚀 Building and installing py-rustvello in develop mode"
 	@uv run maturin develop --release -m py-rustvello/Cargo.toml
 	@echo "🚀 Installing pre-commit hooks"
-	@uv run pre-commit install
+	@uv run python -m pre_commit install
 
 .PHONY: check
 check: ## Run all code quality checks (pre-commit)
 	@echo "🚀 Running all checks via pre-commit"
-	@uv run pre-commit run --all-files
+	@uv run python -m pre_commit run --all-files
 
 .PHONY: build
 build: clean-build ## Build the Python wheel and sdist
@@ -33,7 +34,7 @@ develop: ## Build and install py-rustvello in develop mode
 .PHONY: test-python
 test-python: develop ## Run Python tests with pytest
 	@echo "🚀 Testing Python: Running pytest"
-	@uv run pytest py-rustvello/ --cov --cov-config=pyproject.toml --cov-report=xml
+	@uv run python -m pytest py-rustvello/ --cov --cov-config=pyproject.toml --cov-report=xml
 
 .PHONY: python-versions
 python-versions: ## Print Python versions supported by py-rustvello metadata
@@ -59,6 +60,15 @@ test-stress: ## Run fast in-memory contention tests
 test-soak: ## Run ignored high-volume and SQLite contention tests
 	@cargo test -p rustvello --test concurrency_stress_tests -- --ignored --test-threads=1
 	@cargo test -p rustvello-sqlite --test stress -- --ignored --test-threads=1
+
+.PHONY: monitoring-load
+monitoring-load: ## Generate a cross-language monitoring dataset and keep the dashboard open
+	@KEEP_ALIVE=1 RUST_LOG="$(MONITORING_LOAD_LOG)" cargo test -p rustvello-monitoring --test monitoring_load monitoring_cross_language_load_fixture -- --ignored --nocapture
+
+.PHONY: monitoring-smoke
+monitoring-smoke: ## Smoke-test a live monitoring dashboard; pass URL=http://127.0.0.1:PORT
+	@test -n "$(URL)" || (echo "Usage: make monitoring-smoke URL=http://127.0.0.1:PORT" >&2; exit 2)
+	@$(PYTHON_BIN) scripts/monitoring_smoke.py "$(URL)"
 
 .PHONY: fuzz
 fuzz: ## Run fuzz targets for a short duration (CI-friendly, requires nightly)

@@ -144,8 +144,10 @@ priority_rules = [
 ]
 ```
 
+Every logical queue is physically partitioned by `TaskLanguage`, so a Rust
+runner cannot consume Python work and a Python runner cannot consume Rust work.
 All broker implementations satisfy the same named-queue, float-priority,
-task-filtering, language-filtering, count, and purge contract. RabbitMQ is the
+task-filtering, language-partition, count, and purge contract. RabbitMQ is the
 only representation adapter: AMQP exposes 256 unsigned integer priority levels,
 so Rustvello normalizes `-100.0..100.0` to `0..255` and rounds to the nearest
 level. Close float priorities may therefore tie on RabbitMQ and fall back to

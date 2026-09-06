@@ -5,7 +5,7 @@ use rustvello::builder::Rustvello;
 use rustvello::logging::{init_logging, LogConfig};
 use rustvello::prelude::*;
 use rustvello_core::runner::Runner;
-use rustvello_core::state_backend::StateBackendCore;
+use rustvello_core::state_backend::{StateBackendCore, StateBackendRunner};
 use uuid::Uuid;
 
 #[derive(Parser)]
@@ -60,13 +60,31 @@ enum Commands {
         #[arg(short, long)]
         status: Option<String>,
 
-        /// Filter by task ID (format: module.name)
+        /// Filter by task ID (format: language::module.name)
         #[arg(short, long)]
         task: Option<String>,
 
         /// SQLite database path
         #[arg(short, long)]
         db_path: Option<String>,
+    },
+
+    /// Investigate an invocation and print provenance, history, and runner context
+    Investigate {
+        /// Invocation ID to investigate
+        invocation_id: String,
+
+        /// Application ID used to namespace the backend data
+        #[arg(short, long, default_value = "rustvello")]
+        app_id: String,
+
+        /// SQLite database path
+        #[arg(short, long)]
+        db_path: Option<String>,
+
+        /// Output format
+        #[arg(long, default_value = "json")]
+        format: InvestigationFormat,
     },
 
     /// Purge all data (broker queue, invocations, results)
@@ -95,6 +113,12 @@ enum Commands {
     },
 }
 
+#[derive(Clone, clap::ValueEnum)]
+enum InvestigationFormat {
+    Json,
+    Text,
+}
+
 fn parse_status(s: &str) -> Option<InvocationStatus> {
     s.parse::<InvocationStatus>().ok()
 }
@@ -108,8 +132,15 @@ type SqliteBackends = (
 fn make_sqlite_backends(
     db_path: &Option<String>,
 ) -> Result<SqliteBackends, Box<dyn std::error::Error>> {
+    make_sqlite_backends_for(db_path, "rustvello")
+}
+
+fn make_sqlite_backends_for(
+    db_path: &Option<String>,
+    app_id: &str,
+) -> Result<SqliteBackends, Box<dyn std::error::Error>> {
     let db = Arc::new(match db_path {
-        Some(path) => rustvello_sqlite::db::Database::open(path, "rustvello")?,
+        Some(path) => rustvello_sqlite::db::Database::open(path, app_id)?,
         None => rustvello_sqlite::db::Database::in_memory()?,
     });
     Ok((
@@ -119,6 +150,157 @@ fn make_sqlite_backends(
         )),
         Arc::new(rustvello_sqlite::state_backend::SqliteStateBackend::new(db)),
     ))
+}
+
+async fn print_investigation(
+    invocation_id: &str,
+    app_id: &str,
+    db_path: &Option<String>,
+    format: InvestigationFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_, orchestrator, state_backend) = make_sqlite_backends_for(db_path, app_id)?;
+    let inv_id = InvocationId::try_from_string(invocation_id.to_owned())?;
+    let invocation = state_backend.get_invocation(&inv_id).await?;
+    let history = state_backend.get_history(&inv_id).await.unwrap_or_default();
+    let mut runner_contexts = serde_json::Map::new();
+    for entry in &history {
+        if let Some(runner_id) = entry
+            .runner_id
+            .as_ref()
+            .or(entry.status_record.runner_id.as_ref())
+        {
+            let runner_id = runner_id.to_string();
+            if runner_contexts.contains_key(&runner_id) {
+                continue;
+            }
+            if let Ok(Some(context)) = state_backend.get_runner_context(&runner_id).await {
+                runner_contexts.insert(
+                    runner_id,
+                    serde_json::json!({
+                        "class": context.runner_cls,
+                        "language": context.runner_language.to_string(),
+                        "executor": context.executor_kind.to_string(),
+                        "hostname": context.hostname,
+                        "pid": context.pid,
+                        "thread_id": context.thread_id,
+                        "parent_runner_id": context.parent_runner_id,
+                        "parent_runner_class": context.parent_runner_cls,
+                    }),
+                );
+            }
+        }
+    }
+    let latest_status = orchestrator.get_invocation_status(&inv_id).await.ok();
+    let registration = history
+        .iter()
+        .find(|entry| entry.status_record.status == InvocationStatus::Registered);
+    let registration_runner_id = registration.and_then(|entry| {
+        entry
+            .runner_id
+            .as_ref()
+            .or(entry.status_record.runner_id.as_ref())
+            .map(std::string::ToString::to_string)
+    });
+    let registration_time = registration.map(|entry| entry.status_record.timestamp);
+    let atomic_execution = if let (Some(runner_id), Some(timestamp)) =
+        (registration_runner_id.as_ref(), registration_time)
+    {
+        orchestrator
+            .get_atomic_service_timeline()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|execution| {
+                execution.runner_id == *runner_id
+                    && execution.start <= timestamp
+                    && timestamp <= execution.end
+            })
+    } else {
+        None
+    };
+    let history_json = history
+        .iter()
+        .map(|entry| {
+            let runner_id = entry
+                .runner_id
+                .as_ref()
+                .or(entry.status_record.runner_id.as_ref())
+                .map(std::string::ToString::to_string);
+            serde_json::json!({
+                "status": entry.status_record.status.to_string(),
+                "timestamp": entry.status_record.timestamp.to_rfc3339(),
+                "runner_id": runner_id,
+                "message": entry.message,
+                "registered_by_invocation_id": entry.registered_by_inv_id.as_ref().map(std::string::ToString::to_string),
+            })
+        })
+        .collect::<Vec<_>>();
+    let report = serde_json::json!({
+        "app_id": app_id,
+        "invocation": {
+            "id": invocation.invocation_id.to_string(),
+            "task_id": invocation.task_id.to_string(),
+            "call_id": invocation.call_id.to_string(),
+            "status": latest_status.as_ref().map_or_else(|| invocation.status.to_string(), |status| status.status.to_string()),
+            "created_at": invocation.created_at.to_rfc3339(),
+            "updated_at": invocation.updated_at.to_rfc3339(),
+            "parent_invocation_id": invocation.parent_invocation_id.as_ref().map(std::string::ToString::to_string),
+            "workflow": invocation.workflow.as_ref().map(|workflow| serde_json::json!({
+                "workflow_id": workflow.workflow_id.to_string(),
+                "workflow_type": workflow.workflow_type.to_string(),
+                "parent_id": workflow.parent_id.as_ref().map(std::string::ToString::to_string),
+                "depth": workflow.depth,
+            })),
+        },
+        "registration": {
+            "timestamp": registration_time.map(|time| time.to_rfc3339()),
+            "runner_id": registration_runner_id,
+            "atomic_service_execution": atomic_execution.map(|execution| serde_json::json!({
+                "runner_id": execution.runner_id,
+                "start": execution.start.to_rfc3339(),
+                "end": execution.end.to_rfc3339(),
+                "duration_seconds": execution.duration_secs(),
+            })),
+        },
+        "runner_contexts": runner_contexts,
+        "history": history_json,
+    });
+
+    match format {
+        InvestigationFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+        InvestigationFormat::Text => {
+            println!(
+                "Invocation: {}",
+                report["invocation"]["id"].as_str().unwrap_or("")
+            );
+            println!(
+                "Task:       {}",
+                report["invocation"]["task_id"].as_str().unwrap_or("")
+            );
+            println!(
+                "Status:     {}",
+                report["invocation"]["status"].as_str().unwrap_or("")
+            );
+            if let Some(time) = report["registration"]["timestamp"].as_str() {
+                println!("Registered: {time}");
+            }
+            if let Some(runner_id) = report["registration"]["runner_id"].as_str() {
+                println!("Runner:     {runner_id}");
+            }
+            println!("History:");
+            if let Some(history) = report["history"].as_array() {
+                for entry in history {
+                    println!(
+                        "  {}  {}  {}",
+                        entry["timestamp"].as_str().unwrap_or(""),
+                        entry["status"].as_str().unwrap_or(""),
+                        entry["runner_id"].as_str().unwrap_or("")
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -279,6 +461,19 @@ async fn main() {
                 }
             } else {
                 println!("Specify --status or --task to filter invocations");
+            }
+        }
+
+        Commands::Investigate {
+            invocation_id,
+            app_id,
+            db_path,
+            format,
+        } => {
+            if let Err(error) = print_investigation(&invocation_id, &app_id, &db_path, format).await
+            {
+                eprintln!("Failed to investigate invocation: {error}");
+                std::process::exit(1);
             }
         }
 

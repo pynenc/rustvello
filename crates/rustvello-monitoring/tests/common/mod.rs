@@ -89,7 +89,7 @@ pub struct TestAppSetup {
     pub app: RustvelloApp,
     pub config: AppConfig,
     pub broker: Arc<dyn rustvello_core::broker::Broker>,
-    pub orchestrator: Arc<dyn rustvello_core::orchestrator::Orchestrator>,
+    pub orchestrator: Arc<dyn rustvello_core::orchestrator::InvocationControlBackend>,
     pub state_backend: Arc<dyn rustvello_core::state_backend::StateBackend>,
     pub trigger_store: Arc<dyn TriggerStore>,
     pub client_data_store: Arc<ClientDataStoreManager>,
@@ -104,7 +104,7 @@ pub fn create_test_app(app_id: &str) -> TestAppSetup {
 /// Create a fresh in-memory app with a custom config.
 pub fn create_test_app_with_config(config: AppConfig) -> TestAppSetup {
     let broker: Arc<dyn rustvello_core::broker::Broker> = Arc::new(MemBroker::new());
-    let orchestrator: Arc<dyn rustvello_core::orchestrator::Orchestrator> =
+    let orchestrator: Arc<dyn rustvello_core::orchestrator::InvocationControlBackend> =
         Arc::new(MemOrchestrator::new());
     let state_backend: Arc<dyn rustvello_core::state_backend::StateBackend> =
         Arc::new(MemStateBackend::new());
@@ -140,7 +140,12 @@ pub fn create_test_app_with_config(config: AppConfig) -> TestAppSetup {
     )
     .expect("task registration should succeed");
 
-    let task_ids = app.task_registry.task_ids().into_iter().cloned().collect();
+    let task_ids = app
+        .task_registry()
+        .task_ids()
+        .into_iter()
+        .cloned()
+        .collect();
 
     TestAppSetup {
         app,
@@ -154,7 +159,7 @@ pub fn create_test_app_with_config(config: AppConfig) -> TestAppSetup {
     }
 }
 
-/// Seed `count` invocations for the `test::process_order` task.
+/// Seed `count` invocations for the `rust::test.process_order` task.
 pub async fn seed_invocations(app: &RustvelloApp, count: usize) -> RustvelloResult<Vec<String>> {
     let task_id = TaskId::new("test", "process_order");
     let mut ids = Vec::with_capacity(count);
@@ -278,7 +283,7 @@ fn is_truthy(value: &str) -> bool {
 /// parent's worker — not ExternalRunner.
 pub fn register_hierarchical_tasks(
     app: &mut RustvelloApp,
-    orchestrator: &Arc<dyn rustvello_core::orchestrator::Orchestrator>,
+    orchestrator: &Arc<dyn rustvello_core::orchestrator::InvocationControlBackend>,
     state_backend: &Arc<dyn rustvello_core::state_backend::StateBackend>,
     broker: &Arc<dyn rustvello_core::broker::Broker>,
 ) {
@@ -448,7 +453,7 @@ pub fn register_hierarchical_tasks(
 }
 
 /// Create an app with three hierarchical tasks registered:
-/// `test::grandparent_task`, `test::parent_task`, `test::child_task`.
+/// `rust::test.grandparent_task`, `rust::test.parent_task`, `rust::test.child_task`.
 ///
 /// The grandparent and parent tasks submit their children during execution
 /// (inside the runner worker), so child Registered entries capture the
@@ -456,7 +461,7 @@ pub fn register_hierarchical_tasks(
 pub fn create_hierarchical_test_app(app_id: &str) -> TestAppSetup {
     let config = AppConfig::new(app_id);
     let broker: Arc<dyn rustvello_core::broker::Broker> = Arc::new(MemBroker::new());
-    let orchestrator: Arc<dyn rustvello_core::orchestrator::Orchestrator> =
+    let orchestrator: Arc<dyn rustvello_core::orchestrator::InvocationControlBackend> =
         Arc::new(MemOrchestrator::new());
     let state_backend: Arc<dyn rustvello_core::state_backend::StateBackend> =
         Arc::new(MemStateBackend::new());
@@ -478,7 +483,12 @@ pub fn create_hierarchical_test_app(app_id: &str) -> TestAppSetup {
 
     register_hierarchical_tasks(&mut app, &orchestrator, &state_backend, &broker);
 
-    let task_ids = app.task_registry.task_ids().into_iter().cloned().collect();
+    let task_ids = app
+        .task_registry()
+        .task_ids()
+        .into_iter()
+        .cloned()
+        .collect();
 
     TestAppSetup {
         app,
@@ -498,7 +508,7 @@ pub fn create_hierarchical_test_app(app_id: &str) -> TestAppSetup {
 /// and directly constructs the invocation with `parent_invocation_id`
 /// and `WorkflowIdentity` set.
 pub async fn submit_with_parent(
-    orchestrator: &Arc<dyn rustvello_core::orchestrator::Orchestrator>,
+    orchestrator: &Arc<dyn rustvello_core::orchestrator::InvocationControlBackend>,
     state_backend: &Arc<dyn rustvello_core::state_backend::StateBackend>,
     broker: &Arc<dyn rustvello_core::broker::Broker>,
     task_id: &TaskId,
@@ -589,7 +599,7 @@ pub async fn seed_grandparents_only(app: &RustvelloApp) -> RustvelloResult<Vec<I
 #[allow(dead_code)]
 pub async fn seed_hierarchical_invocations(
     app: &RustvelloApp,
-    orchestrator: &Arc<dyn rustvello_core::orchestrator::Orchestrator>,
+    orchestrator: &Arc<dyn rustvello_core::orchestrator::InvocationControlBackend>,
     state_backend: &Arc<dyn rustvello_core::state_backend::StateBackend>,
     broker: &Arc<dyn rustvello_core::broker::Broker>,
 ) -> RustvelloResult<(Vec<InvocationId>, Vec<InvocationId>, Vec<InvocationId>)> {

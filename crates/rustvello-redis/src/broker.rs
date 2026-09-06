@@ -5,7 +5,7 @@ use redis::AsyncCommands;
 
 use rustvello_core::broker::{validate_routing, Broker, DEFAULT_QUEUE};
 use rustvello_core::error::{RustvelloError, RustvelloResult};
-use rustvello_proto::identifiers::{InvocationId, TaskId};
+use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
 
 use crate::connection::{redis_err, scan_keys, RedisPool};
 
@@ -75,9 +75,7 @@ impl RedisBroker {
                     matches = task == ARGV[2]
                 elseif ARGV[1] == 'language' then
                     if task == '' then
-                        matches = true
-                    elseif ARGV[2] == '' then
-                        matches = string.find(task, '::', 1, true) == nil
+                        matches = ARGV[2] == 'rust'
                     else
                         matches = string.sub(task, 1, string.len(ARGV[2]) + 2) == ARGV[2] .. '::'
                     end
@@ -205,16 +203,17 @@ impl Broker for RedisBroker {
 
     async fn retrieve_invocation_for_language_from_queue(
         &self,
-        language: &str,
+        language: TaskLanguage,
         queue_name: &str,
     ) -> RustvelloResult<Option<InvocationId>> {
         validate_routing(queue_name, 0.0)?;
-        self.pop_matching(queue_name, "language", language).await
+        self.pop_matching(queue_name, "language", language.as_str())
+            .await
     }
 
     async fn retrieve_invocation_for_language(
         &self,
-        language: &str,
+        language: TaskLanguage,
     ) -> RustvelloResult<Option<InvocationId>> {
         self.retrieve_invocation_for_language_from_queue(language, DEFAULT_QUEUE)
             .await

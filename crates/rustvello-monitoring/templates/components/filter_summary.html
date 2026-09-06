@@ -1,0 +1,10 @@
+{% if !filter_summary.is_empty() %}
+<div class="monitor-filter-summary timeline-filter-summary" aria-label="Active filters">
+  {% for filter in filter_summary %}
+  <span class="monitor-filter-chip">
+    <span><strong>{{ filter.label }}:</strong> {{ filter.value }}</span>
+    {% if filter.removable %}<a href="{{ filter.remove_url }}" class="monitor-filter-chip-remove" aria-label="Remove {{ filter.label }} filter" title="Remove {{ filter.label }} filter">&times;</a>{% endif %}
+  </span>
+  {% endfor %}
+</div>
+{% endif %}

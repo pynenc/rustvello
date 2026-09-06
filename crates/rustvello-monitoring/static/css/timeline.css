@@ -56,7 +56,13 @@ rect.invocation-highlight,
 circle.invocation-highlight {
   stroke: #0d6efd;
   stroke-width: 3;
-  filter: drop-shadow(0 0 4px rgba(13, 110, 253, 0.5));
+}
+
+.linked-time-cursor {
+  pointer-events: none;
+  stroke: #0f172a;
+  stroke-dasharray: 3 3;
+  stroke-width: 1.2;
 }
 
 .lane-bg.runner-highlight {
@@ -76,15 +82,113 @@ svg .runner-label {
   cursor: pointer;
 }
 
+svg .atomic-service-window {
+  cursor: pointer;
+}
+
+svg .atomic-service-window:hover rect {
+  fill-opacity: 0.35;
+  stroke-width: 2;
+  filter: drop-shadow(0 0 3px rgba(249, 115, 22, 0.45));
+}
+
+.timeline-filter-bar {
+  background: #fff;
+  border: 1px solid #dfe4ea;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.timeline-filter-toggle {
+  align-items: center;
+  background: #fff;
+  border: 0;
+  color: #334155;
+  display: grid;
+  font-size: 12px;
+  grid-template-columns: auto 1fr auto;
+  min-height: 38px;
+  padding: 0.4rem 0.7rem;
+  text-align: left;
+  width: auto;
+}
+
+.timeline-filter-toggle:hover {
+  background: #f8fafc;
+}
+
+.timeline-filter-toggle .material-icons {
+  font-size: 17px;
+}
+
+.timeline-filter-summary {
+  color: #64748b;
+  overflow: hidden;
+  padding-inline: 1rem;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-filter-chevron {
+  transition: transform 0.15s ease;
+}
+
+.timeline-filter-toggle[aria-expanded="true"] .timeline-filter-chevron {
+  transform: rotate(180deg);
+}
+
+.timeline-filter-grid {
+  align-items: end;
+  border-top: 1px solid #edf0f3;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  padding: 0.65rem 0.7rem 0.75rem;
+}
+
+.timeline-filter-dates {
+  display: grid;
+  gap: 0 0.4rem;
+  grid-column: span 2;
+  grid-template-columns: auto 1fr auto 1fr;
+}
+
+.timeline-filter-dates .form-label {
+  align-self: center;
+  margin: 0 !important;
+}
+
+.timeline-filter-apply {
+  min-height: 31px;
+}
+
+.timeline-main > .pynmon-card > .pynmon-card-header {
+  background: #fff;
+}
+
+@media (max-width: 1100px) {
+  .timeline-filter-grid {
+    grid-template-columns: repeat(2, minmax(150px, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .timeline-filter-grid {
+    grid-template-columns: 1fr;
+  }
+  .timeline-filter-dates {
+    grid-column: auto;
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Relation line highlight on invocation hover */
-line.relation-line {
-  transition:
-    opacity 0.15s ease,
-    stroke-width 0.15s ease;
+.relation-line {
+  opacity: 0.08 !important;
   pointer-events: none;
 }
-line.relation-line.invocation-highlight {
-  opacity: 1 !important;
-  stroke-width: 3 !important;
-  filter: drop-shadow(0 0 3px rgba(13, 110, 253, 0.6));
+.relation-line.invocation-highlight {
+  opacity: 0.9 !important;
+  stroke-width: 2.25 !important;
 }

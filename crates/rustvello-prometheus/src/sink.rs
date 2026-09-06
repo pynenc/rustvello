@@ -364,7 +364,7 @@ mod tests {
         );
         // After acquire + release, gauge should be 0
         assert!(
-            output.contains("rustvello_cc_slots_active{task_id=\"my_app.limited\"} 0"),
+            output.contains("rustvello_cc_slots_active{task_id=\"rust::my_app.limited\"} 0"),
             "expected gauge at 0:\n{output}"
         );
     }

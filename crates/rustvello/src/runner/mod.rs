@@ -3,14 +3,9 @@
 //! This module provides multiple runner types for executing tasks:
 //!
 //! - [`PersistentTokioRunner`]: Persistent worker pool using tokio tasks (default).
-//! - [`PerInvocationTokioRunner`]: Spawns a new tokio task per invocation.
 //! - [`RayonRunner`]: Uses rayon thread pool for CPU-bound tasks (feature-gated).
-//! - [`SpawnBlockingRunner`]: Spawns a blocking thread per invocation for isolation.
 //!
-//! # Backward Compatibility
-//!
-//! The [`TaskRunner`] type alias points to [`PersistentTokioRunner`] for
-//! backward compatibility with existing code.
+//! The [`TaskRunner`] type alias points to [`PersistentTokioRunner`].
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,25 +13,20 @@ use std::time::Duration;
 use rustvello_core::observability::EventEmitter;
 use rustvello_proto::identifiers::{InvocationId, RunnerId, TaskId};
 
+mod control_plane;
+mod dispatcher;
+mod executor;
 pub(crate) mod executor_common;
-mod per_invocation_tokio;
 mod persistent_tokio;
-mod process_runner;
 #[cfg(feature = "rayon")]
 mod rayon_runner;
 
-pub use per_invocation_tokio::PerInvocationTokioRunner;
 pub use persistent_tokio::PersistentTokioRunner;
-pub use process_runner::SpawnBlockingRunner;
 #[cfg(feature = "rayon")]
 pub use rayon_runner::RayonRunner;
 
-/// Backward-compatible alias for `PersistentTokioRunner`.
+/// Alias for the default Tokio-backed runner.
 pub type TaskRunner = PersistentTokioRunner;
-
-/// Backward-compatible alias for the renamed `SpawnBlockingRunner`.
-#[deprecated(since = "0.1.0", note = "renamed to SpawnBlockingRunner")]
-pub type ProcessRunner = SpawnBlockingRunner;
 
 /// Wrapper that delegates all events to an inner `Arc<dyn EventEmitter>`.
 ///

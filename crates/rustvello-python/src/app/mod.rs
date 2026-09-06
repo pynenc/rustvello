@@ -7,13 +7,14 @@ use std::sync::Arc;
 use rustvello::app::RustvelloApp;
 use rustvello_core::error::RustvelloError;
 use rustvello_proto::call::SerializedArguments;
-use rustvello_proto::identifiers::TaskId;
+use rustvello_proto::identifiers::{TaskId, TaskLanguage};
 
 use crate::config::{PyAppConfig, PyTaskConfig};
 use crate::error::to_py_err;
 use crate::identifiers::PyInvocationId;
 use crate::runtime::shared_runtime;
 use crate::status::PyInvocationStatus;
+use crate::utils::parse_task_id;
 
 /// The main Rustvello application exposed to Python.
 ///
@@ -36,7 +37,7 @@ impl PyRustvello {
         // Eagerly initialise the shared runtime so any failure surfaces here
         // rather than on the first async call.
         shared_runtime()?;
-        let app_config = config.map(|c| c.inner).unwrap_or_default();
+        let app_config = config.map_or_else(python_app_config, |c| c.inner);
         let app = RustvelloApp::new(app_config);
         Ok(Self {
             inner: Arc::new(tokio::sync::Mutex::new(app)),
@@ -53,7 +54,7 @@ impl PyRustvello {
         func: PyObject,
         config: Option<PyTaskConfig>,
     ) -> PyResult<()> {
-        let task_id = TaskId::try_new(module, name)
+        let task_id = TaskId::try_for_language(TaskLanguage::Python, module, name)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let task_config = config.map(|c| c.inner).unwrap_or_default();
 
@@ -83,6 +84,33 @@ impl PyRustvello {
         })
     }
 
+    /// Register a task implemented by another language runtime.
+    #[pyo3(signature = (language, module, name, config=None))]
+    fn register_foreign_task(
+        &self,
+        py: Python<'_>,
+        language: &str,
+        module: &str,
+        name: &str,
+        config: Option<PyTaskConfig>,
+    ) -> PyResult<()> {
+        if language == "python" {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "register Python tasks with register_task()",
+            ));
+        }
+        let task_id = parse_task_id(language, module, name)?;
+        let task_config = config.map(|c| c.inner).unwrap_or_default();
+
+        py.allow_threads(|| {
+            shared_runtime()?.block_on(async {
+                let mut app = self.inner.lock().await;
+                app.register_foreign_task(task_id, task_config)
+                    .map_err(to_py_err)
+            })
+        })
+    }
+
     /// Submit a task for asynchronous execution.
     #[pyo3(signature = (module, name, kwargs=None))]
     fn submit(
@@ -92,7 +120,7 @@ impl PyRustvello {
         name: &str,
         kwargs: Option<BTreeMap<String, String>>,
     ) -> PyResult<PyInvocationId> {
-        let task_id = TaskId::try_new(module, name)
+        let task_id = TaskId::try_for_language(TaskLanguage::Python, module, name)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let mut args = SerializedArguments::new();
         if let Some(kw) = kwargs {
@@ -114,6 +142,57 @@ impl PyRustvello {
         Ok(PyInvocationId { inner: inv_id })
     }
 
+    /// Submit a task by fully qualified language/module/name identity.
+    #[pyo3(signature = (language, module, name, kwargs=None))]
+    fn submit_task(
+        &self,
+        py: Python<'_>,
+        language: &str,
+        module: &str,
+        name: &str,
+        kwargs: Option<BTreeMap<String, String>>,
+    ) -> PyResult<PyInvocationId> {
+        let task_id = parse_task_id(language, module, name)?;
+        let mut args = SerializedArguments::new();
+        if let Some(kw) = kwargs {
+            for (k, v) in kw {
+                args.insert(k, v);
+            }
+        }
+
+        let app = Arc::clone(&self.inner);
+        let inv_id = py.allow_threads(|| {
+            shared_runtime()?
+                .block_on(async {
+                    let app = app.lock().await;
+                    app.submit(&task_id, args).await
+                })
+                .map_err(to_py_err)
+        })?;
+
+        Ok(PyInvocationId { inner: inv_id })
+    }
+
+    /// Mark one invocation as waiting for another invocation.
+    fn set_waiting_for(
+        &self,
+        py: Python<'_>,
+        waiter: &PyInvocationId,
+        waited_on: &PyInvocationId,
+    ) -> PyResult<()> {
+        let app = Arc::clone(&self.inner);
+        let waiter_id = waiter.inner.clone();
+        let waited_on_id = waited_on.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime()?
+                .block_on(async {
+                    let app = app.lock().await;
+                    app.set_waiting_for(&waiter_id, &waited_on_id).await
+                })
+                .map_err(to_py_err)
+        })
+    }
+
     /// Execute a task synchronously, bypassing the broker and runner.
     ///
     /// Calls the registered task function directly in the current thread and
@@ -130,7 +209,7 @@ impl PyRustvello {
         name: &str,
         kwargs: Option<BTreeMap<String, String>>,
     ) -> PyResult<Option<String>> {
-        let task_id = TaskId::try_new(module, name)
+        let task_id = TaskId::try_for_language(TaskLanguage::Python, module, name)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let mut args = SerializedArguments::new();
         if let Some(kw) = kwargs {
@@ -220,7 +299,7 @@ impl PyRustvello {
             extract_trigger_manager,
         };
 
-        let app_config = config.map(|c| c.inner).unwrap_or_default();
+        let app_config = config.map_or_else(python_app_config, |c| c.inner);
         let orch = extract_orchestrator(orchestrator)?;
         let sb = extract_state_backend(state_backend)?;
         let br = extract_broker(broker)?;
@@ -237,6 +316,10 @@ impl PyRustvello {
     fn __repr__(&self) -> String {
         "Rustvello(...)".to_string()
     }
+}
+
+fn python_app_config() -> rustvello_proto::config::AppConfig {
+    rustvello_proto::config::AppConfig::default()
 }
 
 #[cfg(test)]

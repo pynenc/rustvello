@@ -68,6 +68,10 @@ harness = false
 name = "orchestrator_bench"
 harness = false
 
+[[bench]]
+name = "runner_bench"
+harness = false
+
 [lints]
 workspace = true
 

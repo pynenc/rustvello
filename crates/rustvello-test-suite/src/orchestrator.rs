@@ -2,7 +2,7 @@
 //!
 //! Each function tests a specific behavior of the [`Orchestrator`] trait.
 
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::config::TaskConfig;
 use rustvello_proto::identifiers::TaskId;
@@ -15,7 +15,7 @@ fn make_call(task_id: &TaskId) -> CallDTO {
 }
 
 /// Register an invocation and verify initial status is Registered.
-pub async fn test_register_invocation(orch: &dyn Orchestrator) {
+pub async fn test_register_invocation(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("test_task");
     let call = make_call(&task_id);
     let inv_id = orch.register_invocation(&call).await.unwrap();
@@ -25,7 +25,7 @@ pub async fn test_register_invocation(orch: &dyn Orchestrator) {
 }
 
 /// Transition: Registered → Pending → Running → Success.
-pub async fn test_status_transitions(orch: &dyn Orchestrator) {
+pub async fn test_status_transitions(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("test_task");
     let call = make_call(&task_id);
     let inv_id = orch.register_invocation(&call).await.unwrap();
@@ -51,7 +51,7 @@ pub async fn test_status_transitions(orch: &dyn Orchestrator) {
 }
 
 /// Query invocations by task.
-pub async fn test_get_invocations_by_task(orch: &dyn Orchestrator) {
+pub async fn test_get_invocations_by_task(orch: &dyn InvocationControlBackend) {
     let task_a = test_task_id("task_a");
     let task_b = test_task_id("task_b");
 
@@ -67,7 +67,7 @@ pub async fn test_get_invocations_by_task(orch: &dyn Orchestrator) {
 }
 
 /// Query invocations by status.
-pub async fn test_get_invocations_by_status(orch: &dyn Orchestrator) {
+pub async fn test_get_invocations_by_status(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("test_task");
     let call = make_call(&task_id);
     let inv_id = orch.register_invocation(&call).await.unwrap();
@@ -97,7 +97,7 @@ pub async fn test_get_invocations_by_status(orch: &dyn Orchestrator) {
 }
 
 /// Concurrency control check.
-pub async fn test_concurrency_control(orch: &dyn Orchestrator) {
+pub async fn test_concurrency_control(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("cc_task");
     let config = TaskConfig::default();
 
@@ -110,7 +110,7 @@ pub async fn test_concurrency_control(orch: &dyn Orchestrator) {
 }
 
 /// Count invocations with optional task/status filters.
-pub async fn test_count_invocations(orch: &dyn Orchestrator) {
+pub async fn test_count_invocations(orch: &dyn InvocationControlBackend) {
     let task_a = test_task_id("count_a");
     let task_b = test_task_id("count_b");
 
@@ -150,7 +150,7 @@ pub async fn test_count_invocations(orch: &dyn Orchestrator) {
 }
 
 /// Paginate invocation ids.
-pub async fn test_get_invocation_ids_paginated(orch: &dyn Orchestrator) {
+pub async fn test_get_invocation_ids_paginated(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("paged");
     for _ in 0..5 {
         let call = make_call(&task_id);
@@ -176,7 +176,7 @@ pub async fn test_get_invocation_ids_paginated(orch: &dyn Orchestrator) {
 }
 
 /// Filter a set of ids by status.
-pub async fn test_filter_by_status(orch: &dyn Orchestrator) {
+pub async fn test_filter_by_status(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("filter_task");
     let c1 = make_call(&task_id);
     let c2 = make_call(&task_id);
@@ -203,7 +203,7 @@ pub async fn test_filter_by_status(orch: &dyn Orchestrator) {
 }
 
 /// Active runner ids based on heartbeat timeout.
-pub async fn test_get_active_runner_ids(orch: &dyn Orchestrator) {
+pub async fn test_get_active_runner_ids(orch: &dyn InvocationControlBackend) {
     let runner_id = rustvello_proto::identifiers::RunnerId::from_string("active-runner");
     orch.register_heartbeat(&runner_id, false).await.unwrap();
 
@@ -212,7 +212,7 @@ pub async fn test_get_active_runner_ids(orch: &dyn Orchestrator) {
 }
 
 /// Purge clears invocations.
-pub async fn test_purge(orch: &dyn Orchestrator) {
+pub async fn test_purge(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("purge_task");
     let call = make_call(&task_id);
     let _inv = orch.register_invocation(&call).await.unwrap();
@@ -227,7 +227,7 @@ pub async fn test_purge(orch: &dyn Orchestrator) {
 }
 
 /// Scheduled invocations are removed once their auto-purge age expires.
-pub async fn test_auto_purge(orch: &dyn Orchestrator) {
+pub async fn test_auto_purge(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("auto_purge_task");
     let call = make_call(&task_id);
     let inv_id = orch.register_invocation(&call).await.unwrap();
@@ -244,7 +244,7 @@ pub async fn test_auto_purge(orch: &dyn Orchestrator) {
 // ===========================================================================
 
 /// Reject an invalid status transition (Registered → Running skips Pending).
-pub async fn test_invalid_status_transition(orch: &dyn Orchestrator) {
+pub async fn test_invalid_status_transition(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("test_task");
     let call = make_call(&task_id);
     let inv_id = orch.register_invocation(&call).await.unwrap();
@@ -257,7 +257,7 @@ pub async fn test_invalid_status_transition(orch: &dyn Orchestrator) {
 }
 
 /// Reject transition from a terminal state (Success → Pending).
-pub async fn test_terminal_state_no_transition(orch: &dyn Orchestrator) {
+pub async fn test_terminal_state_no_transition(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("test_task");
     let call = make_call(&task_id);
     let inv_id = orch.register_invocation(&call).await.unwrap();
@@ -282,7 +282,7 @@ pub async fn test_terminal_state_no_transition(orch: &dyn Orchestrator) {
 }
 
 /// Get status of a non-existent invocation should return an error.
-pub async fn test_get_missing_invocation(orch: &dyn Orchestrator) {
+pub async fn test_get_missing_invocation(orch: &dyn InvocationControlBackend) {
     let fake_id = rustvello_proto::identifiers::InvocationId::from_string(
         "nonexistent::task||missing-call-id".to_string(),
     );
@@ -291,7 +291,7 @@ pub async fn test_get_missing_invocation(orch: &dyn Orchestrator) {
 }
 
 /// CC type = Task with running_concurrency = 1: blocks second invocation.
-pub async fn test_cc_task_blocks_duplicate(orch: &dyn Orchestrator) {
+pub async fn test_cc_task_blocks_duplicate(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("cc_task_block");
     let mut config = TaskConfig::default();
     config.concurrency_control = rustvello_proto::status::ConcurrencyControlType::Task;
@@ -324,7 +324,7 @@ pub async fn test_cc_task_blocks_duplicate(orch: &dyn Orchestrator) {
 }
 
 /// CC type = Argument: same args blocked, different args allowed.
-pub async fn test_cc_argument_same_args_blocked(orch: &dyn Orchestrator) {
+pub async fn test_cc_argument_same_args_blocked(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("cc_arg_block");
     let mut config = TaskConfig::default();
     config.concurrency_control = rustvello_proto::status::ConcurrencyControlType::Argument;
@@ -361,7 +361,7 @@ pub async fn test_cc_argument_same_args_blocked(orch: &dyn Orchestrator) {
 }
 
 /// CC type = Argument with key_arguments subset: only the subset determines blocking.
-pub async fn test_cc_key_arguments_subset(orch: &dyn Orchestrator) {
+pub async fn test_cc_key_arguments_subset(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("cc_keyarg");
     let mut config = TaskConfig::default();
     config.concurrency_control = rustvello_proto::status::ConcurrencyControlType::Argument;
@@ -405,7 +405,7 @@ pub async fn test_cc_key_arguments_subset(orch: &dyn Orchestrator) {
 }
 
 /// Record and retrieve atomic-service executions.
-pub async fn test_atomic_service_timeline(orch: &dyn Orchestrator) {
+pub async fn test_atomic_service_timeline(orch: &dyn InvocationControlBackend) {
     let first_runner = rustvello_proto::identifiers::RunnerId::from_string("atomic-runner-1");
     let second_runner = rustvello_proto::identifiers::RunnerId::from_string("atomic-runner-2");
     let now = chrono::Utc::now();
@@ -435,7 +435,7 @@ pub async fn test_atomic_service_timeline(orch: &dyn Orchestrator) {
 }
 
 /// Stale pending invocations are detected after timeout.
-pub async fn test_stale_pending_detection(orch: &dyn Orchestrator) {
+pub async fn test_stale_pending_detection(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("stale_pending");
     let call = make_call(&task_id);
     let inv_id = orch.register_invocation(&call).await.unwrap();
@@ -455,7 +455,7 @@ pub async fn test_stale_pending_detection(orch: &dyn Orchestrator) {
 }
 
 /// Stale running invocations are detected after timeout.
-pub async fn test_stale_running_detection(orch: &dyn Orchestrator) {
+pub async fn test_stale_running_detection(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("stale_running");
     let call = make_call(&task_id);
     let inv_id = orch.register_invocation(&call).await.unwrap();
@@ -477,7 +477,7 @@ pub async fn test_stale_running_detection(orch: &dyn Orchestrator) {
 }
 
 /// Ownership violation: a different runner cannot transition a Pending invocation.
-pub async fn test_ownership_violation(orch: &dyn Orchestrator) {
+pub async fn test_ownership_violation(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("test_task");
     let call = make_call(&task_id);
     let inv_id = orch.register_invocation(&call).await.unwrap();

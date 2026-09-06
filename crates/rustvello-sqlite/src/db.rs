@@ -346,6 +346,8 @@ impl Database {
             CREATE TABLE IF NOT EXISTS runner_contexts (
                 runner_id TEXT PRIMARY KEY,
                 runner_cls TEXT NOT NULL,
+                runner_language TEXT NOT NULL DEFAULT 'rust',
+                executor_kind TEXT NOT NULL DEFAULT 'tokio',
                 pid INTEGER NOT NULL,
                 hostname TEXT NOT NULL,
                 thread_id INTEGER NOT NULL,
@@ -373,6 +375,12 @@ impl Database {
         // ALTER TABLE … ADD COLUMN is a no-op if the column already exists in
         // SQLite (returns error which we ignore).
         let _ = conn.execute_batch("ALTER TABLE trg_conditions ADD COLUMN event_code TEXT");
+        let _ = conn.execute_batch(
+            "ALTER TABLE runner_contexts ADD COLUMN runner_language TEXT NOT NULL DEFAULT 'rust'",
+        );
+        let _ = conn.execute_batch(
+            "ALTER TABLE runner_contexts ADD COLUMN executor_kind TEXT NOT NULL DEFAULT 'tokio'",
+        );
         // Migration: retain task-aware routing for databases created before the
         // queue stored the task ID. Legacy rows remain global and can still be
         // matched through the invocations table.

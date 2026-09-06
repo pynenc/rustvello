@@ -36,6 +36,7 @@ use rustvello_python::status::{
     status_from_serde, status_to_serde, PyConcurrencyControlType, PyInvocationStatus,
 };
 use rustvello_python::trigger::PyMemTriggerStore;
+use rustvello_python::workflow::PyWorkflowRoot;
 
 #[pymodule]
 fn rustvello(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
@@ -116,6 +117,9 @@ fn rustvello(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<PyTaskRunner>()?;
     m.add_class::<PyTaskRunnerBuilder>()?;
 
+    // Workflow
+    m.add_class::<PyWorkflowRoot>()?;
+
     #[pyfunction]
     fn get_version() -> &'static str {
         env!("CARGO_PKG_VERSION")
@@ -134,6 +138,11 @@ fn rustvello(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(
         rustvello_python::utils::get_current_workflow_info,
+        m
+    )?)?;
+
+    m.add_function(wrap_pyfunction!(
+        rustvello_python::workflow::workflow_root,
         m
     )?)?;
 

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use rustvello_proto::call::SerializedArguments;
 use rustvello_proto::identifiers::TaskId;
-use rustvello_proto::identifiers::{CallId, InvocationId, RunnerId};
+use rustvello_proto::identifiers::{CallId, InvocationId, RunnerId, TaskLanguage};
 use rustvello_proto::invocation::{InvocationHistory, WorkflowIdentity};
 use rustvello_proto::status::{ConcurrencyControlType, InvocationStatus, InvocationStatusRecord};
 use rustvello_proto::trigger::{
@@ -319,9 +319,9 @@ fn args_no_colon() -> impl Strategy<Value = String> {
 }
 
 proptest! {
-    /// TaskId Display → FromStr round-trip (local, no language prefix).
+    /// Rust TaskId Display -> FromStr round-trip.
     #[test]
-    fn task_id_local_roundtrip(
+    fn rust_task_id_roundtrip(
         module in module_segment(),
         name in name_no_dots(),
     ) {
@@ -333,14 +333,14 @@ proptest! {
         prop_assert_eq!(parsed.language(), tid.language());
     }
 
-    /// TaskId Display → FromStr round-trip (foreign, with language prefix).
+    /// Language-qualified TaskId Display -> FromStr round-trip.
     #[test]
-    fn task_id_foreign_roundtrip(
-        language in "[a-z]{2,10}",
+    fn language_qualified_task_id_roundtrip(
+        language in prop_oneof![Just(TaskLanguage::Rust), Just(TaskLanguage::Python)],
         module in module_segment(),
         name in name_no_dots(),
     ) {
-        let tid = TaskId::foreign(&language, &module, &name);
+        let tid = TaskId::for_language(language, &module, &name);
         let s = tid.to_string();
         let parsed: TaskId = s.parse().unwrap();
         prop_assert_eq!(parsed.module(), tid.module());

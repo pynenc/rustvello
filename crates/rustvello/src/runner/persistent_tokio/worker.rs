@@ -6,32 +6,35 @@ use rustvello_core::error::RustvelloResult;
 use rustvello_core::observability::WorkerState;
 use rustvello_core::runner::Runner;
 use rustvello_core::trigger::TriggerManager;
-use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::identifiers::RunnerId;
-use rustvello_proto::invocation::{InvocationDTO, InvocationHistory};
-use rustvello_proto::status::{InvocationStatus, InvocationStatusRecord};
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use super::PersistentTokioRunner;
-use crate::runner::executor_common::retrieve_next_invocation_with_cc;
 
 impl PersistentTokioRunner {
     pub(super) async fn run_impl(&self) -> RustvelloResult<()> {
         tracing::info!(
             "PersistentTokioRunner starting with {} workers (app_id={}, pid={})",
             self.num_workers,
-            self.app_id,
+            self.control_plane.app_id,
             std::process::id()
         );
         self.emitter.on_worker_started(&self.runner_id);
 
         // Store main runner context for monitoring
-        let runner_ctx = rustvello_core::state_backend::StoredRunnerContext::current(
+        let runner_ctx = rustvello_core::state_backend::StoredRunnerContext::current_with_runtime(
             self.runner_id.to_string(),
             "PersistentTokioRunner",
+            self.control_plane.runner_language,
+            self.control_plane.executor_kind,
         );
-        if let Err(e) = self.state_backend.store_runner_context(&runner_ctx).await {
+        if let Err(e) = self
+            .control_plane
+            .state_backend
+            .store_runner_context(&runner_ctx)
+            .await
+        {
             tracing::warn!("Failed to store runner context: {}", e);
         }
 
@@ -41,24 +44,15 @@ impl PersistentTokioRunner {
         }
 
         // Create the main runner context for hierarchy
-        let main_ctx = RunnerContext::new(
+        let main_ctx = RunnerContext::new_with_runtime(
             self.runner_id.clone(),
-            Arc::clone(&self.app_id),
+            Arc::clone(&self.control_plane.app_id),
             "PersistentTokioRunner",
+            self.control_plane.runner_language,
+            self.control_plane.executor_kind,
         );
 
-        // Bridge shutdown_tx → CancellationToken for wait_for_work
-        let cancel = CancellationToken::new();
-        {
-            let cancel_clone = cancel.clone();
-            let mut rx = self.shutdown_tx.subscribe();
-            tokio::spawn(async move {
-                if !*rx.borrow() {
-                    let _ = rx.changed().await;
-                }
-                cancel_clone.cancel();
-            });
-        }
+        let cancel = self.control_plane.cancellation_token();
 
         // Spawn N workers, each with a unique UUID and child RunnerContext
         let mut worker_handles = tokio::task::JoinSet::new();
@@ -82,6 +76,7 @@ impl PersistentTokioRunner {
             let worker_sb_ctx =
                 runner_ctx.new_child(worker_runner_id.to_string(), "PersistentTokioWorker");
             if let Err(e) = self
+                .control_plane
                 .state_backend
                 .store_runner_context(&worker_sb_ctx)
                 .await
@@ -117,7 +112,7 @@ impl PersistentTokioRunner {
         // Management loop: heartbeats, recovery, triggers
         let mgmt_result = self.management_loop().await;
 
-        let _ = self.shutdown_tx.send(true);
+        self.control_plane.request_shutdown();
 
         while let Some(result) = worker_handles.join_next().await {
             match result {
@@ -143,7 +138,7 @@ impl PersistentTokioRunner {
         tracing::debug!("Worker {} ({}) started", worker_idx, worker_runner_id);
         while !self.is_shutdown() {
             let did_work = self.run_one_as_worker(worker_runner_id, worker_ctx).await?;
-            if !did_work && !self.broker.wait_for_work(cancel).await {
+            if !did_work && !self.control_plane.broker.wait_for_work(cancel).await {
                 break;
             }
         }
@@ -162,15 +157,7 @@ impl PersistentTokioRunner {
         worker_runner_id: &RunnerId,
         worker_ctx: &RunnerContext,
     ) -> RustvelloResult<bool> {
-        match retrieve_next_invocation_with_cc(
-            &*self.orchestrator,
-            &*self.broker,
-            Some(&*self.state_backend),
-            Some(&*self.task_registry),
-            &self.config,
-        )
-        .await?
-        {
+        match self.control_plane.claim_next().await? {
             Some(inv_id) => {
                 self.execute_invocation(&inv_id, worker_runner_id, worker_ctx)
                     .await?;
@@ -181,9 +168,14 @@ impl PersistentTokioRunner {
     }
 
     pub(super) async fn management_loop(&self) -> RustvelloResult<()> {
-        let heartbeat_interval = Duration::from_secs(self.config.heartbeat_interval_seconds);
-        let atomic_check_interval =
-            Duration::from_secs_f64(self.config.atomic_service_check_interval_minutes * 60.0);
+        let heartbeat_interval =
+            Duration::from_secs(self.control_plane.config.heartbeat_interval_seconds);
+        let atomic_check_interval = Duration::from_secs_f64(
+            self.control_plane
+                .config
+                .atomic_service_check_interval_minutes
+                * 60.0,
+        );
         let trigger_interval = Duration::from_secs(5);
         let mut last_heartbeat = Instant::now();
         let mut last_atomic_check = Instant::now();
@@ -216,7 +208,7 @@ impl PersistentTokioRunner {
                 }
                 let worker_ids = self.active_worker_ids();
                 for wid in &worker_ids {
-                    if let Err(e) = self.orchestrator.register_heartbeat(wid, false).await {
+                    if let Err(e) = self.control_plane.heartbeat(wid, false).await {
                         tracing::warn!("worker:{} heartbeat failed: {}", wid, e);
                     }
                 }
@@ -232,13 +224,14 @@ impl PersistentTokioRunner {
                     if let Err(e) = self.recover_stale_invocations().await {
                         tracing::error!("Recovery cycle failed: {}", e);
                     }
-                    if let Some(ref tm) = self.trigger_manager {
+                    if let Some(ref tm) = self.control_plane.trigger_manager {
                         if let Err(e) = self.evaluate_triggers(tm).await {
                             tracing::error!("Trigger evaluation cycle failed: {}", e);
                         }
                     }
                     let svc_end = chrono::Utc::now();
                     if let Err(e) = self
+                        .control_plane
                         .orchestrator
                         .record_atomic_service_execution(&self.runner_id, svc_start, svc_end)
                         .await
@@ -249,7 +242,7 @@ impl PersistentTokioRunner {
                 last_atomic_check = Instant::now();
             }
 
-            if let Some(ref tm) = self.trigger_manager {
+            if let Some(ref tm) = self.control_plane.trigger_manager {
                 if last_trigger_eval.elapsed() >= trigger_interval {
                     if self.should_run_atomic_service().await {
                         if let Err(e) = self.evaluate_triggers(tm).await {
@@ -265,12 +258,12 @@ impl PersistentTokioRunner {
                 _ = self.wait_for_shutdown() => break,
                 Ok(()) = &mut sigint => {
                     tracing::info!("SIGINT received — shutting down gracefully");
-                    let _ = self.shutdown_tx.send(true);
+                    self.control_plane.request_shutdown();
                     break;
                 }
                 _ = await_sigterm!() => {
                     tracing::info!("SIGTERM received — shutting down gracefully");
-                    let _ = self.shutdown_tx.send(true);
+                    self.control_plane.request_shutdown();
                     break;
                 }
             }
@@ -279,84 +272,10 @@ impl PersistentTokioRunner {
         Ok(())
     }
 
-    pub(super) async fn evaluate_triggers(&self, tm: &TriggerManager) -> RustvelloResult<()> {
-        if let Err(e) = tm.evaluate_cron_conditions().await {
-            tracing::warn!("Cron condition evaluation failed: {}", e);
-        }
-
-        let to_invoke = tm.evaluate_trigger_runs().await?;
-
-        for execution in &to_invoke {
-            let trigger_def = &execution.trigger;
-            let args = &execution.arguments;
-            let task_id = &trigger_def.task_id;
-
-            tracing::info!(
-                "Trigger fired: task:{}, trigger_id={}, args={}",
-                task_id,
-                trigger_def.trigger_id,
-                args
-            );
-
-            let Some(task) = self.task_registry.get_dyn(task_id) else {
-                tracing::error!("Triggered task:{} not found in registry, skipping", task_id);
-                continue;
-            };
-
-            let mut ser_args = SerializedArguments::new();
-            if let serde_json::Value::Object(map) = args {
-                for (k, v) in map {
-                    let serialized = match v {
-                        serde_json::Value::String(s) => s.clone(),
-                        other => serde_json::to_string(other).unwrap_or_else(|_| other.to_string()),
-                    };
-                    ser_args.insert(k, &serialized);
-                }
-            }
-
-            let call_dto = CallDTO::new(task_id.clone(), ser_args);
-            let inv_id = self.orchestrator.register_invocation(&call_dto).await?;
-            let inv_dto =
-                InvocationDTO::new(inv_id.clone(), task_id.clone(), call_dto.call_id.clone());
-
-            self.state_backend
-                .upsert_invocation(&inv_dto, &call_dto)
-                .await?;
-
-            let history = InvocationHistory::new(
-                inv_id.clone(),
-                InvocationStatusRecord::new(
-                    InvocationStatus::Registered,
-                    Some(self.runner_id.clone()),
-                ),
-                None,
-            )
-            .with_runner(self.runner_id.clone());
-            self.state_backend.add_history(&history).await?;
-
-            self.broker
-                .route_invocation_with_options(
-                    &inv_id,
-                    Some(task_id),
-                    &task.config().queue,
-                    task.config().priority,
-                )
-                .await?;
-
-            if let Err(error) = tm.complete_trigger_run(&execution.run_id, &inv_id).await {
-                tracing::debug!(%error, trigger_run_id = %execution.run_id, "trigger-run completion unavailable");
-            }
-
-            tracing::info!("Triggered invocation:{} for task:{}", inv_id, task_id);
-        }
-
-        if !to_invoke.is_empty() {
-            tracing::info!(
-                "Trigger evaluation cycle: {} invocations created",
-                to_invoke.len()
-            );
-        }
-
+    pub(super) async fn evaluate_triggers(&self, _tm: &TriggerManager) -> RustvelloResult<()> {
+        self.control_plane
+            .evaluate_triggers(&self.runner_id)
+            .await?;
         Ok(())
     }
 }

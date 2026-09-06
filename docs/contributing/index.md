@@ -7,6 +7,8 @@ Thank you for your interest in contributing! This guide covers how to set up you
 :maxdepth: 2
 
 ide
+monitoring-test-fixtures
+agent-monitoring
 testing/index
 ```
 
@@ -35,19 +37,20 @@ make install
 
 ## Makefile Targets
 
-| Target             | Description                                   |
-| ------------------ | --------------------------------------------- |
-| `make install`     | Install all dependencies and pre-commit hooks |
-| `make develop`     | Build Python bindings with maturin            |
-| `make check`       | Run all lints and checks (Rust + Python)      |
-| `make check`       | Run all Rust and Python quality checks        |
-| `make test`        | Run all tests (Rust + Python)                 |
-| `make test-rust`   | Run Rust tests only                           |
-| `make test-python` | Run Python tests with pytest                  |
-| `make build-rust`  | Build all Rust crates                         |
-| `make docs-build`  | Build Sphinx documentation                    |
-| `make docs-serve`  | Serve docs locally                            |
-| `make clean`       | Clean all build artifacts                     |
+| Target                 | Description                                                         |
+| ---------------------- | ------------------------------------------------------------------- |
+| `make install`         | Install all dependencies and pre-commit hooks                       |
+| `make develop`         | Build Python bindings with maturin                                  |
+| `make check`           | Run all lints and checks (Rust + Python)                            |
+| `make check`           | Run all Rust and Python quality checks                              |
+| `make test`            | Run all tests (Rust + Python)                                       |
+| `make test-rust`       | Run Rust tests only                                                 |
+| `make test-python`     | Run Python tests with pytest                                        |
+| `make build-rust`      | Build all Rust crates                                               |
+| `make monitoring-load` | Generate cross-language monitoring data and keep the dashboard open |
+| `make docs-build`      | Build Sphinx documentation                                          |
+| `make docs-serve`      | Serve docs locally                                                  |
+| `make clean`           | Clean all build artifacts                                           |
 
 Run `make help` to see all available targets.
 

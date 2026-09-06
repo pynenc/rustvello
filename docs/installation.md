@@ -10,7 +10,7 @@ Add the main library crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustvello = "0.4.0"
+rustvello = "0.5.0"
 ```
 
 Or via Cargo:
@@ -41,13 +41,13 @@ Examples:
 
 ```toml
 # SQLite for single-host persistence
-rustvello = { version = "0.4.0", features = ["sqlite"] }
+rustvello = { version = "0.5.0", features = ["sqlite"] }
 
 # Redis for distributed production
-rustvello = { version = "0.4.0", features = ["redis"] }
+rustvello = { version = "0.5.0", features = ["redis"] }
 
 # Everything
-rustvello = { version = "0.4.0", features = ["full"] }
+rustvello = { version = "0.5.0", features = ["full"] }
 ```
 
 ---
@@ -56,23 +56,23 @@ rustvello = { version = "0.4.0", features = ["full"] }
 
 For finer-grained control, depend on individual crates directly:
 
-| Crate                  | Description                                            |
-| ---------------------- | ------------------------------------------------------ |
-| `rustvello-proto`      | DTOs, identifiers, status FSM, config types            |
-| `rustvello-core`       | Core traits (`Broker`, `Orchestrator`, `StateBackend`) |
-| `rustvello-macros`     | `#[rustvello::task]` proc macro                        |
-| `rustvello-mem`        | In-memory backend implementations                      |
-| `rustvello-sqlite`     | SQLite backend implementations                         |
-| `rustvello-redis`      | Redis backend implementations                          |
-| `rustvello-mongo`      | MongoDB backend implementations (driver v3)            |
-| `rustvello-mongo3`     | MongoDB backend implementations (driver v2 — legacy)   |
-| `rustvello-rabbitmq`   | RabbitMQ broker implementation                         |
-| `rustvello-postgres`   | PostgreSQL trigger store implementation                |
-| `rustvello-prometheus` | Prometheus `EventEmitter` implementation               |
-| `rustvello-monitoring` | Axum web dashboard (SVG timelines, log explorer)       |
-| `rustvello-test-suite` | Macro-generated backend compliance test suite          |
-| `rustvello-python`     | PyO3 `#[pyclass]` wrappers (Rust → Python bridge)      |
-| `rustvello-cli`        | CLI binary (`rustvello` command)                       |
+| Crate                  | Description                                                       |
+| ---------------------- | ----------------------------------------------------------------- |
+| `rustvello-proto`      | DTOs, identifiers, status FSM, config types                       |
+| `rustvello-core`       | Core ports (`Broker`, `InvocationControlBackend`, `StateBackend`) |
+| `rustvello-macros`     | `#[rustvello::task]` proc macro                                   |
+| `rustvello-mem`        | In-memory backend implementations                                 |
+| `rustvello-sqlite`     | SQLite backend implementations                                    |
+| `rustvello-redis`      | Redis backend implementations                                     |
+| `rustvello-mongo`      | MongoDB backend implementations (driver v3)                       |
+| `rustvello-mongo3`     | MongoDB backend implementations (driver v2 — legacy)              |
+| `rustvello-rabbitmq`   | RabbitMQ broker implementation                                    |
+| `rustvello-postgres`   | PostgreSQL trigger store implementation                           |
+| `rustvello-prometheus` | Prometheus `EventEmitter` implementation                          |
+| `rustvello-monitoring` | Axum web dashboard (SVG timelines, log explorer)                  |
+| `rustvello-test-suite` | Macro-generated backend compliance test suite                     |
+| `rustvello-python`     | PyO3 `#[pyclass]` wrappers (Rust → Python bridge)                 |
+| `rustvello-cli`        | CLI binary (`rustvello` command)                                  |
 
 ---
 

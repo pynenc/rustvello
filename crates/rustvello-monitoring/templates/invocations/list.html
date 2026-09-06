@@ -2,12 +2,17 @@
 endblock %} {% block content %}
 <div class="container-fluid">
   <div class="row">
-    <!-- Filters Sidebar -->
-    <div class="col-md-3">
-      <div class="card filter-form">
-        <div class="card-header">Filters</div>
-        <div class="card-body">
-          <form action="/invocations" method="get">
+    <div class="col-12 mb-2">
+      <section class="list-filter-bar" aria-label="Invocation filters">
+        <div class="monitor-filter-header">
+          <button class="list-filter-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#invocation-filter-fields" aria-expanded="false" aria-controls="invocation-filter-fields">
+            <span class="d-inline-flex align-items-center gap-2"><span class="material-icons" style="font-size:17px">tune</span><strong>Filters</strong></span>
+            <span class="material-icons list-filter-chevron">expand_more</span>
+          </button>
+          {% include "components/filter_summary.html" %}
+        </div>
+        <div class="collapse" id="invocation-filter-fields">
+          <form action="/invocations" method="get" class="list-filter-grid">
             <div class="mb-3">
               <label for="status-select" class="form-label">Status</label>
               <input type="hidden" name="status" id="status-hidden" value="" />
@@ -89,13 +94,11 @@ endblock %} {% block content %}
             </div>
             <div class="mb-3">
               <label for="limit" class="form-label">Limit</label>
-              <input
-                type="number"
-                class="form-control"
+              <select
+                class="form-select"
                 id="limit"
                 name="limit"
-                value="{{ current_filters.limit }}"
-              />
+              ><option value="25" {% if current_filters.limit == 25 %}selected{% endif %}>25</option><option value="50" {% if current_filters.limit == 50 %}selected{% endif %}>50</option><option value="100" {% if current_filters.limit == 100 %}selected{% endif %}>100</option><option value="200" {% if current_filters.limit == 200 %}selected{% endif %}>200</option></select>
             </div>
             <div class="mb-3">
               <label for="start_date" class="form-label">From (UTC)</label>
@@ -107,16 +110,16 @@ endblock %} {% block content %}
               <input type="hidden" name="time_range" value="{% if !current_filters.start_date.is_empty() && !current_filters.end_date.is_empty() %}custom{% endif %}" />
               {% if !current_filters.inv_ids.is_empty() %}<input type="hidden" name="inv_ids" value="{{ current_filters.inv_ids }}" />{% endif %}
             </div>
-            <button type="submit" class="btn btn-primary w-100">
+            <button type="submit" class="btn btn-primary monitor-filter-submit">
               Apply Filters
             </button>
           </form>
         </div>
-      </div>
+      </section>
     </div>
 
     <!-- Main Content -->
-    <div class="col-md-9">
+    <div class="col-12">
       <div class="card pynmon-card">
         <div
           class="card-header pynmon-card-header d-flex justify-content-between align-items-center"
@@ -131,8 +134,8 @@ endblock %} {% block content %}
           </span>
           <div class="d-flex gap-2 align-items-center">
             <a
-              href="/invocations/timeline"
-              class="btn btn-sm btn-outline-success"
+              href="{{ timeline_url }}"
+              class="btn btn-sm btn-outline-success invocation-list-timeline-link"
             >
               <span class="material-icons align-middle" style="font-size: 16px"
                 >timeline</span
@@ -143,136 +146,10 @@ endblock %} {% block content %}
         </div>
         <div class="card-body pynmon-card-body p-0">
           {% if !invocations.is_empty() %}
-          <div class="table-responsive">
-            <table class="table table-hover pynmon-table mb-0">
-              <thead>
-                <tr>
-                  <th style="width: 25%">Invocation ID</th>
-                  <th style="width: 20%">Task</th>
-                  <th style="width: 20%">Call ID</th>
-                  <th style="width: 10%">Status</th>
-                  <th style="width: 8%">Retries</th>
-                  <th style="width: 17%">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for inv in invocations %}
-                <tr>
-                  <td>
-                    <a
-                      href="/invocations/{{ inv.invocation_id }}"
-                      class="text-decoration-none"
-                    >
-                      <code class="text-primary" title="{{ inv.invocation_id }}"
-                        >{{ inv.invocation_id }}</code
-                      >
-                    </a>
-                    {% if inv.is_workflow_defining %}
-                    <span class="badge bg-info text-dark ms-1" title="Workflow-defining invocation">Workflow root</span>
-                    {% endif %}
-                    <a
-                      href="#"
-                      class="ms-1 view-in-timeline-link"
-                      data-invocation-id="{{ inv.invocation_id }}"
-                      title="View in timeline"
-                    >
-                      <span
-                        class="material-icons"
-                        style="
-                          font-size: 14px;
-                          vertical-align: middle;
-                          color: #28a745;
-                        "
-                        >timeline</span
-                      >
-                    </a>
-                  </td>
-                  <td>
-                    <a
-                      href="/tasks/{{ inv.task_id }}"
-                      class="text-decoration-none"
-                      >{{ inv.task_id }}</a
-                    >
-                  </td>
-                  <td>
-                    <a
-                      href="/calls/{{ inv.call_id }}"
-                      class="text-decoration-none"
-                    >
-                      <code class="text-primary small">{{ inv.call_id }}</code>
-                    </a>
-                  </td>
-                  <td>
-                    <span class="badge {{ inv.status_class }}"
-                      >{{ inv.status }}</span
-                    >
-                  </td>
-                  <td>{{ inv.num_retries }}</td>
-                  <td>
-                    <a
-                      href="/invocations/{{ inv.invocation_id }}"
-                      class="btn btn-sm btn-outline-primary"
-                      >Details</a
-                    >
-                  </td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
+          {% include "components/invocation_table.html" %}
 
-          <!-- Pagination -->
-          {% if pagination.total_pages > 1 %}
-          <nav
-            aria-label="Invocations pagination"
-            class="d-flex justify-content-between align-items-center p-3 border-top"
-          >
-            <div class="text-muted small">
-              Page {{ pagination.page }} of {{ pagination.total_pages }} ({{
-              pagination.total_count }} total)
-            </div>
-            <ul class="pagination pagination-sm mb-0">
-              <li
-                class="page-item{% if !pagination.has_prev %} disabled{% endif %}"
-                <a
-                  class="page-link"
-                  href="?{{ pagination_query }}&page=1"
-                  >First</a
-                >
-              </li>
-              <li
-                class="page-item{% if !pagination.has_prev %} disabled{% endif %}"
-              >
-                <a
-                  class="page-link"
-                  href="?{{ pagination_query }}&page={{ pagination.page - 1 }}"
-                  >Previous</a
-                >
-              </li>
-              <li class="page-item active">
-                <span class="page-link">{{ pagination.page }}</span>
-              </li>
-              <li
-                class="page-item{% if !pagination.has_next %} disabled{% endif %}"
-              >
-                <a
-                  class="page-link"
-                  href="?{{ pagination_query }}&page={{ pagination.page + 1 }}"
-                  >Next</a
-                >
-              </li>
-              <li
-                class="page-item{% if !pagination.has_next %} disabled{% endif %}"
-              >
-                <a
-                  class="page-link"
-                  href="?{{ pagination_query }}&page={{ pagination.total_pages }}"
-                  >Last</a
-                >
-              </li>
-            </ul>
-          </nav>
-          {% endif %} {% else %}
+          {% include "components/pagination.html" %}
+          {% else %}
           <div class="alert alert-info m-3 mb-0">
             No invocations found matching the filters.
           </div>
@@ -299,47 +176,6 @@ endblock %} {% block content %}
       });
     }
 
-    document
-      .querySelectorAll(".view-in-timeline-link")
-      .forEach(function (link) {
-        link.addEventListener("click", function (e) {
-          e.preventDefault();
-          var invocationId = this.dataset.invocationId;
-          fetch("/invocations/" + invocationId + "/history")
-            .then(function (r) {
-              return r.json();
-            })
-            .then(function (historyData) {
-              if (!historyData || historyData.length === 0) {
-                alert("No history data available for this invocation");
-                return;
-              }
-              var startTime = new Date(historyData[0].timestamp);
-              var endTime = new Date(
-                historyData[historyData.length - 1].timestamp,
-              );
-              var durationMs = endTime - startTime;
-              var paddingMs = Math.max(durationMs * 0.5, 100);
-              var paddedStart = new Date(startTime.getTime() - paddingMs);
-              var paddedEnd = new Date(endTime.getTime() + paddingMs);
-              var fmt = function (d) {
-                var iso = d.toISOString();
-                return iso.slice(0, 23);
-              };
-              var params = new URLSearchParams();
-              params.set("time_range", "custom");
-              params.set("start_date", fmt(paddedStart));
-              params.set("end_date", fmt(paddedEnd));
-              params.set("selected", invocationId);
-              window.location.href =
-                "/invocations/timeline?" + params.toString();
-            })
-            .catch(function (err) {
-              console.error("Error fetching history:", err);
-              alert("Failed to load invocation history");
-            });
-        });
-      });
   });
 </script>
 {% endblock %}

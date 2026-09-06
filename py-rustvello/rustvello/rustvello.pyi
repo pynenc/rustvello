@@ -12,6 +12,7 @@ def get_version() -> str: ...
 def get_current_invocation_id() -> str | None: ...
 def get_current_num_retries() -> int | None: ...
 def get_current_workflow_info() -> tuple[str, str, str | None] | None: ...
+def workflow_root() -> WorkflowRoot: ...
 def compute_args_id(serialized_args: dict[str, str]) -> str: ...
 def init_logging(
     level: str = "info",
@@ -28,7 +29,9 @@ def status_from_serde(serde_name: str) -> str: ...
 # ============================================================================
 
 class TaskId:
-    def __init__(self, module: str, name: str) -> None: ...
+    def __init__(self, module: str, name: str, language: str = "python") -> None: ...
+    @property
+    def language(self) -> str: ...
     @property
     def module(self) -> str: ...
     @property
@@ -101,6 +104,7 @@ class TaskConfig:
         cache_results: bool = False,
         queue: str = "default",
         priority: float = 0.0,
+        is_workflow_task: bool = False,
     ) -> None: ...
     @property
     def max_retries(self) -> int: ...
@@ -112,6 +116,14 @@ class TaskConfig:
     def queue(self) -> str: ...
     @property
     def priority(self) -> float: ...
+    @property
+    def is_workflow_task(self) -> bool: ...
+    def __repr__(self) -> str: ...
+
+class WorkflowRoot:
+    def random(self) -> float: ...
+    def utc_now(self) -> str: ...
+    def uuid(self) -> str: ...
     def __repr__(self) -> str: ...
 
 class AppConfig:
@@ -187,12 +199,27 @@ class Rustvello:
         func: Any,
         config: TaskConfig | None = None,
     ) -> None: ...
+    def register_foreign_task(
+        self,
+        language: str,
+        module: str,
+        name: str,
+        config: TaskConfig | None = None,
+    ) -> None: ...
     def submit(
         self,
         module: str,
         name: str,
         kwargs: dict[str, str] | None = None,
     ) -> InvocationId: ...
+    def submit_task(
+        self,
+        language: str,
+        module: str,
+        name: str,
+        kwargs: dict[str, str] | None = None,
+    ) -> InvocationId: ...
+    def set_waiting_for(self, waiter: InvocationId, waited_on: InvocationId) -> None: ...
     def call_sync(
         self,
         module: str,
@@ -247,6 +274,15 @@ class RustTaskRunnerBuilder:
         on_diff_non_key_args_raise: bool = False,
         parallel_batch_size: int = 100,
         is_workflow_task: bool = False,
+    ) -> None: ...
+    def register_foreign_task(
+        self,
+        language: str,
+        module: str,
+        name: str,
+        *,
+        queue: str = "default",
+        priority: float = 0.0,
     ) -> None: ...
     def build(self) -> RustTaskRunner: ...
 
@@ -882,6 +918,8 @@ class RustMemStateBackend:
         pid: int,
         hostname: str,
         thread_id: int,
+        runner_language: str = "rust",
+        executor_kind: str = "tokio",
         parent_runner_id: str | None = None,
         parent_runner_cls: str | None = None,
     ) -> None: ...
@@ -941,6 +979,8 @@ class RustSqliteStateBackend:
         pid: int,
         hostname: str,
         thread_id: int,
+        runner_language: str = "rust",
+        executor_kind: str = "tokio",
         parent_runner_id: str | None = None,
         parent_runner_cls: str | None = None,
     ) -> None: ...
@@ -1000,6 +1040,8 @@ class RustPostgresStateBackend:
         pid: int,
         hostname: str,
         thread_id: int,
+        runner_language: str = "rust",
+        executor_kind: str = "tokio",
         parent_runner_id: str | None = None,
         parent_runner_cls: str | None = None,
     ) -> None: ...
@@ -1059,6 +1101,8 @@ class RustRedisStateBackend:
         pid: int,
         hostname: str,
         thread_id: int,
+        runner_language: str = "rust",
+        executor_kind: str = "tokio",
         parent_runner_id: str | None = None,
         parent_runner_cls: str | None = None,
     ) -> None: ...
@@ -1118,6 +1162,8 @@ class RustMongoStateBackend:
         pid: int,
         hostname: str,
         thread_id: int,
+        runner_language: str = "rust",
+        executor_kind: str = "tokio",
         parent_runner_id: str | None = None,
         parent_runner_cls: str | None = None,
     ) -> None: ...
@@ -1177,6 +1223,8 @@ class RustMongo3StateBackend:
         pid: int,
         hostname: str,
         thread_id: int,
+        runner_language: str = "rust",
+        executor_kind: str = "tokio",
         parent_runner_id: str | None = None,
         parent_runner_cls: str | None = None,
     ) -> None: ...

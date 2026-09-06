@@ -4,33 +4,118 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-/// Uniquely identifies a task definition (language + module path + function name).
+/// Runtime that owns and executes a task.
 ///
-/// Mirrors pynenc's `TaskId` which is computed as `module.function_name`.
-/// The optional `language` field enables cross-language task routing:
-/// when empty, the task is local (same language); when set (e.g. "rust",
-/// "python"), it identifies a foreign task for per-language queue routing.
+/// This is intentionally closed: adding another language means adding a new
+/// Rust-backed binding and extending this enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskLanguage {
+    #[serde(alias = "Rust", alias = "unknown")]
+    Rust,
+    #[serde(alias = "Python")]
+    Python,
+}
+
+impl TaskLanguage {
+    /// Every runtime implemented by this Rustvello release.
+    pub const ALL: [Self; 2] = [Self::Rust, Self::Python];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::Python => "python",
+        }
+    }
+}
+
+impl std::fmt::Display for TaskLanguage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for TaskLanguage {
+    type Err = ParseTaskIdError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "rust" | "Rust" => Ok(Self::Rust),
+            "python" | "Python" => Ok(Self::Python),
+            other => Err(ParseTaskIdError(format!(
+                "unsupported task language {other:?}; supported languages are rust and python"
+            ))),
+        }
+    }
+}
+
+/// Local runtime used by a runner process to execute task code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutorKind {
+    Tokio,
+    TokioBlocking,
+    Rayon,
+    Python,
+}
+
+impl ExecutorKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Tokio => "tokio",
+            Self::TokioBlocking => "tokio_blocking",
+            Self::Rayon => "rayon",
+            Self::Python => "python",
+        }
+    }
+}
+
+impl Default for ExecutorKind {
+    fn default() -> Self {
+        Self::Tokio
+    }
+}
+
+impl std::fmt::Display for ExecutorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ExecutorKind {
+    type Err = ParseTaskIdError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "tokio" => Ok(Self::Tokio),
+            "tokio_blocking" | "tokio-blocking" => Ok(Self::TokioBlocking),
+            "rayon" => Ok(Self::Rayon),
+            "python" => Ok(Self::Python),
+            other => Err(ParseTaskIdError(format!(
+                "unsupported executor kind {other:?}"
+            ))),
+        }
+    }
+}
+
+/// Uniquely identifies a task definition (language + module path + function name).
 ///
 /// # Format
 ///
-/// The canonical string representation is:
-/// - Local tasks: `module.name`
-/// - Foreign tasks: `language::module.name`
+/// The canonical string representation is `language::module.name`.
 ///
 /// The `name` field must not contain dots to ensure lossless round-tripping
 /// through `Display`/`FromStr`.
 ///
 /// # Representation
 ///
-/// Internally, all three components are packed into a single `Arc<str>`
-/// allocation with byte offsets for O(1) field access. Cloning a `TaskId`
-/// is a single atomic increment with zero heap allocation.
+/// Internally, the module and name are packed into a single `Arc<str>`.
+/// Cloning a `TaskId` is a single atomic increment with zero heap allocation.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TaskId {
-    /// Packed string: `language ++ module ++ name` (concatenated, no separators).
+    language: TaskLanguage,
+    /// Packed string: `module ++ name` (concatenated, no separator).
     packed: Arc<str>,
-    /// Byte offset where `language` ends (and `module` begins).
-    lang_end: u16,
     /// Byte offset where `module` ends (and `name` begins).
     module_end: u16,
 }
@@ -40,127 +125,89 @@ impl TaskId {
     ///
     /// This is the single internal path that all constructors and
     /// deserialization go through.
-    fn from_parts(language: &str, module: &str, name: &str) -> Self {
-        let lang_end = language.len();
-        let module_end = lang_end + module.len();
-        // Use assert! (not debug_assert!) so truncation to u16 is caught in
-        // release builds too. Silent truncation would corrupt every field accessor.
-        assert!(
-            lang_end <= u16::MAX as usize,
-            "TaskId language field exceeds u16::MAX bytes ({lang_end} bytes)"
-        );
+    fn from_parts(language: TaskLanguage, module: &str, name: &str) -> Self {
+        let module_end = module.len();
         assert!(
             module_end <= u16::MAX as usize,
-            "TaskId language + module exceeds u16::MAX bytes ({module_end} bytes)"
+            "TaskId module exceeds u16::MAX bytes ({module_end} bytes)"
         );
         let mut buf = String::with_capacity(module_end + name.len());
-        buf.push_str(language);
         buf.push_str(module);
         buf.push_str(name);
         Self {
+            language,
             packed: Arc::from(buf.as_str()),
-            lang_end: lang_end as u16,
             module_end: module_end as u16,
         }
     }
 
-    /// Create a local (same-language) task ID — backward compatible.
+    /// Create a Rust task ID.
     ///
     /// # Panics
-    /// Panics if `name` contains a dot — dots break the `Display`/`FromStr`
-    /// round-trip since `module.name` uses `.` as the separator.
+    /// Panics if the module or name is empty, if the module contains `::`,
+    /// or if the name contains `.` or `::`.
     ///
     /// Use [`try_new`](Self::try_new) for user-supplied input at API boundaries.
     pub fn new(module: impl Into<String>, name: impl Into<String>) -> Self {
-        let name = name.into();
-        assert!(
-            !name.contains('.'),
-            "TaskId name must not contain dots (breaks Display/FromStr round-trip): {name:?}"
-        );
-        let module = module.into();
-        Self::from_parts("", &module, &name)
+        Self::for_language(TaskLanguage::Rust, module, name)
     }
 
     /// Fallible constructor for user-supplied input at API boundaries.
     ///
-    /// Returns `Err` if `name` contains a dot.
+    /// Returns `Err` when the module or name cannot be represented losslessly.
     pub fn try_new(
         module: impl Into<String>,
         name: impl Into<String>,
     ) -> Result<Self, ParseTaskIdError> {
-        let name = name.into();
-        if name.contains('.') {
-            return Err(ParseTaskIdError(format!(
-                "TaskId name must not contain dots (breaks Display/FromStr round-trip): {name:?}"
-            )));
-        }
-        let module = module.into();
-        Ok(Self::from_parts("", &module, &name))
+        Self::try_for_language(TaskLanguage::Rust, module, name)
     }
 
-    /// Create a foreign (cross-language) task ID.
-    ///
-    /// # Panics
-    /// Panics if `language` is empty — use [`TaskId::new`] for local tasks.
-    ///
-    /// Use [`try_foreign`](Self::try_foreign) for user-supplied input at API boundaries.
-    pub fn foreign(
-        language: impl Into<String>,
+    /// Create a task ID for a specific language.
+    pub fn for_language(
+        language: TaskLanguage,
         module: impl Into<String>,
         name: impl Into<String>,
     ) -> Self {
-        let language = language.into();
-        let name = name.into();
-        assert!(
-            !language.is_empty(),
-            "TaskId::foreign called with empty language; use TaskId::new for local tasks"
-        );
-        assert!(
-            !name.contains('.'),
-            "TaskId name must not contain dots (breaks Display/FromStr round-trip): {name:?}"
-        );
-        let module = module.into();
-        Self::from_parts(&language, &module, &name)
+        Self::try_for_language(language, module, name).unwrap_or_else(|error| panic!("{error}"))
     }
 
-    /// Fallible constructor for foreign task IDs from user-supplied input.
-    ///
-    /// Returns `Err` if `language` is empty or `name` contains a dot.
-    pub fn try_foreign(
-        language: impl Into<String>,
+    /// Fallible constructor for user-supplied task ID components.
+    pub fn try_for_language(
+        language: TaskLanguage,
         module: impl Into<String>,
         name: impl Into<String>,
     ) -> Result<Self, ParseTaskIdError> {
-        let language = language.into();
         let name = name.into();
-        if language.is_empty() {
-            return Err(ParseTaskIdError(
-                "TaskId::try_foreign called with empty language; use try_new for local tasks"
-                    .to_owned(),
-            ));
+        if name.is_empty() {
+            return Err(ParseTaskIdError("TaskId name must not be empty".to_owned()));
         }
-        if name.contains('.') {
+        if name.contains('.') || name.contains("::") {
             return Err(ParseTaskIdError(format!(
-                "TaskId name must not contain dots (breaks Display/FromStr round-trip): {name:?}"
+                "TaskId name must not contain '.' or '::': {name:?}"
             )));
         }
         let module = module.into();
-        Ok(Self::from_parts(&language, &module, &name))
+        if module.is_empty() {
+            return Err(ParseTaskIdError(
+                "TaskId module must not be empty".to_owned(),
+            ));
+        }
+        if module.contains("::") {
+            return Err(ParseTaskIdError(format!(
+                "TaskId module must not contain '::': {module:?}"
+            )));
+        }
+        Ok(Self::from_parts(language, &module, &name))
     }
 
-    /// Whether this references a task in a different language.
-    pub fn is_foreign(&self) -> bool {
-        self.lang_end > 0
-    }
-
-    /// Get the language identifier (empty for local tasks).
-    pub fn language(&self) -> &str {
-        &self.packed[..self.lang_end as usize]
+    /// Get the language that owns and executes this task.
+    pub const fn language(&self) -> TaskLanguage {
+        self.language
     }
 
     /// Get the module path.
     pub fn module(&self) -> &str {
-        &self.packed[self.lang_end as usize..self.module_end as usize]
+        &self.packed[..self.module_end as usize]
     }
 
     /// Get the task function name.
@@ -168,11 +215,14 @@ impl TaskId {
         &self.packed[self.module_end as usize..]
     }
 
-    /// Config file key for this task (dots replaced with underscores).
-    ///
-    /// Mirrors pynenc's `TaskId.config_key` used for TOML/YAML lookups.
+    /// Language-qualified config key for this task (dots replaced with underscores).
     pub fn config_key(&self) -> String {
-        format!("{}_{}", self.module().replace('.', "_"), self.name())
+        format!(
+            "{}_{}_{}",
+            self.language,
+            self.module().replace('.', "_"),
+            self.name()
+        )
     }
 }
 
@@ -190,7 +240,7 @@ impl Serialize for TaskId {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut s = serializer.serialize_struct("TaskId", 3)?;
-        s.serialize_field("language", self.language())?;
+        s.serialize_field("language", &self.language)?;
         s.serialize_field("module", self.module())?;
         s.serialize_field("name", self.name())?;
         s.end()
@@ -202,22 +252,19 @@ impl<'de> Deserialize<'de> for TaskId {
         #[derive(Deserialize)]
         struct Fields {
             #[serde(default)]
-            language: String,
+            language: Option<TaskLanguage>,
             module: String,
             name: String,
         }
         let f = Fields::deserialize(deserializer)?;
-        Ok(TaskId::from_parts(&f.language, &f.module, &f.name))
+        TaskId::try_for_language(f.language.unwrap_or(TaskLanguage::Rust), f.module, f.name)
+            .map_err(serde::de::Error::custom)
     }
 }
 
 impl fmt::Display for TaskId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.lang_end == 0 {
-            write!(f, "{}.{}", self.module(), self.name())
-        } else {
-            write!(f, "{}::{}.{}", self.language(), self.module(), self.name())
-        }
+        write!(f, "{}::{}.{}", self.language, self.module(), self.name())
     }
 }
 
@@ -238,9 +285,8 @@ impl FromStr for TaskId {
 
     /// Parse a `TaskId` from its canonical string representation.
     ///
-    /// Accepted formats:
-    /// - `module.name` — local task
-    /// - `language::module.name` — foreign task
+    /// The canonical format is `language::module.name`. Legacy unqualified
+    /// `module.name` values are accepted as Rust tasks and normalize on display.
     ///
     /// Returns an error if the string is empty, contains no `.` separator
     /// (in the module.name portion), or has empty module or name components.
@@ -254,9 +300,9 @@ impl FromStr for TaskId {
             if lang.is_empty() {
                 return Err(ParseTaskIdError("empty language before '::'".to_owned()));
             }
-            (lang, &s[lang_end + 2..])
+            (lang.parse()?, &s[lang_end + 2..])
         } else {
-            ("", s)
+            (TaskLanguage::Rust, s)
         };
 
         let dot_pos = rest
@@ -276,11 +322,7 @@ impl FromStr for TaskId {
             return Err(ParseTaskIdError(format!("empty name in task ID: {:?}", s)));
         }
 
-        if language.is_empty() {
-            Ok(TaskId::new(module, name))
-        } else {
-            Ok(TaskId::foreign(language, module, name))
-        }
+        TaskId::try_for_language(language, module, name)
     }
 }
 
@@ -485,37 +527,44 @@ mod tests {
     #[test]
     fn task_id_display() {
         let tid = TaskId::new("myapp.tasks", "process_order");
-        assert_eq!(tid.to_string(), "myapp.tasks.process_order");
+        assert_eq!(tid.to_string(), "rust::myapp.tasks.process_order");
     }
 
     #[test]
-    fn task_id_foreign_display() {
-        let tid = TaskId::foreign("python", "analytics.tasks", "train_model");
+    fn python_task_id_display() {
+        let tid = TaskId::for_language(TaskLanguage::Python, "analytics.tasks", "train_model");
         assert_eq!(tid.to_string(), "python::analytics.tasks.train_model");
     }
 
     #[test]
-    fn task_id_is_foreign() {
-        let local = TaskId::new("mod", "func");
-        assert!(!local.is_foreign());
-        assert_eq!(local.language(), "");
+    fn task_id_has_language() {
+        let rust = TaskId::new("mod", "func");
+        assert_eq!(rust.language(), TaskLanguage::Rust);
 
-        let foreign = TaskId::foreign("rust", "mod", "func");
-        assert!(foreign.is_foreign());
-        assert_eq!(foreign.language(), "rust");
+        let python = TaskId::for_language(TaskLanguage::Python, "mod", "func");
+        assert_eq!(python.language(), TaskLanguage::Python);
     }
 
     #[test]
-    fn task_id_local_and_foreign_not_equal() {
-        let local = TaskId::new("mod", "func");
-        let foreign = TaskId::foreign("rust", "mod", "func");
-        assert_ne!(local, foreign);
+    fn task_ids_in_different_languages_are_not_equal() {
+        let rust = TaskId::new("mod", "func");
+        let python = TaskId::for_language(TaskLanguage::Python, "mod", "func");
+        assert_ne!(rust, python);
+    }
+
+    #[test]
+    fn config_keys_are_language_qualified() {
+        let rust = TaskId::new("analytics.tasks", "train_model");
+        let python = TaskId::for_language(TaskLanguage::Python, "analytics.tasks", "train_model");
+
+        assert_eq!(rust.config_key(), "rust_analytics_tasks_train_model");
+        assert_eq!(python.config_key(), "python_analytics_tasks_train_model");
     }
 
     #[test]
     fn call_id_display() {
         let cid = CallId::new(TaskId::new("myapp.tasks", "process_order"), "abc123");
-        assert_eq!(cid.to_string(), "myapp.tasks.process_order:abc123");
+        assert_eq!(cid.to_string(), "rust::myapp.tasks.process_order:abc123");
     }
 
     #[test]
@@ -592,23 +641,22 @@ mod tests {
 
     #[test]
     fn serde_backward_compat_missing_language() {
-        // Old JSON without language field should deserialize with empty language
+        // Old JSON without language is interpreted as Rust and normalized.
         let json = r#"{"module":"myapp","name":"process"}"#;
         let tid: TaskId = serde_json::from_str(json).unwrap();
-        assert_eq!(tid.language(), "");
+        assert_eq!(tid.language(), TaskLanguage::Rust);
         assert_eq!(tid.module(), "myapp");
         assert_eq!(tid.name(), "process");
-        assert!(!tid.is_foreign());
+        assert_eq!(tid.to_string(), "rust::myapp.process");
     }
 
     #[test]
-    fn serde_round_trip_foreign_task_id() {
-        let tid = TaskId::foreign("python", "analytics.tasks", "train_model");
+    fn serde_round_trip_python_task_id() {
+        let tid = TaskId::for_language(TaskLanguage::Python, "analytics.tasks", "train_model");
         let json = serde_json::to_string(&tid).unwrap();
         let back: TaskId = serde_json::from_str(&json).unwrap();
         assert_eq!(tid, back);
-        assert!(back.is_foreign());
-        assert_eq!(back.language(), "python");
+        assert_eq!(back.language(), TaskLanguage::Python);
     }
 
     #[test]
@@ -641,20 +689,20 @@ mod tests {
     // --- FromStr / parse_task_id tests ---
 
     #[test]
-    fn parse_local_task_id() {
+    fn parse_legacy_unqualified_task_id_as_rust() {
         let tid: TaskId = "myapp.tasks.process_order".parse().unwrap();
         assert_eq!(tid.module(), "myapp.tasks");
         assert_eq!(tid.name(), "process_order");
-        assert!(!tid.is_foreign());
+        assert_eq!(tid.language(), TaskLanguage::Rust);
+        assert_eq!(tid.to_string(), "rust::myapp.tasks.process_order");
     }
 
     #[test]
-    fn parse_foreign_task_id() {
+    fn parse_language_qualified_task_id() {
         let tid: TaskId = "python::analytics.tasks.train_model".parse().unwrap();
-        assert_eq!(tid.language(), "python");
+        assert_eq!(tid.language(), TaskLanguage::Python);
         assert_eq!(tid.module(), "analytics.tasks");
         assert_eq!(tid.name(), "train_model");
-        assert!(tid.is_foreign());
     }
 
     #[test]
@@ -700,14 +748,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_foreign_no_dot_fails() {
+    fn parse_qualified_id_without_function_fails() {
         let result = "rust::nodot".parse::<TaskId>();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("no '.'"));
     }
 
     #[test]
-    fn display_parse_round_trip_local() {
+    fn display_parse_round_trip_rust() {
         let original = TaskId::new("myapp.tasks", "process_order");
         let serialized = original.to_string();
         let parsed: TaskId = serialized.parse().unwrap();
@@ -715,8 +763,8 @@ mod tests {
     }
 
     #[test]
-    fn display_parse_round_trip_foreign() {
-        let original = TaskId::foreign("python", "analytics.tasks", "train_model");
+    fn display_parse_round_trip_python() {
+        let original = TaskId::for_language(TaskLanguage::Python, "analytics.tasks", "train_model");
         let serialized = original.to_string();
         let parsed: TaskId = serialized.parse().unwrap();
         assert_eq!(original, parsed);

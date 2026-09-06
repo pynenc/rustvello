@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use rustvello_core::broker::Broker;
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::config::TaskConfig;
 use rustvello_proto::identifiers::{InvocationId, RunnerId, TaskId};
@@ -76,7 +76,7 @@ async fn sqlite_concurrent_route_and_retrieve_is_exactly_once() {
 #[ignore = "slow stress lane"]
 async fn sqlite_status_claim_has_one_winner() {
     let (_dir, db) = persistent_db("status-claim");
-    let orchestrator: Arc<dyn Orchestrator> = Arc::new(SqliteOrchestrator::new(db));
+    let orchestrator: Arc<dyn InvocationControlBackend> = Arc::new(SqliteOrchestrator::new(db));
     let task_id = TaskId::new("stress", "claim");
     let invocation_id = Arc::new(
         orchestrator
@@ -115,7 +115,7 @@ async fn sqlite_status_claim_has_one_winner() {
 #[ignore = "slow stress lane"]
 async fn sqlite_concurrency_slot_acquisition_is_atomic() {
     let (_dir, db) = persistent_db("slot-claim");
-    let orchestrator: Arc<dyn Orchestrator> = Arc::new(SqliteOrchestrator::new(db));
+    let orchestrator: Arc<dyn InvocationControlBackend> = Arc::new(SqliteOrchestrator::new(db));
     let task_id = TaskId::new("stress", "slot");
     let mut args = SerializedArguments::new();
     args.insert("account", "same");
@@ -171,7 +171,7 @@ async fn sqlite_concurrency_slot_acquisition_is_atomic() {
 #[ignore = "slow stress lane"]
 async fn sqlite_recovery_claims_each_stale_invocation_once() {
     let (_dir, db) = persistent_db("recovery");
-    let orchestrator: Arc<dyn Orchestrator> = Arc::new(SqliteOrchestrator::new(db));
+    let orchestrator: Arc<dyn InvocationControlBackend> = Arc::new(SqliteOrchestrator::new(db));
     let task_id = TaskId::new("stress", "recovery");
     let count = 80;
     for _ in 0..count {

@@ -43,6 +43,9 @@ impl RunnerLane {
 pub struct LaneGroup {
     /// Runner information for the group header.
     pub runner_info: RunnerInfo,
+    /// Status transitions caused by the parent runner's control plane, such
+    /// as a trigger registration performed during atomic service.
+    pub control_plane: Option<RunnerLane>,
     /// Lanes within this group (one per invocation assigned to this runner).
     pub lanes: Vec<RunnerLane>,
     /// Y position of the group header (computed during layout).
@@ -55,6 +58,7 @@ impl LaneGroup {
     pub fn new(runner_info: RunnerInfo) -> Self {
         Self {
             runner_info,
+            control_plane: None,
             lanes: Vec::new(),
             y_start: 0.0,
             height: 0.0,
@@ -71,10 +75,14 @@ impl LaneGroup {
             })
     }
 
+    pub fn has_control_plane(&self) -> bool {
+        self.control_plane.is_some()
+    }
+
     /// Additional height reserved at top for the parent header in multi-worker groups.
     /// Uses the same lane_height for visual consistency.
     fn header_height(&self, lane_height: f64) -> f64 {
-        if self.has_children() {
+        if self.has_children() || self.has_control_plane() {
             lane_height
         } else {
             0.0
@@ -83,14 +91,26 @@ impl LaneGroup {
 
     /// Compute the height of this group based on lane count and config.
     pub fn compute_height(&mut self, lane_height: f64, lane_padding: f64) {
-        let n = self.lanes.len().max(1) as f64;
-        self.height =
-            self.header_height(lane_height) + n * lane_height + (n - 1.0).max(0.0) * lane_padding;
+        let header = self.header_height(lane_height);
+        let lane_count = self.lanes.len();
+        let lane_height_total = if lane_count == 0 {
+            if header > 0.0 {
+                0.0
+            } else {
+                lane_height
+            }
+        } else {
+            lane_count as f64 * lane_height + (lane_count - 1) as f64 * lane_padding
+        };
+        self.height = header + lane_height_total;
     }
 
     /// Assign Y offsets to each lane within this group.
     pub fn layout_lanes(&mut self, lane_height: f64, lane_padding: f64) {
         let header = self.header_height(lane_height);
+        if let Some(control_plane) = &mut self.control_plane {
+            control_plane.y_offset = self.y_start;
+        }
         for (i, lane) in self.lanes.iter_mut().enumerate() {
             lane.y_offset = self.y_start + header + i as f64 * (lane_height + lane_padding);
         }
@@ -105,6 +125,8 @@ mod tests {
     fn worker_info(worker_id: &str, parent_id: &str) -> RunnerInfo {
         RunnerInfo {
             runner_cls: "PersistentTokioWorker".to_owned(),
+            runner_language: "rust".to_owned(),
+            executor_kind: "tokio".to_owned(),
             runner_id: worker_id.to_owned(),
             hostname: "host".to_owned(),
             pid: 1234,
@@ -117,6 +139,8 @@ mod tests {
     fn make_runner_info(runner_id: &str, cls: &str) -> RunnerInfo {
         RunnerInfo {
             runner_cls: cls.to_owned(),
+            runner_language: "rust".to_owned(),
+            executor_kind: "tokio".to_owned(),
             runner_id: runner_id.to_owned(),
             hostname: "host".to_owned(),
             pid: 1234,
@@ -189,7 +213,7 @@ mod tests {
             single_lane_group("r1", "PersistentTokioRunner"),
             multi_worker_group("r2", "PersistentTokioRunner", 3),
             single_lane_group("r3", "RayonRunner"),
-            multi_worker_group("r4", "PerInvocationTokioRunner", 2),
+            multi_worker_group("r4", "PersistentTokioRunner", 2),
             single_lane_group("r5", "ExternalRunner"),
         ];
 

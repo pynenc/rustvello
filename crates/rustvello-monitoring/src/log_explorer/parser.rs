@@ -712,7 +712,7 @@ mod tests {
 
     #[test]
     fn test_parse_tracing_span_format() {
-        let line = "2026-03-21T15:39:09.107782Z  INFO runner{runner_id=5719fe43-33fb-4979-a024-7b092f0fff6f cls=PTR}:worker{worker_id=aabb1122-3344-5566-7788-99aabbccddee}:invocation{invocation_id=69bec730-710e-4780-b347-3918d7de571f task_id=test.child_task}: rustvello::runner: Invocation completed successfully";
+        let line = "2026-03-21T15:39:09.107782Z  INFO runner{runner_id=5719fe43-33fb-4979-a024-7b092f0fff6f cls=PTR}:worker{worker_id=aabb1122-3344-5566-7788-99aabbccddee}:invocation{invocation_id=69bec730-710e-4780-b347-3918d7de571f task_id=rust::test.child_task}: rustvello::runner: Invocation completed successfully";
         let parsed = parse_log_line(line);
         assert!(parsed.is_valid, "should be valid");
         assert_eq!(parsed.level.as_deref(), Some("INFO"));
@@ -730,7 +730,7 @@ mod tests {
             parsed.invocation_id.as_deref(),
             Some("69bec730-710e-4780-b347-3918d7de571f")
         );
-        assert_eq!(parsed.task_key.as_deref(), Some("test.child_task"));
+        assert_eq!(parsed.task_key.as_deref(), Some("rust::test.child_task"));
         assert_eq!(parsed.module.as_deref(), Some("rustvello::runner"));
         assert_eq!(parsed.message, "Invocation completed successfully");
     }

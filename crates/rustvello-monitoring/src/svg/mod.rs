@@ -13,6 +13,7 @@ pub mod lane;
 pub mod lane_assign;
 pub mod models;
 pub mod render;
+pub mod render_atomic_service;
 pub mod render_axis;
 pub mod render_elements;
 pub mod render_lanes;

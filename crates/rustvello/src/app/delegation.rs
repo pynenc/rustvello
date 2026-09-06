@@ -10,7 +10,7 @@ use crate::orchestration::RouteCallResult;
 
 impl RustvelloApp {
     fn task_routing(&self, task_id: &TaskId) -> RustvelloResult<(String, f64)> {
-        let task = self.task_registry.get_dyn(task_id).ok_or_else(|| {
+        let task = self.task_catalog.get(task_id).ok_or_else(|| {
             rustvello_core::error::RustvelloError::TaskNotRegistered {
                 task_id: task_id.clone(),
             }
@@ -18,25 +18,12 @@ impl RustvelloApp {
         let config = self.resolve_task_config(task_id, task.config());
         Ok((config.queue, config.priority))
     }
-
-    fn all_task_routing(&self) -> std::collections::HashMap<TaskId, (String, f64)> {
-        self.task_registry
-            .task_ids()
-            .into_iter()
-            .cloned()
-            .filter_map(|task_id| {
-                self.task_routing(&task_id)
-                    .ok()
-                    .map(|route| (task_id, route))
-            })
-            .collect()
-    }
 }
 
 // ---------------------------------------------------------------------------
-// Composite operations — thin delegation to OrchestratorCoordinator
+// Composite operations — thin delegation to Orchestrator
 //
-// Each method delegates to self.coordinator, which bundles multiple
+// Each method delegates to self.orchestrator, which bundles multiple
 // subsystem calls into a single Rust operation. Method names:
 //   _with_context = explicit task_id + arguments
 //   plain name    = auto-resolves context from state backend
@@ -50,9 +37,18 @@ impl RustvelloApp {
         status: InvocationStatus,
         runner_id: &RunnerId,
     ) -> RustvelloResult<InvocationStatusRecord> {
-        self.coordinator
+        self.orchestrator
             .set_invocation_status(invocation_id, status, runner_id)
             .await
+    }
+
+    /// Mark one invocation as waiting for another invocation.
+    pub async fn set_waiting_for(
+        &self,
+        waiter: &InvocationId,
+        waited_on: &InvocationId,
+    ) -> RustvelloResult<()> {
+        self.orchestrator.set_waiting_for(waiter, waited_on).await
     }
 
     /// Atomic status transition with explicit trigger context.
@@ -64,7 +60,7 @@ impl RustvelloApp {
         task_id: &TaskId,
         arguments: std::collections::BTreeMap<String, String>,
     ) -> RustvelloResult<InvocationStatusRecord> {
-        self.coordinator
+        self.orchestrator
             .set_invocation_status_with_context(
                 invocation_id,
                 status,
@@ -85,7 +81,7 @@ impl RustvelloApp {
             .iter()
             .map(|(_, call)| self.task_routing(&call.task_id))
             .collect::<RustvelloResult<_>>()?;
-        self.coordinator
+        self.orchestrator
             .register_invocations(invocations, runner_id, &routes)
             .await
     }
@@ -97,7 +93,7 @@ impl RustvelloApp {
         result: &str,
         runner_id: &RunnerId,
     ) -> RustvelloResult<()> {
-        self.coordinator
+        self.orchestrator
             .set_invocation_result(invocation_id, result, runner_id)
             .await
     }
@@ -111,7 +107,7 @@ impl RustvelloApp {
         task_id: &TaskId,
         arguments: std::collections::BTreeMap<String, String>,
     ) -> RustvelloResult<()> {
-        self.coordinator
+        self.orchestrator
             .set_invocation_result_with_context(
                 invocation_id,
                 result,
@@ -130,7 +126,7 @@ impl RustvelloApp {
         error_message: &str,
         runner_id: &RunnerId,
     ) -> RustvelloResult<()> {
-        self.coordinator
+        self.orchestrator
             .set_invocation_exception(invocation_id, error_type, error_message, runner_id)
             .await
     }
@@ -145,7 +141,7 @@ impl RustvelloApp {
         task_id: &TaskId,
         arguments: std::collections::BTreeMap<String, String>,
     ) -> RustvelloResult<()> {
-        self.coordinator
+        self.orchestrator
             .set_invocation_exception_with_context(
                 invocation_id,
                 error_type,
@@ -163,14 +159,8 @@ impl RustvelloApp {
         invocation_id: &InvocationId,
         runner_id: &RunnerId,
     ) -> RustvelloResult<()> {
-        let invocation = self
-            .coordinator
-            .state_backend
-            .get_invocation(invocation_id)
-            .await?;
-        let (queue_name, priority) = self.task_routing(&invocation.task_id)?;
-        self.coordinator
-            .set_invocation_retry(invocation_id, runner_id, &queue_name, priority)
+        self.orchestrator
+            .retry_invocation(&self.config, &self.task_catalog, invocation_id, runner_id)
             .await
     }
 
@@ -183,7 +173,7 @@ impl RustvelloApp {
         arguments: std::collections::BTreeMap<String, String>,
     ) -> RustvelloResult<()> {
         let (queue_name, priority) = self.task_routing(task_id)?;
-        self.coordinator
+        self.orchestrator
             .set_invocation_retry_with_context(
                 invocation_id,
                 runner_id,
@@ -198,19 +188,19 @@ impl RustvelloApp {
     /// Retrieve invocations ready to run, handling blocking priority and CC.
     ///
     /// Builds a config resolver closure from the task registry and delegates
-    /// to the coordinator, which handles the blocking priority + broker + CC logic.
+    /// to the orchestrator, which handles the blocking priority + broker + CC logic.
     pub async fn get_invocations_to_run(
         &self,
         max_num_invocations: usize,
         runner_id: &RunnerId,
     ) -> RustvelloResult<Vec<InvocationId>> {
         let config_for_task = |task_id: &TaskId| -> Option<TaskConfig> {
-            self.task_registry
-                .get_dyn(task_id)
+            self.task_catalog
+                .get(task_id)
                 .map(|t| self.resolve_task_config(task_id, t.config()))
         };
-        let queue_names = crate::runner::executor_common::queue_names_for_retrieval(&self.config);
-        self.coordinator
+        let queue_names = crate::orchestration::queue_names_for_retrieval(&self.config);
+        self.orchestrator
             .get_invocations_to_run(
                 max_num_invocations,
                 runner_id,
@@ -234,17 +224,16 @@ impl RustvelloApp {
         index_cc: bool,
         runner_id: &RunnerId,
     ) -> RustvelloResult<RouteCallResult> {
-        let (queue_name, priority) = self.task_routing(&call_dto.task_id)?;
-        self.coordinator
-            .route_call(
+        self.orchestrator
+            .route_catalog_call(
+                &self.config,
+                &self.task_catalog,
                 new_invocation_id,
                 call_dto,
                 cc_args,
                 registration_cc,
                 index_cc,
                 runner_id,
-                &queue_name,
-                priority,
             )
             .await
     }
@@ -255,20 +244,13 @@ impl RustvelloApp {
         invocation_ids: &[InvocationId],
         runner_id: &RunnerId,
     ) -> RustvelloResult<()> {
-        let mut routes = std::collections::HashMap::with_capacity(invocation_ids.len());
-        for invocation_id in invocation_ids {
-            let invocation = self
-                .coordinator
-                .state_backend
-                .get_invocation(invocation_id)
-                .await?;
-            routes.insert(
-                invocation_id.clone(),
-                self.task_routing(&invocation.task_id)?,
-            );
-        }
-        self.coordinator
-            .reroute_invocations(invocation_ids, runner_id, &routes)
+        self.orchestrator
+            .reroute_catalog_invocations(
+                &self.config,
+                &self.task_catalog,
+                invocation_ids,
+                runner_id,
+            )
             .await
     }
 
@@ -277,9 +259,8 @@ impl RustvelloApp {
         &self,
         runner_id: &RunnerId,
     ) -> RustvelloResult<Vec<InvocationId>> {
-        let routes = self.all_task_routing();
-        self.coordinator
-            .trigger_loop_iteration(runner_id, &routes)
+        self.orchestrator
+            .run_trigger_iteration(&self.config, &self.task_catalog, runner_id)
             .await
     }
 
@@ -294,14 +275,14 @@ impl RustvelloApp {
         spread_margin_minutes: f64,
         runner_timeout_seconds: f64,
     ) -> RustvelloResult<Option<Vec<InvocationId>>> {
-        let routes = self.all_task_routing();
-        self.coordinator
-            .check_atomic_services(
+        self.orchestrator
+            .run_atomic_services(
+                &self.config,
+                &self.task_catalog,
                 runner_id,
                 service_interval_minutes,
                 spread_margin_minutes,
                 runner_timeout_seconds,
-                &routes,
             )
             .await
     }

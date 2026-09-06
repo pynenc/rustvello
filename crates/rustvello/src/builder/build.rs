@@ -7,7 +7,7 @@ use rustvello_core::broker::Broker;
 use rustvello_core::broker::{validate_routing, DEFAULT_QUEUE};
 use rustvello_core::client_data_store::{ClientDataStore, ClientDataStoreManager};
 use rustvello_core::error::{RustvelloError, RustvelloResult};
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::trigger::{TriggerManager, TriggerStore};
 use rustvello_proto::config::AppConfig;
@@ -19,7 +19,7 @@ use super::RustvelloBuilder;
 /// All five backend trait objects created from a preset.
 struct ResolvedBackends {
     broker: Arc<dyn Broker>,
-    orchestrator: Arc<dyn Orchestrator>,
+    orchestrator: Arc<dyn InvocationControlBackend>,
     state_backend: Arc<dyn StateBackend>,
     client_data_store: Arc<dyn ClientDataStore>,
     trigger_store: Arc<dyn TriggerStore>,
@@ -145,7 +145,7 @@ impl RustvelloBuilder {
         if self.auto_discover {
             let mut discovered = 0u32;
             for entry in inventory::iter::<TaskEntry> {
-                (entry.register_fn)(&mut app.task_registry)?;
+                (entry.register_fn)(app.task_registry_mut())?;
                 discovered += 1;
             }
             tracing::info!("Auto-discovered {} tasks via inventory", discovered);
@@ -154,7 +154,7 @@ impl RustvelloBuilder {
         // Register task modules
         for module in &self.task_modules {
             tracing::info!("Registering task module: {}", module.name());
-            module.register(&mut app.task_registry)?;
+            module.register(app.task_registry_mut())?;
         }
 
         // Configure trigger manager if a trigger store was provided
@@ -350,7 +350,7 @@ impl RustvelloBuilder {
         })
     }
 
-    fn resolve_orchestrator(&self) -> RustvelloResult<Arc<dyn Orchestrator>> {
+    fn resolve_orchestrator(&self) -> RustvelloResult<Arc<dyn InvocationControlBackend>> {
         if let Some(ref o) = self.orchestrator {
             return Ok(Arc::clone(o));
         }

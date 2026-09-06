@@ -80,7 +80,11 @@ macro_rules! impl_py_broker {
             ) -> pyo3::PyResult<()> {
                 use rustvello_core::broker::Broker;
                 let id = crate::utils::parse_invocation_id(invocation_id)?;
-                let task_id = rustvello_proto::identifiers::TaskId::new(task_module, task_name);
+                let task_id = rustvello_proto::identifiers::TaskId::for_language(
+                    rustvello_proto::identifiers::TaskLanguage::Python,
+                    task_module,
+                    task_name,
+                );
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 py.allow_threads(|| rt.block_on(broker.route_invocation_for_task(&id, &task_id)))
@@ -95,7 +99,11 @@ macro_rules! impl_py_broker {
                 task_name: &str,
             ) -> pyo3::PyResult<Option<String>> {
                 use rustvello_core::broker::Broker;
-                let task_id = rustvello_proto::identifiers::TaskId::new(task_module, task_name);
+                let task_id = rustvello_proto::identifiers::TaskId::for_language(
+                    rustvello_proto::identifiers::TaskLanguage::Python,
+                    task_module,
+                    task_name,
+                );
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let result = py
@@ -111,6 +119,9 @@ macro_rules! impl_py_broker {
                 language: &str,
             ) -> pyo3::PyResult<Option<String>> {
                 use rustvello_core::broker::Broker;
+                let language = language
+                    .parse::<rustvello_proto::identifiers::TaskLanguage>()
+                    .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let result = py
@@ -129,7 +140,11 @@ macro_rules! impl_py_broker {
                 task_name: &str,
             ) -> pyo3::PyResult<usize> {
                 use rustvello_core::broker::Broker;
-                let task_id = rustvello_proto::identifiers::TaskId::new(task_module, task_name);
+                let task_id = rustvello_proto::identifiers::TaskId::for_language(
+                    rustvello_proto::identifiers::TaskLanguage::Python,
+                    task_module,
+                    task_name,
+                );
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 py.allow_threads(|| rt.block_on(broker.count_invocations(Some(&task_id))))
@@ -144,7 +159,11 @@ macro_rules! impl_py_broker {
                 task_name: &str,
             ) -> pyo3::PyResult<()> {
                 use rustvello_core::broker::Broker;
-                let task_id = rustvello_proto::identifiers::TaskId::new(task_module, task_name);
+                let task_id = rustvello_proto::identifiers::TaskId::for_language(
+                    rustvello_proto::identifiers::TaskLanguage::Python,
+                    task_module,
+                    task_name,
+                );
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 py.allow_threads(|| rt.block_on(broker.purge(Some(&task_id))))

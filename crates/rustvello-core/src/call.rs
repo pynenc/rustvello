@@ -19,6 +19,36 @@ use rustvello_proto::status::ConcurrencyControlType;
 use crate::error::{RustvelloError, RustvelloResult};
 use crate::task::Task;
 
+/// Convert typed params into per-key serialized arguments.
+pub fn params_to_serialized_arguments<P: serde::Serialize>(
+    params: &P,
+) -> RustvelloResult<SerializedArguments> {
+    let value = serde_json::to_value(params).map_err(|e| RustvelloError::Serialization {
+        message: e.to_string(),
+    })?;
+
+    let mut args = SerializedArguments::new();
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                let v_str =
+                    serde_json::to_string(&v).map_err(|e| RustvelloError::Serialization {
+                        message: e.to_string(),
+                    })?;
+                args.insert(k, v_str);
+            }
+        }
+        other => {
+            let v_str =
+                serde_json::to_string(&other).map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })?;
+            args.insert("__args__", v_str);
+        }
+    }
+    Ok(args)
+}
+
 /// A typed task call with concrete parameters.
 ///
 /// Mirrors pynenc's `Call` class. Holds a reference to the task and the
@@ -97,31 +127,7 @@ impl<'a, T: Task> Call<'a, T> {
     /// For other types (primitives, tuples), the entire value is stored
     /// under a single `"__args__"` key.
     pub fn serialized_arguments(&self) -> RustvelloResult<SerializedArguments> {
-        let value =
-            serde_json::to_value(&self.params).map_err(|e| RustvelloError::Serialization {
-                message: e.to_string(),
-            })?;
-
-        let mut args = SerializedArguments::new();
-        match value {
-            serde_json::Value::Object(map) => {
-                for (k, v) in map {
-                    let v_str =
-                        serde_json::to_string(&v).map_err(|e| RustvelloError::Serialization {
-                            message: e.to_string(),
-                        })?;
-                    args.insert(k, v_str);
-                }
-            }
-            other => {
-                let v_str =
-                    serde_json::to_string(&other).map_err(|e| RustvelloError::Serialization {
-                        message: e.to_string(),
-                    })?;
-                args.insert("__args__", v_str);
-            }
-        }
-        Ok(args)
+        params_to_serialized_arguments(&self.params)
     }
 
     /// Compute the deterministic [`CallId`] for this call.

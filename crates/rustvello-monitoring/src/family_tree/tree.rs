@@ -1,7 +1,7 @@
 //! Family tree data structure and construction from invocation history.
 
 use chrono::{DateTime, Utc};
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_proto::identifiers::InvocationId;
 use rustvello_proto::status::InvocationStatus;
@@ -27,7 +27,7 @@ const MAX_NODES: usize = 60;
 /// Build a family tree starting from the given invocation, walking to root first.
 pub async fn build_family_tree(
     invocation_id: &InvocationId,
-    orchestrator: &Arc<dyn Orchestrator>,
+    orchestrator: &Arc<dyn InvocationControlBackend>,
     state_backend: &Arc<dyn StateBackend>,
     expand_ids: &[String],
 ) -> Option<FamilyTreeNode> {
@@ -77,7 +77,7 @@ async fn find_root(
 /// Recursively build a tree node with depth and budget limits.
 async fn build_node(
     invocation_id: &InvocationId,
-    orchestrator: &Arc<dyn Orchestrator>,
+    orchestrator: &Arc<dyn InvocationControlBackend>,
     state_backend: &Arc<dyn StateBackend>,
     depth: usize,
     node_count: &mut usize,
@@ -104,11 +104,8 @@ async fn build_node(
             |r| r.status,
         );
 
-    let task_str = inv.task_id.to_string();
-    let (task_module, task_func) = task_str.rsplit_once('.').map_or_else(
-        || (String::new(), task_str.clone()),
-        |(m, f)| (m.to_owned(), f.to_owned()),
-    );
+    let task_module = format!("{}::{}", inv.task_id.language(), inv.task_id.module());
+    let task_func = inv.task_id.name().to_owned();
 
     let elapsed = (inv.updated_at - inv.created_at).num_milliseconds() as f64 / 1000.0;
 

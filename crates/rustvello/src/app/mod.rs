@@ -1,21 +1,21 @@
 mod delegation;
 mod submission;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use rustvello_core::broker::Broker;
 use rustvello_core::client_data_store::ClientDataStoreManager;
 use rustvello_core::error::RustvelloResult;
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::state_backend::StateBackend;
-use rustvello_core::task::{DynTask, Task, TaskDefinition, TaskFn, TaskRegistry};
+use rustvello_core::task::{DynTask, ForeignTask, Task, TaskFn, TaskRegistry};
 use rustvello_core::trigger::TriggerManager;
 use rustvello_proto::config::{AppConfig, TaskConfig};
 use rustvello_proto::identifiers::TaskId;
 
-use crate::orchestration::OrchestratorCoordinator;
-use crate::task_config::{apply_task_env_overrides, TaskConfigOverride};
+use crate::orchestration::Orchestrator;
+use crate::task_catalog::TaskCatalog;
+use crate::task_config::TaskConfigOverride;
 
 // ---------------------------------------------------------------------------
 // TaskEntry — compile-time task registration via inventory
@@ -47,27 +47,15 @@ inventory::collect!(TaskEntry);
 /// Mirrors pynenc's `Pynenc` class.
 pub struct RustvelloApp {
     pub config: AppConfig,
-    pub task_registry: TaskRegistry,
-    pub(crate) coordinator: OrchestratorCoordinator,
-    /// Per-task config overrides from TOML [tasks.<name>] sections + env vars.
-    /// Key is the task function name (e.g. "add", "process_order").
-    task_config_overrides: HashMap<String, TaskConfigOverride>,
-    /// Global task defaults from TOML [task_defaults] or env RUSTVELLO__TASK__KEY.
-    task_defaults_override: TaskConfigOverride,
-    /// Cache of resolved per-task env overrides, populated on first access.
-    /// Prevents repeated `std::env::var` calls on every submit.
-    env_override_cache: std::sync::Mutex<HashMap<String, Arc<TaskConfigOverride>>>,
-    /// Cache of runner IDs whose `StoredRunnerContext` has already been persisted.
-    /// Prevents redundant `store_runner_context` calls on every submit.
-    /// Mirrors pynenc's `_runner_context_cache` in `BaseStateBackend`.
-    stored_runner_cache: tokio::sync::Mutex<std::collections::HashSet<String>>,
+    task_catalog: TaskCatalog,
+    pub(crate) orchestrator: Orchestrator,
 }
 
 impl std::fmt::Debug for RustvelloApp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RustvelloApp")
             .field("config", &self.config)
-            .field("tasks", &self.task_registry.task_ids().len())
+            .field("tasks", &self.task_catalog.registry().task_ids().len())
             .finish_non_exhaustive()
     }
 }
@@ -80,7 +68,7 @@ impl RustvelloApp {
         use rustvello_proto::config::ClientDataStoreConfig;
 
         let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-        let orchestrator: Arc<dyn Orchestrator> =
+        let invocation_control: Arc<dyn InvocationControlBackend> =
             Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
         let state_backend: Arc<dyn StateBackend> =
             Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
@@ -90,8 +78,8 @@ impl RustvelloApp {
             mem_cds,
             ClientDataStoreConfig::default(),
         ));
-        let coordinator = OrchestratorCoordinator::new(
-            orchestrator,
+        let orchestrator = Orchestrator::new(
+            invocation_control,
             state_backend,
             broker,
             client_data_store,
@@ -100,12 +88,8 @@ impl RustvelloApp {
         );
         Self {
             config,
-            task_registry: TaskRegistry::new(),
-            coordinator,
-            task_config_overrides: HashMap::new(),
-            task_defaults_override: TaskConfigOverride::default(),
-            env_override_cache: std::sync::Mutex::new(HashMap::new()),
-            stored_runner_cache: tokio::sync::Mutex::new(std::collections::HashSet::new()),
+            task_catalog: TaskCatalog::new(),
+            orchestrator,
         }
     }
 
@@ -113,14 +97,14 @@ impl RustvelloApp {
     pub fn with_backends(
         config: AppConfig,
         broker: Arc<dyn Broker>,
-        orchestrator: Arc<dyn Orchestrator>,
+        invocation_control: Arc<dyn InvocationControlBackend>,
         state_backend: Arc<dyn StateBackend>,
         client_data_store: Arc<ClientDataStoreManager>,
     ) -> Self {
         Self::with_backends_and_triggers(
             config,
             broker,
-            orchestrator,
+            invocation_control,
             state_backend,
             client_data_store,
             None,
@@ -131,13 +115,13 @@ impl RustvelloApp {
     pub fn with_backends_and_triggers(
         config: AppConfig,
         broker: Arc<dyn Broker>,
-        orchestrator: Arc<dyn Orchestrator>,
+        invocation_control: Arc<dyn InvocationControlBackend>,
         state_backend: Arc<dyn StateBackend>,
         client_data_store: Arc<ClientDataStoreManager>,
         trigger_manager: Option<TriggerManager>,
     ) -> Self {
-        let coordinator = OrchestratorCoordinator::new(
-            orchestrator,
+        let orchestrator = Orchestrator::new(
+            invocation_control,
             state_backend,
             broker,
             client_data_store,
@@ -146,12 +130,8 @@ impl RustvelloApp {
         );
         Self {
             config,
-            task_registry: TaskRegistry::new(),
-            coordinator,
-            task_config_overrides: HashMap::new(),
-            task_defaults_override: TaskConfigOverride::default(),
-            env_override_cache: std::sync::Mutex::new(HashMap::new()),
-            stored_runner_cache: tokio::sync::Mutex::new(std::collections::HashSet::new()),
+            task_catalog: TaskCatalog::new(),
+            orchestrator,
         }
     }
 
@@ -162,8 +142,19 @@ impl RustvelloApp {
         config: TaskConfig,
         func: TaskFn,
     ) -> RustvelloResult<()> {
-        let definition = TaskDefinition::new(task_id, config, func);
-        self.task_registry.register(definition)
+        self.task_catalog.register_task(task_id, config, func)
+    }
+
+    /// Register a task implemented by another language runtime.
+    ///
+    /// The task can be submitted by this app and routed through the shared
+    /// backend, but it is intentionally not executable by this runner.
+    pub fn register_foreign_task(
+        &mut self,
+        task_id: TaskId,
+        config: TaskConfig,
+    ) -> RustvelloResult<()> {
+        self.task_catalog.register_foreign_task(task_id, config)
     }
 
     // -----------------------------------------------------------------------
@@ -179,94 +170,42 @@ impl RustvelloApp {
     ///
     /// This is the preferred way to register tasks.
     pub fn register<T: Task>(&mut self, task: T) -> RustvelloResult<()> {
-        self.task_registry.register_typed(task)
+        self.task_catalog.register(task)
+    }
+
+    /// Register a typed task proxy implemented by another runtime.
+    pub fn register_foreign<F: ForeignTask>(&mut self, task: F) -> RustvelloResult<()> {
+        self.task_catalog.register_foreign(task)
     }
 
     /// Set per-task config overrides (called from builder or tests).
     pub fn set_task_config_overrides(
         &mut self,
-        overrides: HashMap<String, TaskConfigOverride>,
+        overrides: std::collections::HashMap<String, TaskConfigOverride>,
         defaults: TaskConfigOverride,
     ) {
-        self.task_config_overrides = overrides;
-        self.task_defaults_override = defaults;
+        self.task_catalog.set_config_overrides(overrides, defaults);
     }
 
     /// Resolve the effective config for a task, applying overrides.
     pub fn resolve_task_config(&self, task_id: &TaskId, base: &TaskConfig) -> TaskConfig {
-        let mut config = base.clone();
-
-        // Layer 1: global task defaults
-        self.task_defaults_override.apply_to(&mut config);
-
-        // Layer 2: per-task overrides (by task function name)
-        if let Some(per_task) = self.task_config_overrides.get(task_id.name()) {
-            per_task.apply_to(&mut config);
-        }
-
-        // Layer 3: per-task env vars — cached to avoid repeated std::env::var calls
-        let env_override = self.get_or_load_env_override(task_id.name());
-        env_override.apply_to(&mut config);
-
-        config.priority = self
-            .config
-            .priority_rules
-            .iter()
-            .filter(|rule| {
-                glob::Pattern::new(&rule.task_id)
-                    .is_ok_and(|pattern| pattern.matches(&task_id.to_string()))
-            })
-            .map(|rule| rule.priority)
-            .max_by(f64::total_cmp)
-            .unwrap_or(config.priority);
-
-        config
-    }
-
-    /// Get or lazily load the env-based config override for a task name.
-    fn get_or_load_env_override(&self, task_name: &str) -> Arc<TaskConfigOverride> {
-        let mut cache = self
-            .env_override_cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(cached) = cache.get(task_name) {
-            return Arc::clone(cached);
-        }
-        let env_prefix = format!("RUSTVELLO__TASK__{}__", task_name.to_uppercase());
-        let mut config = TaskConfig::default();
-        let base = TaskConfig::default();
-        apply_task_env_overrides(&env_prefix, &mut config);
-
-        // Build an override from only the fields that changed
-        let env_override = Arc::new(TaskConfigOverride {
-            queue: (config.queue != base.queue).then_some(config.queue),
-            priority: (config.priority != base.priority).then_some(config.priority),
-            max_retries: (config.max_retries != base.max_retries).then_some(config.max_retries),
-            concurrency_control: (config.concurrency_control != base.concurrency_control)
-                .then_some(config.concurrency_control),
-            running_concurrency: (config.running_concurrency != base.running_concurrency)
-                .then_some(config.running_concurrency),
-            registration_concurrency: None,
-            cache_results: (config.cache_results != base.cache_results)
-                .then_some(config.cache_results),
-            key_arguments: None,
-            retry_for_errors: None,
-            disable_cache_args: None,
-            on_diff_non_key_args_raise: None,
-            parallel_batch_size: None,
-            is_workflow_task: (config.is_workflow_task != base.is_workflow_task)
-                .then_some(config.is_workflow_task),
-            reroute_on_cc: (config.reroute_on_cc != base.reroute_on_cc)
-                .then_some(config.reroute_on_cc),
-            blocking: (config.blocking != base.blocking).then_some(config.blocking),
-        });
-        cache.insert(task_name.to_owned(), Arc::clone(&env_override));
-        env_override
+        self.task_catalog
+            .resolve_config(&self.config, task_id, base)
     }
 
     /// Get a type-erased task from the registry by ID.
     pub fn get_task(&self, task_id: &TaskId) -> Option<Arc<dyn DynTask>> {
-        self.task_registry.get_dyn(task_id)
+        self.task_catalog.get(task_id)
+    }
+
+    /// Read-only access to registered task definitions.
+    pub fn task_registry(&self) -> &TaskRegistry {
+        self.task_catalog.registry()
+    }
+
+    /// Mutable registry access for compile-time discovery and task modules.
+    pub fn task_registry_mut(&mut self) -> &mut TaskRegistry {
+        self.task_catalog.registry_mut()
     }
 
     // -----------------------------------------------------------------------
@@ -275,51 +214,54 @@ impl RustvelloApp {
 
     /// Get shared references to backends (for runner construction).
     pub fn broker(&self) -> Arc<dyn Broker> {
-        Arc::clone(&self.coordinator.broker)
+        self.orchestrator.broker()
     }
 
-    pub fn orchestrator(&self) -> Arc<dyn Orchestrator> {
-        Arc::clone(&self.coordinator.orchestrator)
+    pub fn orchestrator(&self) -> Arc<dyn InvocationControlBackend> {
+        self.orchestrator.invocation_control()
     }
 
     pub fn state_backend(&self) -> Arc<dyn StateBackend> {
-        Arc::clone(&self.coordinator.state_backend)
+        self.orchestrator.state_backend()
     }
 
     pub fn client_data_store(&self) -> Arc<ClientDataStoreManager> {
-        Arc::clone(&self.coordinator.client_data_store)
+        self.orchestrator.client_data_store()
     }
 
     /// Get a reference to the trigger manager (if configured).
     pub fn trigger_manager(&self) -> Option<&TriggerManager> {
-        self.coordinator.trigger_manager.as_ref()
+        self.orchestrator.trigger_manager()
     }
 
     /// Set the trigger manager.
     pub fn set_trigger_manager(&mut self, manager: TriggerManager) {
-        self.coordinator.trigger_manager = Some(manager);
+        self.orchestrator.set_trigger_manager(manager);
     }
 
     /// Purge all data from all backends (orchestrator, broker, state backend).
     ///
     /// Equivalent to pynenc's `Pynenc.purge()`.
     pub async fn purge(&self) -> RustvelloResult<()> {
-        self.coordinator.orchestrator.purge().await?;
-        self.coordinator.broker.purge(None).await?;
-        self.coordinator.state_backend.purge().await?;
-        Ok(())
+        self.orchestrator.purge().await
     }
 
     /// Consume the app and return a `TaskRunner` ready to process invocations.
     pub fn into_runner(self) -> crate::runner::TaskRunner {
-        crate::runner::TaskRunner::new(
+        let crate::orchestration::RunnerPorts {
+            broker,
+            invocation_control,
+            state_backend,
+            trigger_manager,
+        } = self.orchestrator.into_runner_ports();
+        crate::runner::TaskRunner::new_with_catalog(
             self.config.app_id.clone(),
             self.config,
-            self.coordinator.broker,
-            self.coordinator.orchestrator,
-            self.coordinator.state_backend,
-            Arc::new(self.task_registry),
-            self.coordinator.trigger_manager,
+            broker,
+            invocation_control,
+            state_backend,
+            Arc::new(self.task_catalog),
+            trigger_manager,
         )
     }
 }

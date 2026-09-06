@@ -32,6 +32,14 @@ Monitor{% endblock %} {% block content %}
                 <td><span class="badge bg-primary">{{ runner_cls }}</span></td>
               </tr>
               <tr>
+                <td class="text-muted">Language</td>
+                <td><span class="badge language-badge language-{{ runner_language }}">{{ runner_language }}</span></td>
+              </tr>
+              <tr>
+                <td class="text-muted">Executor</td>
+                <td><code class="small">{{ executor_kind }}</code></td>
+              </tr>
+              <tr>
                 <td class="text-muted">Runner ID</td>
                 <td><code class="small">{{ runner_id }}</code></td>
               </tr>
@@ -231,6 +239,8 @@ Monitor{% endblock %} {% block content %}
                     <span class="badge bg-light text-dark"
                       >{{ w.runner_cls }}</span
                     >
+                    <span class="badge language-badge language-{{ w.runner_language }}">{{ w.runner_language }}</span>
+                    <code class="small ms-1">{{ w.executor_kind }}</code>
                   </td>
                   <td>
                     <small class="text-muted"
@@ -311,80 +321,14 @@ Monitor{% endblock %} {% block content %}
         </div>
         <div class="card-body p-0">
           {% if !invocations.is_empty() %}
-          <div class="table-responsive">
-            <table class="table table-sm table-hover mb-0">
-              <thead>
-                <tr>
-                  <th>Invocation ID</th>
-                  <th>Task</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for inv in invocations %}
-                <tr>
-                  <td>
-                    <a
-                      href="/invocations/{{ inv.invocation_id }}"
-                      class="text-decoration-none"
-                    >
-                      <code class="small text-primary">{{ inv.short_id }}</code>
-                    </a>
-                  </td>
-                  <td>
-                    <a
-                      href="/tasks/{{ inv.task_id }}"
-                      class="text-decoration-none"
-                      >{{ inv.task_id }}</a
-                    >
-                  </td>
-                  <td>
-                    <span class="badge {{ inv.status_class }}"
-                      >{{ inv.status }}</span
-                    >
-                  </td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
+          {% include "components/invocation_table.html" %}
           {% else %}
           <div class="text-center py-4">
             <p class="text-muted mb-0">No invocations found for this runner</p>
           </div>
           {% endif %}
         </div>
-        {% if total_pages > 1 %}
-        <div
-          class="card-footer d-flex justify-content-between align-items-center"
-        >
-          <small class="text-muted">
-            Showing {{ invocations.len() }} of {{ invocation_count }}
-            invocations (page {{ current_page }}/{{ total_pages }})
-          </small>
-          <nav>
-            <ul class="pagination pagination-sm mb-0">
-              {% if current_page > 1 %}
-              <li class="page-item">
-                <a
-                  class="page-link"
-                  href="/runners/{{ runner_id }}?page={{ current_page - 1 }}&limit={{ page_limit }}"
-                  >Previous</a
-                >
-              </li>
-              {% endif %} {% if current_page < total_pages %}
-              <li class="page-item">
-                <a
-                  class="page-link"
-                  href="/runners/{{ runner_id }}?page={{ current_page + 1 }}&limit={{ page_limit }}"
-                  >Next</a
-                >
-              </li>
-              {% endif %}
-            </ul>
-          </nav>
-        </div>
-        {% endif %}
+        {% include "components/pagination.html" %}
       </div>
     </div>
   </div>
@@ -404,7 +348,7 @@ Monitor{% endblock %} {% block content %}
             View All Invocations
           </a>
           <a
-            href="/invocations/timeline"
+            href="{{ timeline_url }}"
             class="btn btn-sm btn-outline-secondary"
           >
             <span

@@ -13,11 +13,11 @@
               style="font-size: 20px"
               >task_alt</span
             >
-            Tasks ({{ tasks.len() }})
+            Tasks ({{ total_tasks }})
           </span>
           <button
             class="btn btn-sm btn-outline-primary"
-            hx-get="/tasks/refresh"
+            hx-get="/tasks/refresh?{{ pagination_query }}&page={{ pagination.page }}"
             hx-target="#tasks-content"
             hx-swap="innerHTML"
           >
@@ -30,7 +30,7 @@
         <div class="card-body pynmon-card-body">
           <div
             id="tasks-content"
-            hx-get="/tasks/refresh"
+            hx-get="/tasks/refresh?{{ pagination_query }}&page={{ pagination.page }}"
             hx-trigger="every 10s"
             hx-swap="innerHTML"
           >

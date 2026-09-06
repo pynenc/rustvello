@@ -14,7 +14,7 @@ pub struct PyTaskConfig {
 #[pymethods]
 impl PyTaskConfig {
     #[new]
-    #[pyo3(signature = (max_retries=0, concurrency_control="unlimited", running_concurrency=None, cache_results=false, queue="default", priority=0.0))]
+    #[pyo3(signature = (max_retries=0, concurrency_control="unlimited", running_concurrency=None, cache_results=false, queue="default", priority=0.0, is_workflow_task=false))]
     fn new(
         max_retries: u32,
         concurrency_control: &str,
@@ -22,6 +22,7 @@ impl PyTaskConfig {
         cache_results: bool,
         queue: &str,
         priority: f64,
+        is_workflow_task: bool,
     ) -> PyResult<Self> {
         validate_routing(queue, priority)
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
@@ -44,6 +45,7 @@ impl PyTaskConfig {
         inner.cache_results = cache_results;
         inner.queue = queue.to_owned();
         inner.priority = priority;
+        inner.is_workflow_task = is_workflow_task;
         Ok(Self { inner })
     }
 
@@ -72,10 +74,19 @@ impl PyTaskConfig {
         self.inner.priority
     }
 
+    #[getter]
+    fn is_workflow_task(&self) -> bool {
+        self.inner.is_workflow_task
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "TaskConfig(max_retries={}, cache_results={}, queue='{}', priority={})",
-            self.inner.max_retries, self.inner.cache_results, self.inner.queue, self.inner.priority,
+            "TaskConfig(max_retries={}, cache_results={}, queue='{}', priority={}, is_workflow_task={})",
+            self.inner.max_retries,
+            self.inner.cache_results,
+            self.inner.queue,
+            self.inner.priority,
+            self.inner.is_workflow_task,
         )
     }
 }
@@ -276,22 +287,25 @@ mod tests {
     #[test]
     fn task_config_defaults() {
         Python::with_gil(|_py| {
-            let cfg = PyTaskConfig::new(0, "unlimited", None, false, "default", 0.0).unwrap();
+            let cfg =
+                PyTaskConfig::new(0, "unlimited", None, false, "default", 0.0, false).unwrap();
             assert_eq!(cfg.max_retries(), 0);
             assert!(!cfg.cache_results());
             assert_eq!(cfg.running_concurrency(), None);
+            assert!(!cfg.is_workflow_task());
         });
     }
 
     #[test]
     fn task_config_custom_values() {
         Python::with_gil(|_py| {
-            let cfg = PyTaskConfig::new(3, "task", Some(5), true, "critical", 12.5).unwrap();
+            let cfg = PyTaskConfig::new(3, "task", Some(5), true, "critical", 12.5, true).unwrap();
             assert_eq!(cfg.max_retries(), 3);
             assert!(cfg.cache_results());
             assert_eq!(cfg.running_concurrency(), Some(5));
             assert_eq!(cfg.queue(), "critical");
             assert_eq!(cfg.priority(), 12.5);
+            assert!(cfg.is_workflow_task());
         });
     }
 
@@ -299,7 +313,7 @@ mod tests {
     fn task_config_all_concurrency_types() {
         Python::with_gil(|_py| {
             for cc in &["unlimited", "task", "argument", "none"] {
-                assert!(PyTaskConfig::new(0, cc, None, false, "default", 0.0).is_ok());
+                assert!(PyTaskConfig::new(0, cc, None, false, "default", 0.0, false).is_ok());
             }
         });
     }
@@ -307,7 +321,7 @@ mod tests {
     #[test]
     fn task_config_invalid_concurrency_type() {
         Python::with_gil(|_py| {
-            let result = PyTaskConfig::new(0, "invalid", None, false, "default", 0.0);
+            let result = PyTaskConfig::new(0, "invalid", None, false, "default", 0.0, false);
             assert!(result.is_err());
         });
     }
@@ -315,10 +329,11 @@ mod tests {
     #[test]
     fn task_config_repr() {
         Python::with_gil(|_py| {
-            let cfg = PyTaskConfig::new(2, "unlimited", None, true, "default", 0.0).unwrap();
+            let cfg = PyTaskConfig::new(2, "unlimited", None, true, "default", 0.0, true).unwrap();
             let repr = cfg.__repr__();
             assert!(repr.contains("max_retries=2"));
             assert!(repr.contains("cache_results=true"));
+            assert!(repr.contains("is_workflow_task=true"));
         });
     }
 

@@ -3,6 +3,7 @@
   <table class="table table-hover pynmon-table mb-0">
     <thead>
       <tr>
+        <th>Language</th>
         <th>Task ID</th>
         <th>Invocations</th>
         <th>Actions</th>
@@ -11,6 +12,7 @@
     <tbody>
       {% for task in tasks %}
       <tr>
+        <td><span class="badge language-badge language-{{ task.language }}">{{ task.language }}</span></td>
         <td>
           <a href="/tasks/{{ task.task_id }}" class="text-decoration-none">
             <strong>{{ task.task_id }}</strong>
@@ -31,6 +33,7 @@
     </tbody>
   </table>
 </div>
+{% include "components/pagination.html" %}
 {% else %}
 <div class="alert alert-info mb-0">No tasks found.</div>
 {% endif %}

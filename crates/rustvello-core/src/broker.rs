@@ -3,7 +3,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use rustvello_proto::config::{MAX_PRIORITY, MIN_PRIORITY};
-use rustvello_proto::identifiers::{InvocationId, TaskId};
+use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
 
 use crate::error::RustvelloError;
 use crate::error::RustvelloResult;
@@ -38,8 +38,7 @@ pub fn validate_routing(queue_name: &str, priority: f64) -> RustvelloResult<()> 
 ///
 /// ## Cross-language routing
 ///
-/// When a task has a non-empty `language` field in its [`TaskId`],
-/// the broker routes it to a language-specific queue. Workers only
+/// Every task carries a [`TaskLanguage`] in its [`TaskId`]. Workers only
 /// retrieve invocations for their own language via
 /// [`retrieve_invocation_for_language`].
 #[async_trait]
@@ -63,7 +62,7 @@ pub trait Broker: Send + Sync {
     /// Retrieve from one logical queue for a language worker.
     async fn retrieve_invocation_for_language_from_queue(
         &self,
-        language: &str,
+        language: TaskLanguage,
         queue_name: &str,
     ) -> RustvelloResult<Option<InvocationId>>;
 
@@ -109,19 +108,14 @@ pub trait Broker: Send + Sync {
 
     /// Retrieve the next invocation for a specific language worker.
     ///
-    /// Returns invocations routed to the given language queue.
+    /// Returns invocations routed to the given language partition. Worker paths
+    /// must never scan, consume, or requeue another language's work.
     ///
-    /// **Note:** Implementations that check the global queue first (e.g. `MemBroker`)
-    /// may "steal" invocations intended for all workers before language-agnostic
-    /// workers get a chance. In mixed-language deployments, prefer routing
-    /// language-specific tasks to per-task queues via [`route_invocation_for_task`]
-    /// and use [`retrieve_invocation`] with `None` only for language-agnostic work.
-    ///
-    /// Backends must preserve language filtering while allowing global queue
-    /// items to be consumed by any language worker.
+    /// The legacy [`route_invocation`] method has no task identity and is treated
+    /// as Rust work. Mixed-language application paths must route with a `TaskId`.
     async fn retrieve_invocation_for_language(
         &self,
-        language: &str,
+        language: TaskLanguage,
     ) -> RustvelloResult<Option<InvocationId>>;
 
     /// Retrieve up to `max` invocations at once (batch optimization).

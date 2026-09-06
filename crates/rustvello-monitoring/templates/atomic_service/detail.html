@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Atomic Service Execution - Rustvello Monitor{% endblock %}
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div><h2 class="h4 mb-0 text-primary">Atomic Service Execution</h2><small class="text-muted">Control-plane work performed by this runner window.</small></div>
+    <div class="d-flex gap-2"><a href="{{ timeline_url }}" class="btn btn-sm btn-outline-primary"><span class="material-icons align-middle" style="font-size:15px">zoom_in</span> Timeline</a><a href="/atomic-service" class="btn btn-sm btn-outline-secondary">Back</a></div>
+  </div>
+  <div class="metric-card mb-3"><div class="metric-grid"><div class="metric-item"><span class="metric-label">Runner</span><a href="/runners/{{ runner_id }}"><code>{{ runner_id }}</code></a></div><div class="metric-item"><span class="metric-label">Started</span><span>{{ start }}</span></div><div class="metric-item"><span class="metric-label">Completed</span><span>{{ end }}</span></div><div class="metric-item"><span class="metric-label">Duration</span><span class="badge bg-warning text-dark">{{ duration_secs }}s</span></div></div></div>
+  <div class="card pynmon-card"><div class="card-header pynmon-card-header"><span class="compact-header">Triggered Invocations</span></div><div class="card-body pynmon-card-body p-0">
+    {% if !trigger_store_available %}<p class="text-muted m-3">This trigger store does not expose trigger-run monitoring.</p>
+    {% else if trigger_runs.is_empty() %}<p class="text-muted m-3">No trigger runs were recorded in this atomic-service window. Recovery and housekeeping can still have run.</p>
+    {% else %}<div class="table-responsive"><table class="table table-hover pynmon-table mb-0"><thead><tr><th>Task</th><th>Claimed</th><th>Invocation</th></tr></thead><tbody>{% for run in trigger_runs %}<tr><td><a href="/tasks/{{ run.task_id }}">{{ run.task_id }}</a></td><td>{{ run.claimed_at }}</td><td>{% if let Some(invocation_id) = run.invocation_id %}<a href="/invocations/{{ invocation_id }}"><code>{{ invocation_id }}</code></a>{% else %}<span class="text-muted">No invocation created</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+  </div></div>
+</div>
+{% endblock %}

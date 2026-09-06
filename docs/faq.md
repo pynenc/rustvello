@@ -219,7 +219,7 @@ evaluates triggers per time slot — even with N runners running simultaneously.
 
 Python ([pynenc](https://docs.pynenc.org)) and Rust workers share the same broker
 and orchestrator when deployed under the same `app_id`. Task IDs are language-qualified
-(`py::module.task` vs `rs::crate.task`) so:
+(`python::module.task` vs `rust::crate.task`) so:
 
 - Each language's broker only delivers invocations it can execute
 - Rust tasks can call Python tasks and vice versa with full argument passing

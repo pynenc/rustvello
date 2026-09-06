@@ -24,6 +24,7 @@ pub mod builder;
 pub mod logging;
 pub mod orchestration;
 pub mod runner;
+pub mod task_catalog;
 pub mod task_config;
 pub mod trigger_builder;
 
@@ -83,9 +84,8 @@ pub mod prelude {
     pub use crate::builder::Rustvello;
     #[cfg(feature = "rayon")]
     pub use crate::runner::RayonRunner;
-    pub use crate::runner::{
-        PerInvocationTokioRunner, PersistentTokioRunner, SpawnBlockingRunner, TaskRunner,
-    };
+    pub use crate::runner::{PersistentTokioRunner, TaskRunner};
+    pub use crate::task_catalog::TaskCatalog;
     pub use crate::trigger_builder::TriggerBuilder;
     pub use rustvello_core::prelude::*;
     // Re-export proto types for convenient * imports by consumers

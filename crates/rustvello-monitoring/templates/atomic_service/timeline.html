@@ -81,11 +81,12 @@ Monitor{% endblock %} {% block content %}
               <th>Start (UTC)</th>
               <th>End (UTC)</th>
               <th>Duration</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {% for row in rows %}
-            <tr>
+            <tr class="monitor-temporal-row atomic-run-track{% if row.overlaps %} monitor-temporal-row-overlap{% endif %}" style="--time-left: {{ row.left_percent }}%; --time-width: {{ row.width_percent }}%">
               <td>
                 <a
                   href="/runners/{{ row.runner_id }}"
@@ -99,11 +100,13 @@ Monitor{% endblock %} {% block content %}
               <td>
                 <span class="badge bg-info">{{ row.duration_secs }}s</span>
               </td>
+              <td class="text-nowrap"><a href="{{ row.timeline_url }}" class="btn btn-sm btn-outline-primary" title="Zoom invocation timeline to this atomic-service execution"><span class="material-icons align-middle" style="font-size:14px">zoom_in</span></a><a href="{{ row.detail_url }}" class="btn btn-sm btn-outline-secondary" title="View atomic-service execution details"><span class="material-icons align-middle" style="font-size:14px">list_alt</span></a></td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
+      {% include "components/pagination.html" %}
       {% else %}
       <div class="text-center py-4">
         <p class="text-muted mb-0">No atomic service executions recorded yet</p>

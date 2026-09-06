@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mongodb::bson::{doc, Bson, Document, Regex};
+use mongodb::bson::{doc, Bson, Document};
 use mongodb::options::FindOneAndDeleteOptions;
 
 use rustvello_core::broker::{validate_routing, Broker, DEFAULT_QUEUE};
 use rustvello_core::error::{RustvelloError, RustvelloResult};
-use rustvello_proto::identifiers::{InvocationId, TaskId};
+use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
 
 use crate::connection::{mongo_err, MongoPool};
 
@@ -107,20 +107,17 @@ impl Broker for Mongo3Broker {
 
     async fn retrieve_invocation_for_language_from_queue(
         &self,
-        language: &str,
+        language: TaskLanguage,
         queue_name: &str,
     ) -> RustvelloResult<Option<InvocationId>> {
         validate_routing(queue_name, 0.0)?;
-        let language_filter = if language.is_empty() {
-            doc! { "$or": [
-                { "task_id": Bson::Null },
-                { "task_id": { "$not": Bson::RegularExpression(Regex { pattern: "::".to_string(), options: String::new() }) } }
-            ] }
-        } else {
+        let language_filter = if language == TaskLanguage::Rust {
             doc! { "$or": [
                 { "task_id": Bson::Null },
                 { "task_id": { "$regex": format!("^{language}::") } }
             ] }
+        } else {
+            doc! { "task_id": { "$regex": format!("^{language}::") } }
         };
         let filter = doc! { "queue_name": queue_name, "$and": [language_filter] };
         let db = self.pool.db().await?;
@@ -135,7 +132,7 @@ impl Broker for Mongo3Broker {
 
     async fn retrieve_invocation_for_language(
         &self,
-        language: &str,
+        language: TaskLanguage,
     ) -> RustvelloResult<Option<InvocationId>> {
         self.retrieve_invocation_for_language_from_queue(language, DEFAULT_QUEUE)
             .await

@@ -10,7 +10,7 @@ The test architecture follows these principles inspired by major Rust projects
 (tokio, serde, diesel):
 
 - **Backend-agnostic test logic**: Test functions are written once against trait
-  interfaces (`dyn Broker`, `dyn Orchestrator`, etc.), not concrete types.
+  interfaces (`dyn Broker`, `dyn InvocationControlBackend`, etc.), not concrete types.
 - **Macro-driven instantiation**: Each backend uses a single macro call to
   generate the full test suite, eliminating copy-paste boilerplate.
 - **Compile-time completeness guarantee**: A validator test ensures every shared

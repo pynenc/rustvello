@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rustvello_core::broker::Broker;
 use rustvello_core::error::{RustvelloResult, TaskError};
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_proto::call::CallDTO;
 use rustvello_proto::identifiers::{CallId, InvocationId, TaskId};
@@ -16,7 +16,7 @@ use super::MonitorDataSource;
 
 /// A [`MonitorDataSource`] backed by the standard rustvello traits.
 pub struct BackendDataSource {
-    orchestrator: Arc<dyn Orchestrator>,
+    orchestrator: Arc<dyn InvocationControlBackend>,
     state_backend: Arc<dyn StateBackend>,
     broker: Arc<dyn Broker>,
     task_ids: Vec<TaskId>,
@@ -24,7 +24,7 @@ pub struct BackendDataSource {
 
 impl BackendDataSource {
     pub fn new(
-        orchestrator: Arc<dyn Orchestrator>,
+        orchestrator: Arc<dyn InvocationControlBackend>,
         state_backend: Arc<dyn StateBackend>,
         broker: Arc<dyn Broker>,
         task_ids: Vec<TaskId>,

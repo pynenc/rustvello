@@ -595,7 +595,7 @@ mod tests {
             });
             let val = err.value_bound(py);
             let tid: String = val.getattr("task_id").unwrap().extract().unwrap();
-            assert_eq!(tid, "mod.func");
+            assert_eq!(tid, "rust::mod.func");
         });
     }
 }

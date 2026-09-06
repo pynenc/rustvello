@@ -82,6 +82,9 @@ pub struct EventQuery {
     pub emitted_by_invocation_id: Option<InvocationId>,
     pub start: Option<DateTime<Utc>>,
     pub end: Option<DateTime<Utc>>,
+    pub matched: Option<bool>,
+    pub triggered: Option<bool>,
+    pub offset: Option<usize>,
     pub limit: Option<usize>,
 }
 

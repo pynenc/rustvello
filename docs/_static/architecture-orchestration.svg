@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="800" viewBox="0 0 1480 800" role="img" aria-labelledby="title desc">
+  <title id="title">Rustvello orchestration architecture after the 0.5 refactor</title>
+  <desc id="desc">RustvelloApp owns configuration and the task catalog. A concrete Orchestrator sequences cross-backend use cases. Backend ports own durable storage, broker delivery, triggers, and payload storage. Runners use a shared control plane and executor implementations.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0 0L0 6L8 3Z" fill="#52606d"/>
+    </marker>
+    <style>
+      .title{font:700 28px Inter,system-ui,sans-serif;fill:#24313d}
+      .subtitle{font:15px Inter,system-ui,sans-serif;fill:#52606d}
+      .box-title{font:700 16px Inter,system-ui,sans-serif;fill:#24313d}
+      .box-text{font:13px Inter,system-ui,sans-serif;fill:#45525e}
+      .small{font:12px Inter,system-ui,sans-serif;fill:#52606d}
+      .panel{fill:#f8fafb;stroke:#cad2d9;stroke-width:2;rx:8}
+      .app{fill:#eaf7f6;stroke:#2f7f78;stroke-width:2;rx:7}
+      .service{fill:#eaf1fb;stroke:#4f75a8;stroke-width:2;rx:7}
+      .port{fill:#fff4e6;stroke:#b56d24;stroke-width:2;rx:7}
+      .state{fill:#e8f3ec;stroke:#3f7d5c;stroke-width:2;rx:7}
+      .runner{fill:#f3ecfa;stroke:#77559a;stroke-width:2;rx:7}
+      .binding{fill:#f4f6f8;stroke:#687681;stroke-width:2;rx:7}
+      .line{fill:none;stroke:#52606d;stroke-width:2;marker-end:url(#arrow)}
+    </style>
+  </defs>
+
+  <rect width="1480" height="800" fill="#ffffff"/>
+  <text x="38" y="44" class="title">Orchestration modules and responsibility boundaries</text>
+  <text x="38" y="70" class="subtitle">Current 0.5 architecture: one concrete orchestrator owns cross-backend use cases.</text>
+  <text x="38" y="96" class="small">Solid arrows show deliberate dependencies. RuntimeBackends groups private ports; Backend Ports are the replaceable durable implementations.</text>
+  <text x="38" y="114" class="small">The concrete Orchestrator owns cross-backend operation ordering.</text>
+
+  <rect x="28" y="132" width="1424" height="606" class="panel"/>
+
+  <rect x="70" y="224" width="180" height="88" class="binding"/>
+  <text x="160" y="257" text-anchor="middle" class="box-title">Caller / PyO3</text>
+  <text x="160" y="283" text-anchor="middle" class="box-text">Rust API or bindings</text>
+
+  <rect x="310" y="178" width="270" height="132" class="app"/>
+  <text x="445" y="213" text-anchor="middle" class="box-title">RustvelloApp</text>
+  <text x="445" y="241" text-anchor="middle" class="box-text">composition root</text>
+  <text x="445" y="266" text-anchor="middle" class="box-text">configuration + facade</text>
+  <text x="445" y="291" text-anchor="middle" class="small">app/mod.rs, submission.rs, delegation.rs</text>
+
+  <rect x="310" y="380" width="270" height="116" class="state"/>
+  <text x="445" y="414" text-anchor="middle" class="box-title">TaskCatalog</text>
+  <text x="445" y="441" text-anchor="middle" class="box-text">registration + foreign tasks</text>
+  <text x="445" y="466" text-anchor="middle" class="box-text">config + executable lookup</text>
+
+  <rect x="675" y="138" width="330" height="280" class="service"/>
+  <text x="840" y="173" text-anchor="middle" class="box-title">Orchestrator</text>
+  <text x="704" y="209" class="box-text">submission.rs</text>
+  <text x="858" y="209" class="small">submit + register</text>
+  <text x="704" y="241" class="box-text">routing.rs</text>
+  <text x="858" y="241" class="small">route + reroute</text>
+  <text x="704" y="273" class="box-text">dispatch.rs</text>
+  <text x="858" y="273" class="small">claim + admission</text>
+  <text x="704" y="305" class="box-text">maintenance.rs</text>
+  <text x="858" y="305" class="small">recovery + purge</text>
+  <text x="704" y="337" class="box-text">retrieval.rs</text>
+  <text x="858" y="337" class="small">queries + trigger context</text>
+  <text x="704" y="369" class="box-text">triggers.rs</text>
+  <text x="858" y="369" class="small">trigger loop + atomic service</text>
+
+  <rect x="1085" y="138" width="250" height="280" class="service"/>
+  <text x="1210" y="173" text-anchor="middle" class="box-title">RuntimeBackends</text>
+  <text x="1210" y="203" text-anchor="middle" class="box-text">private shared port bundle</text>
+  <text x="1210" y="242" text-anchor="middle" class="small">InvocationControlBackend</text>
+  <text x="1210" y="272" text-anchor="middle" class="small">StateBackend</text>
+  <text x="1210" y="302" text-anchor="middle" class="small">Broker</text>
+  <text x="1210" y="332" text-anchor="middle" class="small">ClientDataStore</text>
+  <text x="1210" y="362" text-anchor="middle" class="small">TriggerManager</text>
+
+  <rect x="1085" y="500" width="250" height="108" class="port"/>
+  <text x="1210" y="534" text-anchor="middle" class="box-title">Backend Ports</text>
+  <text x="1210" y="561" text-anchor="middle" class="box-text">durable state + delivery</text>
+  <text x="1210" y="586" text-anchor="middle" class="box-text">replaceable implementations</text>
+
+  <rect x="675" y="500" width="330" height="118" class="runner"/>
+  <text x="840" y="534" text-anchor="middle" class="box-title">RunnerControlPlane</text>
+  <text x="840" y="562" text-anchor="middle" class="box-text">language, queues, heartbeat, recovery</text>
+  <text x="840" y="589" text-anchor="middle" class="box-text">shutdown and lifecycle delegation</text>
+
+  <rect x="675" y="640" width="150" height="56" class="runner"/>
+  <text x="750" y="674" text-anchor="middle" class="box-title">TokioExecutor</text>
+
+  <rect x="855" y="640" width="150" height="56" class="runner"/>
+  <text x="930" y="674" text-anchor="middle" class="box-title">RayonExecutor</text>
+
+  <path d="M250 268H310" class="line"/>
+  <path d="M580 244H675" class="line"/>
+  <path d="M445 310V380" class="line"/>
+  <path d="M580 438C625 438 625 385 675 385" class="line"/>
+  <path d="M1005 278H1085" class="line"/>
+  <path d="M1210 418V500" class="line"/>
+  <path d="M840 500V418" class="line"/>
+  <path d="M775 640L808 618" class="line"/>
+  <path d="M915 640L882 618" class="line"/>
+</svg>

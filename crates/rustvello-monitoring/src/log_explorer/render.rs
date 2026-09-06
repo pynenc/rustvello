@@ -215,7 +215,10 @@ mod tests {
     fn test_entity_link_url() {
         assert_eq!(entity_link_url("invocation", "abc"), "/invocations/abc");
         assert_eq!(entity_link_url("runner", "r1"), "/runners/r1");
-        assert_eq!(entity_link_url("task", "mod.func"), "/tasks/mod.func");
+        assert_eq!(
+            entity_link_url("task", "rust::mod.func"),
+            "/tasks/rust::mod.func"
+        );
         assert_eq!(entity_link_url("workflow", "w1"), "/workflows/runs");
     }
 

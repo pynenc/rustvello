@@ -81,20 +81,19 @@
 
 /* SVG Timeline Visualization */
 .timeline-svg-container {
-  min-height: 200px;
+  min-height: 160px;
   background-color: #ffffff;
   border-radius: 4px;
 }
 
 .timeline-svg-container svg {
   display: block;
-  min-width: 100%;
+  min-width: 1600px;
   height: auto;
 }
 
 .timeline-svg-container svg rect[data-invocation-id] {
   cursor: pointer;
-  transition: opacity 0.2s ease;
 }
 
 .timeline-svg-container svg rect[data-invocation-id]:hover {
@@ -105,9 +104,6 @@
 
 .timeline-svg-container svg circle[data-invocation-id] {
   cursor: pointer;
-  transition:
-    r 0.2s ease,
-    stroke-width 0.2s ease;
 }
 
 .timeline-svg-container svg circle[data-invocation-id]:hover {
@@ -119,13 +115,11 @@
   opacity: 1 !important;
   stroke: #0d6efd;
   stroke-width: 3px;
-  filter: drop-shadow(0 0 4px rgba(13, 110, 253, 0.5));
 }
 
 .timeline-svg-container svg circle.invocation-highlight {
   stroke-width: 4px !important;
   stroke: #0d6efd !important;
-  filter: drop-shadow(0 0 4px rgba(13, 110, 253, 0.5));
 }
 
 .timeline-svg-container svg text.invocation-highlight {

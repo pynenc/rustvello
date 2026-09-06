@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use rustvello_core::error::RustvelloResult;
 use rustvello_core::state_backend::{StateBackendRunner, StoredRunnerContext};
 
-use rustvello_proto::identifiers::{InvocationId, RunnerId};
+use rustvello_proto::identifiers::{ExecutorKind, InvocationId, RunnerId, TaskLanguage};
 use rustvello_proto::invocation::InvocationHistory;
 use rustvello_proto::status::InvocationStatusRecord;
 
@@ -19,15 +19,17 @@ impl StateBackendRunner for SqliteStateBackend {
         let db = Arc::clone(&self.db);
         let context = context.clone();
         blocking(move || {
-
             let conn = db.conn.lock().map_err(lock_err)?;
             conn.execute(
                 "INSERT OR REPLACE INTO runner_contexts
-                 (runner_id, runner_cls, pid, hostname, thread_id, started_at, parent_runner_id, parent_runner_cls)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 (runner_id, runner_cls, runner_language, executor_kind, pid, hostname, thread_id, started_at,
+                  parent_runner_id, parent_runner_cls)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     &context.runner_id,
                     &context.runner_cls,
+                    context.runner_language.as_str(),
+                    context.executor_kind.as_str(),
                     context.pid as i64,
                     &context.hostname,
                     context.thread_id as i64,
@@ -38,7 +40,6 @@ impl StateBackendRunner for SqliteStateBackend {
             )
             .map_err(sql_err)?;
             Ok(())
-
         })
         .await
     }
@@ -53,7 +54,7 @@ impl StateBackendRunner for SqliteStateBackend {
             let conn = db.conn.lock().map_err(lock_err)?;
             let result = conn
                 .query_row(
-                    "SELECT runner_id, runner_cls, pid, hostname, thread_id, started_at,
+                    "SELECT runner_id, runner_cls, runner_language, executor_kind, pid, hostname, thread_id, started_at,
                             parent_runner_id, parent_runner_cls
                      FROM runner_contexts WHERE runner_id = ?1",
                     rusqlite::params![runner_id],
@@ -75,7 +76,7 @@ impl StateBackendRunner for SqliteStateBackend {
             let conn = db.conn.lock().map_err(lock_err)?;
             let mut stmt = conn
                 .prepare(
-                    "SELECT runner_id, runner_cls, pid, hostname, thread_id, started_at,
+                    "SELECT runner_id, runner_cls, runner_language, executor_kind, pid, hostname, thread_id, started_at,
                             parent_runner_id, parent_runner_cls
                      FROM runner_contexts WHERE parent_runner_id = ?1",
                 )
@@ -213,7 +214,7 @@ impl StateBackendRunner for SqliteStateBackend {
             let pattern = format!("%{partial_id}%");
             let mut stmt = conn
                 .prepare(
-                    "SELECT runner_id, runner_cls, pid, hostname, thread_id, started_at,
+                    "SELECT runner_id, runner_cls, runner_language, executor_kind, pid, hostname, thread_id, started_at,
                             parent_runner_id, parent_runner_cls
                      FROM runner_contexts WHERE runner_id LIKE ?1",
                 )
@@ -233,12 +234,17 @@ impl StateBackendRunner for SqliteStateBackend {
 fn parse_runner_context(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRunnerContext> {
     let runner_id: String = row.get(0)?;
     let runner_cls: String = row.get(1)?;
-    let pid: i64 = row.get(2)?;
-    let hostname: String = row.get(3)?;
-    let thread_id: i64 = row.get(4)?;
-    let started_at_str: String = row.get(5)?;
-    let parent_runner_id: Option<String> = row.get(6)?;
-    let parent_runner_cls: Option<String> = row.get(7)?;
+    let runner_language = parse_runner_language(&row.get::<_, String>(2)?);
+    let executor_kind = row
+        .get::<_, String>(3)?
+        .parse()
+        .unwrap_or(ExecutorKind::Tokio);
+    let pid: i64 = row.get(4)?;
+    let hostname: String = row.get(5)?;
+    let thread_id: i64 = row.get(6)?;
+    let started_at_str: String = row.get(7)?;
+    let parent_runner_id: Option<String> = row.get(8)?;
+    let parent_runner_cls: Option<String> = row.get(9)?;
 
     let started_at = chrono::DateTime::parse_from_rfc3339(&started_at_str)
         .map_or_else(|_| chrono::Utc::now(), |dt| dt.with_timezone(&chrono::Utc));
@@ -246,6 +252,8 @@ fn parse_runner_context(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRunne
     Ok(StoredRunnerContext {
         runner_id,
         runner_cls,
+        runner_language,
+        executor_kind,
         pid: u32::try_from(pid).unwrap_or(0),
         hostname,
         thread_id: u64::try_from(thread_id).unwrap_or(0),
@@ -253,4 +261,8 @@ fn parse_runner_context(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRunne
         parent_runner_id,
         parent_runner_cls,
     })
+}
+
+fn parse_runner_language(value: &str) -> TaskLanguage {
+    value.parse().unwrap_or(TaskLanguage::Rust)
 }

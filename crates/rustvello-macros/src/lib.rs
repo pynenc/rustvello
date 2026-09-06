@@ -378,7 +378,6 @@ fn expand_task(attrs: TaskAttrs, func: ItemFn) -> syn::Result<proc_macro2::Token
         Some(m) => quote! { #m },
         None => quote! { module_path!() },
     };
-
     // Delegating call to the original function
     let fn_call = if params.is_empty() {
         quote! { #fn_name() }

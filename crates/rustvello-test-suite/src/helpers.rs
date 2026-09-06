@@ -1,6 +1,6 @@
 //! Shared test helpers.
 
-use rustvello_proto::identifiers::{InvocationId, TaskId};
+use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
 
 /// Create a deterministic TaskId for tests.
 pub fn test_task_id(name: &str) -> TaskId {
@@ -8,8 +8,8 @@ pub fn test_task_id(name: &str) -> TaskId {
 }
 
 /// Create a foreign TaskId for cross-language tests.
-pub fn test_foreign_task_id(language: &str, name: &str) -> TaskId {
-    TaskId::foreign(language, "test_module", name)
+pub fn test_foreign_task_id(language: TaskLanguage, name: &str) -> TaskId {
+    TaskId::for_language(language, "test_module", name)
 }
 
 /// Generate a batch of InvocationIds.

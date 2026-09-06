@@ -1,4 +1,4 @@
-//! Tests that all runner types properly store runner contexts
+//! Tests that supported runner types properly store runner contexts
 //! (main runner + per-worker) in the state backend.
 //!
 //! This validates the monitoring pipeline's dependency:
@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use rustvello::prelude::*;
 use rustvello_core::broker::Broker;
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::runner::Runner;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::task::TaskDefinition;
@@ -25,7 +25,7 @@ use rustvello_proto::invocation::InvocationDTO;
 /// seed one invocation, call run_one(), then return (runner_id, state_backend).
 struct TestHarness {
     broker: Arc<dyn Broker>,
-    orchestrator: Arc<dyn Orchestrator>,
+    orchestrator: Arc<dyn InvocationControlBackend>,
     state_backend: Arc<dyn StateBackend>,
     task_id: TaskId,
 }
@@ -33,7 +33,7 @@ struct TestHarness {
 impl TestHarness {
     fn new() -> Self {
         let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-        let orchestrator: Arc<dyn Orchestrator> =
+        let orchestrator: Arc<dyn InvocationControlBackend> =
             Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
         let state_backend: Arc<dyn StateBackend> =
             Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
@@ -181,37 +181,6 @@ async fn persistent_tokio_runner_stores_all_contexts() {
 }
 
 // ---------------------------------------------------------------------------
-// PerInvocationTokioRunner
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn per_invocation_runner_stores_all_contexts() {
-    let h = TestHarness::new();
-    let inv_id = h.seed_invocation().await;
-
-    let runner = PerInvocationTokioRunner::new(
-        "test-app".to_string(),
-        AppConfig::default(),
-        h.broker.clone(),
-        h.orchestrator.clone(),
-        h.state_backend.clone(),
-        h.task_registry(),
-    );
-    let runner_id_str = runner.runner_id().to_string();
-
-    let did_work = runner.run_one().await.unwrap();
-    assert!(did_work);
-
-    h.verify_contexts(
-        &runner_id_str,
-        &inv_id,
-        "PerInvocationTokioRunner",
-        "PerInvocationWorker",
-    )
-    .await;
-}
-
-// ---------------------------------------------------------------------------
 // RayonRunner
 // ---------------------------------------------------------------------------
 
@@ -237,35 +206,4 @@ async fn rayon_runner_stores_all_contexts() {
 
     h.verify_contexts(&runner_id_str, &inv_id, "RayonRunner", "RayonWorker")
         .await;
-}
-
-// ---------------------------------------------------------------------------
-// SpawnBlockingRunner
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn process_runner_stores_all_contexts() {
-    let h = TestHarness::new();
-    let inv_id = h.seed_invocation().await;
-
-    let runner = SpawnBlockingRunner::new(
-        "test-app".to_string(),
-        AppConfig::default(),
-        h.broker.clone(),
-        h.orchestrator.clone(),
-        h.state_backend.clone(),
-        h.task_registry(),
-    );
-    let runner_id_str = runner.runner_id().to_string();
-
-    let did_work = runner.run_one().await.unwrap();
-    assert!(did_work);
-
-    h.verify_contexts(
-        &runner_id_str,
-        &inv_id,
-        "SpawnBlockingRunner",
-        "ProcessWorker",
-    )
-    .await;
 }

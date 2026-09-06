@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 use rustvello_core::broker::Broker;
 use rustvello_core::error::RustvelloError;
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::runner::Runner;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::task::{TaskDefinition, TaskFn, TaskRegistry};
 use rustvello_core::trigger::{TriggerManager, TriggerStore};
 use rustvello_proto::config::AppConfig;
-use rustvello_proto::identifiers::TaskId;
+use rustvello_proto::identifiers::{TaskId, TaskLanguage};
 use rustvello_proto::status::ConcurrencyControlType;
 
 use crate::config::PyAppConfig;
@@ -118,7 +118,7 @@ pub struct PyTaskRunnerBuilder {
     app_id: String,
     config: AppConfig,
     broker: Option<Arc<dyn Broker>>,
-    orchestrator: Option<Arc<dyn Orchestrator>>,
+    orchestrator: Option<Arc<dyn InvocationControlBackend>>,
     state_backend: Option<Arc<dyn StateBackend>>,
     trigger_manager: Option<TriggerManager>,
     task_registry: TaskRegistry,
@@ -237,7 +237,7 @@ impl PyTaskRunnerBuilder {
         parallel_batch_size: usize,
         is_workflow_task: bool,
     ) -> PyResult<()> {
-        let task_id = TaskId::try_new(module, name)
+        let task_id = TaskId::try_for_language(TaskLanguage::Python, module, name)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
         let py_func = func.clone_ref(py);
@@ -288,6 +288,26 @@ impl PyTaskRunnerBuilder {
             .map_err(to_py_err)
     }
 
+    /// Register a task implemented by another language runtime.
+    #[pyo3(signature = (language, module, name, *, queue = "default", priority = 0.0))]
+    fn register_foreign_task(
+        &mut self,
+        language: &str,
+        module: &str,
+        name: &str,
+        queue: &str,
+        priority: f64,
+    ) -> PyResult<()> {
+        let task_id = crate::utils::parse_task_id(language, module, name)?;
+        let mut config = rustvello_proto::config::TaskConfig::default();
+        config.queue = queue.to_owned();
+        config.priority = priority;
+
+        self.task_registry
+            .register_task_proxy(task_id, config)
+            .map_err(to_py_err)
+    }
+
     /// Build the runner. All backends must be configured.
     fn build(&mut self) -> PyResult<PyTaskRunner> {
         let broker = self
@@ -304,7 +324,7 @@ impl PyTaskRunnerBuilder {
         // Take ownership of the populated task registry
         let registry = std::mem::take(&mut self.task_registry);
 
-        let mut runner = rustvello::runner::TaskRunner::new(
+        let mut runner = rustvello::runner::TaskRunner::new_python(
             self.app_id.clone(),
             self.config.clone(),
             broker,

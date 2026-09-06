@@ -6,7 +6,7 @@
 
 use rustvello_core::broker::Broker;
 use rustvello_core::client_data_store::ClientDataStore;
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::trigger::TriggerStore;
 use rustvello_proto::call::{CallDTO, SerializedArguments};
@@ -36,7 +36,10 @@ pub async fn test_broker_isolation(a: &dyn Broker, b: &dyn Broker) {
 // ── Orchestrator ────────────────────────────────────────────────────
 
 /// Invocations registered in orchestrator A must not appear in B.
-pub async fn test_orchestrator_isolation(a: &dyn Orchestrator, b: &dyn Orchestrator) {
+pub async fn test_orchestrator_isolation(
+    a: &dyn InvocationControlBackend,
+    b: &dyn InvocationControlBackend,
+) {
     let task_id = test_task_id("iso_orch");
     let call = CallDTO::new(task_id, SerializedArguments::default());
 

@@ -155,6 +155,77 @@ impl StateBackendQuery for SqliteStateBackend {
         .await
     }
 
+    async fn count_workflow_runs(&self, workflow_type: &TaskId) -> RustvelloResult<usize> {
+        let db = Arc::clone(&self.db);
+        let type_key = workflow_type.to_string();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM workflow_runs WHERE workflow_type = ?1",
+                    [&type_key],
+                    |row| row.get(0),
+                )
+                .map_err(sql_err)?;
+            Ok(usize::try_from(count).unwrap_or(usize::MAX))
+        })
+        .await
+    }
+
+    async fn get_workflow_runs_paginated(
+        &self,
+        workflow_type: &TaskId,
+        limit: usize,
+        offset: usize,
+    ) -> RustvelloResult<Vec<WorkflowIdentity>> {
+        let db = Arc::clone(&self.db);
+        let type_key = workflow_type.to_string();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT workflow_id, workflow_type, parent_workflow_id, depth
+                     FROM workflow_runs WHERE workflow_type = ?1
+                     ORDER BY workflow_id DESC LIMIT ?2 OFFSET ?3",
+                )
+                .map_err(sql_err)?;
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![
+                        type_key,
+                        i64::try_from(limit).unwrap_or(i64::MAX),
+                        i64::try_from(offset).unwrap_or(i64::MAX)
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    },
+                )
+                .map_err(sql_err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sql_err)?;
+            rows.into_iter()
+                .map(|(workflow_id, workflow_type, parent_id, depth)| {
+                    Ok(WorkflowIdentity {
+                        workflow_id: InvocationId::from_string(workflow_id),
+                        workflow_type: workflow_type.parse::<TaskId>().map_err(|error| {
+                            RustvelloError::state_backend(format!(
+                                "invalid workflow task_id in database: {error}"
+                            ))
+                        })?,
+                        parent_id: parent_id.map(InvocationId::from_string),
+                        depth: u32::try_from(depth).unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .await
+    }
+
     async fn set_workflow_data(
         &self,
         workflow_id: &InvocationId,

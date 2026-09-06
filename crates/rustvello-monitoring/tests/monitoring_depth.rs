@@ -220,9 +220,9 @@ async fn test_log_explorer_analyze_structured() {
         "analysis should render a histogram for the resolved invocation scope"
     );
     assert!(
-        body.contains("data-timeline-left=\"320.0\"")
-            && body.contains("data-histogram-left=\"320\"")
-            && body.contains("data-histogram-right=\"1980\""),
+        body.contains("data-timeline-left=\"420.0\"")
+            && body.contains("data-histogram-left=\"420\"")
+            && body.contains("data-histogram-right=\"1956\""),
         "log timeline and histogram should share the same plot bounds"
     );
 
@@ -340,7 +340,7 @@ async fn test_log_explorer_analyze_task_ref() {
         .post(format!("{}/log-explorer/analyze", server.url))
         .form(&[(
             "log_text",
-            "2025-01-15T10:00:00Z INFO runner [task_id=test::process_order] Routing",
+            "2025-01-15T10:00:00Z INFO runner [task_id=rust::test.process_order] Routing",
         )])
         .send()
         .await
@@ -453,7 +453,10 @@ async fn test_workflows_detail_by_type() {
     let client = server.client();
 
     let resp = client
-        .get(format!("{}/workflows/test.grandparent_task", server.url))
+        .get(format!(
+            "{}/workflows/rust::test.grandparent_task",
+            server.url
+        ))
         .send()
         .await
         .expect("workflow detail");
@@ -464,7 +467,7 @@ async fn test_workflows_detail_by_type() {
         "detail page should show the workflow type"
     );
     assert!(
-        body.contains("Run occupancy") && body.contains("data-histogram-panel"),
+        body.contains("Selected Run Comparison") && body.contains("data-histogram-panel"),
         "workflow detail should render selected run histograms"
     );
 

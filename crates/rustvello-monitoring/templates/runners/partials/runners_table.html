@@ -5,6 +5,8 @@
       <tr>
         <th>Runner ID</th>
         <th>Type</th>
+        <th>Language</th>
+        <th>Executor</th>
         <th>Parent</th>
         <th>Host / PID</th>
         <th>Started At</th>
@@ -35,6 +37,8 @@
           >
           {% endif %}
         </td>
+        <td><span class="badge language-badge language-{{ runner.runner_language }}">{{ runner.runner_language }}</span></td>
+        <td><code class="small">{{ runner.executor_kind }}</code></td>
         <td>
           {% if let Some(pid) = runner.parent_runner_id %}
           <a href="/runners/{{ pid }}" class="text-decoration-none">

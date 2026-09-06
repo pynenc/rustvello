@@ -40,25 +40,25 @@ Rustvello is a distributed task orchestration engine — broker, orchestrator, s
 
 This is a **multi-crate Rust workspace** with Python bindings:
 
-| Crate                                                  | Description                                                                                                         |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| [`rustvello-proto`](crates/rustvello-proto/)           | Data transfer objects and wire types (identifiers, status FSM, config, trigger types)                               |
-| [`rustvello-core`](crates/rustvello-core/)             | Core traits (`Broker`, `Orchestrator`, `StateBackend`, `TriggerStore`, `ClientDataStore`) + business logic managers |
-| [`rustvello-mem`](crates/rustvello-mem/)               | In-memory backend implementations (development and testing)                                                         |
-| [`rustvello-sqlite`](crates/rustvello-sqlite/)         | SQLite-backed backend implementations (single-node production)                                                      |
-| [`rustvello-redis`](crates/rustvello-redis/)           | Redis backend implementations                                                                                       |
-| [`rustvello-postgres`](crates/rustvello-postgres/)     | PostgreSQL backend implementations                                                                                  |
-| [`rustvello-mongo`](crates/rustvello-mongo/)           | MongoDB backend implementations (driver v3)                                                                         |
-| [`rustvello-mongo3`](crates/rustvello-mongo3/)         | MongoDB backend implementations (driver v2 — legacy)                                                                |
-| [`rustvello-rabbitmq`](crates/rustvello-rabbitmq/)     | RabbitMQ broker implementation                                                                                      |
-| [`rustvello-prometheus`](crates/rustvello-prometheus/) | Prometheus metrics exporter                                                                                         |
-| [`rustvello-macros`](crates/rustvello-macros/)         | `#[rustvello::task]` proc-macro with 8 configuration attributes                                                     |
-| [`rustvello`](crates/rustvello/)                       | Main library — app builder, task runner, trigger builder, auto-discovery                                            |
-| [`rustvello-cli`](crates/rustvello-cli/)               | CLI tool for running workers, inspecting status, and purging data                                                   |
-| [`rustvello-monitoring`](crates/rustvello-monitoring/) | Web-based monitoring dashboard (Axum + Askama + HTMX)                                                               |
-| [`rustvello-test-suite`](crates/rustvello-test-suite/) | Shared backend compliance tests via macro-generated test suites                                                     |
-| [`rustvello-python`](crates/rustvello-python/)         | PyO3 bindings exposing Rust types to Python                                                                         |
-| [`py-rustvello`](py-rustvello/)                        | Python package (cdylib + PyO3 bindings) providing the `rustvello` module                                            |
+| Crate                                                  | Description                                                                                                                    |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| [`rustvello-proto`](crates/rustvello-proto/)           | Data transfer objects and wire types (identifiers, status FSM, config, trigger types)                                          |
+| [`rustvello-core`](crates/rustvello-core/)             | Core ports (`Broker`, `InvocationControlBackend`, `StateBackend`, `TriggerStore`, `ClientDataStore`) + business logic managers |
+| [`rustvello-mem`](crates/rustvello-mem/)               | In-memory backend implementations (development and testing)                                                                    |
+| [`rustvello-sqlite`](crates/rustvello-sqlite/)         | SQLite-backed backend implementations (single-node production)                                                                 |
+| [`rustvello-redis`](crates/rustvello-redis/)           | Redis backend implementations                                                                                                  |
+| [`rustvello-postgres`](crates/rustvello-postgres/)     | PostgreSQL backend implementations                                                                                             |
+| [`rustvello-mongo`](crates/rustvello-mongo/)           | MongoDB backend implementations (driver v3)                                                                                    |
+| [`rustvello-mongo3`](crates/rustvello-mongo3/)         | MongoDB backend implementations (driver v2 — legacy)                                                                           |
+| [`rustvello-rabbitmq`](crates/rustvello-rabbitmq/)     | RabbitMQ broker implementation                                                                                                 |
+| [`rustvello-prometheus`](crates/rustvello-prometheus/) | Prometheus metrics exporter                                                                                                    |
+| [`rustvello-macros`](crates/rustvello-macros/)         | `#[rustvello::task]` proc-macro with 8 configuration attributes                                                                |
+| [`rustvello`](crates/rustvello/)                       | Main library — app builder, task runner, trigger builder, auto-discovery                                                       |
+| [`rustvello-cli`](crates/rustvello-cli/)               | CLI tool for running workers, inspecting status, and purging data                                                              |
+| [`rustvello-monitoring`](crates/rustvello-monitoring/) | Web-based monitoring dashboard (Axum + Askama + HTMX)                                                                          |
+| [`rustvello-test-suite`](crates/rustvello-test-suite/) | Shared backend compliance tests via macro-generated test suites                                                                |
+| [`rustvello-python`](crates/rustvello-python/)         | PyO3 bindings exposing Rust types to Python                                                                                    |
+| [`py-rustvello`](py-rustvello/)                        | Python package (cdylib + PyO3 bindings) providing the `rustvello` module                                                       |
 
 For the full architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -74,7 +74,7 @@ For the full architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 - **Workflow System**: Explicit `#[rustvello::workflow]` roots, child identity propagation, and root-scoped deterministic replay
 - **Recovery & Heartbeat**: Automatic detection and re-routing of stale invocations from crashed runners
 - **Monitoring Dashboard**: Browser-based UI for invocations, runners, workflows, trigger evidence, and timelines (Axum + Askama + HTMX)
-- **Cross-Language Support**: Language-tagged `TaskId`, `ForeignTask` trait, and broker language-aware routing for Python ↔ Rust interop
+- **Cross-Language Support**: Closed `TaskLanguage`, canonical `language::module.name` task IDs, typed foreign tasks, and physical language queues
 - **Builder Pattern**: Fluent configuration with env var overrides (`RUSTVELLO__*`), TOML file support, and `.memory()`/`.sqlite()` presets
 - **Python Bindings**: Full PyO3 bridge for standalone Python usage and optional pynenc integration
 - **CLI Tool**: Run workers, inspect invocations, and purge data from the command line
@@ -102,7 +102,7 @@ Feature flags:
 
 ```toml
 [dependencies]
-rustvello = { version = "0.4.0", features = ["full"] }
+rustvello = { version = "0.5.0", features = ["full"] }
 ```
 
 ### Python
@@ -154,13 +154,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Quick Start (Python)
 
 ```python
-from rustvello import App
+from rustvello import App, workflow_root
 
 app = App(backend="sqlite", db_path="./tasks.db")
 
 @app.task(max_retries=2)
 def add(x: int, y: int) -> int:
     return x + y
+
+@app.workflow
+def process_order(order_id: str) -> dict[str, str]:
+    root = workflow_root()
+    return {"order_id": order_id, "run_id": root.uuid()}
 
 # Submit and wait for result
 inv = add(1, 2)

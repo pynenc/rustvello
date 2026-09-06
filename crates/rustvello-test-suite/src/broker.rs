@@ -216,42 +216,51 @@ pub async fn test_batch_route(broker: &dyn Broker) {
     assert_eq!(broker.count_invocations(None).await.unwrap(), 5);
 }
 
-/// Route a foreign task and retrieve by language.
+/// Route tasks for different runtimes and retrieve each by language.
 pub async fn test_language_routing(broker: &dyn Broker) {
-    let py_task = test_foreign_task_id("python", "train");
-    let local_task = test_task_id("add");
+    let py_task = test_foreign_task_id(rustvello_proto::identifiers::TaskLanguage::Python, "train");
+    let rust_task = test_task_id("add");
     let py_inv = InvocationId::new();
-    let local_inv = InvocationId::new();
+    let rust_inv = InvocationId::new();
 
     broker
         .route_invocation_for_task(&py_inv, &py_task)
         .await
         .unwrap();
     broker
-        .route_invocation_for_task(&local_inv, &local_task)
+        .route_invocation_for_task(&rust_inv, &rust_task)
         .await
         .unwrap();
 
     // Python worker retrieves only python tasks
     let got = broker
-        .retrieve_invocation_for_language("python")
+        .retrieve_invocation_for_language(rustvello_proto::identifiers::TaskLanguage::Python)
         .await
         .unwrap();
     assert_eq!(got, Some(py_inv));
 
-    // Local worker retrieves local tasks
-    let got = broker.retrieve_invocation_for_language("").await.unwrap();
-    assert_eq!(got, Some(local_inv));
+    // Rust worker retrieves only Rust tasks.
+    let got = broker
+        .retrieve_invocation_for_language(rustvello_proto::identifiers::TaskLanguage::Rust)
+        .await
+        .unwrap();
+    assert_eq!(got, Some(rust_inv));
 }
 
-/// Global queue items are retrievable by language workers.
+/// Legacy task-less queue items default to the Rust execution lane.
 pub async fn test_global_queue_language_fallback(broker: &dyn Broker) {
     let inv = InvocationId::new();
     broker.route_invocation(&inv).await.unwrap();
 
-    // Any language worker should get global queue items
+    // The compatibility API predates language-qualified TaskIds and defaults to Rust.
     let got = broker
-        .retrieve_invocation_for_language("rust")
+        .retrieve_invocation_for_language(rustvello_proto::identifiers::TaskLanguage::Python)
+        .await
+        .unwrap();
+    assert_eq!(got, None);
+
+    let got = broker
+        .retrieve_invocation_for_language(rustvello_proto::identifiers::TaskLanguage::Rust)
         .await
         .unwrap();
     assert_eq!(got, Some(inv));

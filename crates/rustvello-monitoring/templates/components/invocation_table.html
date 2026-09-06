@@ -1,0 +1,23 @@
+<div class="table-responsive">
+  <table class="table table-hover pynmon-table mb-0 monitor-table monitor-table-compact">
+    <thead><tr><th>Invocation ID</th><th>Task</th><th>Call ID</th><th>Status</th><th>Retries</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for inv in invocations %}
+      <tr class="monitor-row">
+        <td>
+          <a href="{{ inv.detail_url }}" class="text-decoration-none"><code class="text-primary" title="{{ inv.invocation_id }}">{{ inv.invocation_id }}</code></a>
+          {% if inv.is_workflow_defining %}<span class="badge bg-info text-dark ms-1" title="Workflow-defining invocation">Workflow root</span>{% endif %}
+        </td>
+        <td><a href="/tasks/{{ inv.task_id }}" class="text-decoration-none">{{ inv.task_id }}</a></td>
+        <td><a href="/calls/{{ inv.call_id }}" class="text-decoration-none"><code class="text-primary small">{{ inv.call_id }}</code></a></td>
+        <td><span class="badge {{ inv.status_class }}">{{ inv.status }}</span></td>
+        <td>{{ inv.num_retries }}</td>
+        <td class="text-nowrap">
+          <a href="{{ inv.timeline_url }}" class="btn btn-sm btn-outline-success monitor-icon-action view-in-timeline-link" title="Open in timeline" aria-label="Open invocation in timeline"><span class="material-icons">timeline</span></a>
+          <a href="{{ inv.detail_url }}" class="btn btn-sm btn-outline-primary">Details</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

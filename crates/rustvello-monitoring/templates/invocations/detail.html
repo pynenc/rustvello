@@ -23,7 +23,7 @@ Rustvello Monitor{% endblock %} {% block content %}
               Back
             </a>
             <a
-              href="#"
+              href="{{ timeline_url }}"
               id="view-in-timeline-btn"
               class="btn btn-sm btn-outline-success"
               title="Zoom to this invocation in the timeline"
@@ -130,9 +130,9 @@ Rustvello Monitor{% endblock %} {% block content %}
                           </a>
                           {% if let Some(wid) = workflow_id %}
                           <a
-                            href="/invocations/{{ wid }}"
+                            href="/workflows/{{ wt }}/{{ wid }}"
                             class="text-decoration-none ms-1"
-                            title="View workflow root invocation"
+                            title="View workflow run"
                           >
                             <code
                               style="
@@ -144,6 +144,15 @@ Rustvello Monitor{% endblock %} {% block content %}
                               >{{ wid }}</code
                             >
                           </a>
+                          {% if let Some(workflow_timeline) = workflow_timeline_url %}
+                          <a
+                            href="{{ workflow_timeline }}"
+                            class="btn btn-sm btn-outline-success ms-1 py-0 px-1"
+                            title="Open workflow run in timeline"
+                          >
+                            <span class="material-icons align-middle" style="font-size: 13px">timeline</span>
+                          </a>
+                          {% endif %}
                           {% endif %} {% else %}
                           <span class="text-muted">None</span>
                           {% endif %}
@@ -303,6 +312,13 @@ Rustvello Monitor{% endblock %} {% block content %}
                             >{{ rcls }}</span
                           >
                           {% endif %}
+                          {% if let Some(lang) = entry.runner_language %}
+                          <span
+                            class="badge language-badge language-{{ lang }}"
+                            style="font-size: 9px; margin-right: 3px"
+                            >{{ lang }}</span
+                          >
+                          {% endif %}
                           <a
                             href="/runners/{{ rid }}"
                             class="text-decoration-none"
@@ -413,42 +429,6 @@ Rustvello Monitor{% endblock %} {% block content %}
 </div>
 
 <script>
-  document
-    .getElementById("view-in-timeline-btn")
-    ?.addEventListener("click", function (e) {
-      e.preventDefault();
-      fetch("/invocations/{{ invocation_id }}/history")
-        .then(function (r) {
-          return r.json();
-        })
-        .then(function (historyData) {
-          if (!historyData || historyData.length === 0) {
-            alert("No history data available for this invocation");
-            return;
-          }
-          var startTime = new Date(historyData[0].timestamp);
-          var endTime = new Date(historyData[historyData.length - 1].timestamp);
-          var durationMs = endTime - startTime;
-          var paddingMs = Math.max(durationMs * 0.5, 100);
-          var paddedStart = new Date(startTime.getTime() - paddingMs);
-          var paddedEnd = new Date(endTime.getTime() + paddingMs);
-          var fmt = function (d) {
-            var iso = d.toISOString();
-            return iso.slice(0, 23);
-          };
-          var params = new URLSearchParams();
-          params.set("time_range", "custom");
-          params.set("start_date", fmt(paddedStart));
-          params.set("end_date", fmt(paddedEnd));
-          params.set("selected", "{{ invocation_id }}");
-          window.location.href = "/invocations/timeline?" + params.toString();
-        })
-        .catch(function (err) {
-          console.error("Error fetching history:", err);
-          alert("Failed to load invocation history");
-        });
-    });
-
   // --- Family tree interactivity on detail page ---
   (function () {
     var ftBody = document.getElementById("ft-detail-body");

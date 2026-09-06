@@ -47,6 +47,10 @@ Rustvello delivers the performance-critical core — broker, orchestrator, state
 concurrency control, workflows, trigger scheduling, and a live monitoring dashboard —
 implemented in safe Rust. It works standalone from both Rust and Python (via PyO3 bindings),
 and integrates with [pynenc](https://docs.pynenc.org) as an optional high-performance backend plugin.
+Pynenc keeps its own Python CLI and Pynmon monitoring experience; Rustvello's CLI and
+monitoring dashboard are the Rust implementation of the same operational ideas and can
+inspect Rustvello-backed applications regardless of whether tasks are submitted from Rust
+or through the Python bindings.
 
 ```bash
 cargo add rustvello
@@ -164,17 +168,18 @@ wires them together.
 ::::
 
 ::::{grid-item-card} Live Monitoring
-A built-in Axum web dashboard shows SVG timelines, invocation tables,
-runner status, log exploration with cross-highlighting, and Prometheus
-metrics export — all served from a single binary.
+A built-in Axum web dashboard, modeled after Pynmon, shows SVG timelines,
+invocation tables, runner status, log exploration with cross-highlighting,
+and Prometheus metrics export — all served from a single binary.
 
 {doc}`monitoring/index`
 ::::
 
 ::::{grid-item-card} Python Bindings
-Full PyO3 bridge (`py-rustvello`) with a standalone `App` class for Python-only
-use, plus deep integration with pynenc for the full framework experience.
-Backend selection, persistent runner, trigger scheduling — all from Python.
+Full PyO3 bridge (`py-rustvello`) with a standalone `App` class for Python code
+using the Rustvello engine directly, plus deep integration with pynenc for the
+full framework experience. The same Rust CLI and monitoring dashboard can inspect
+the shared Rustvello backends.
 
 {doc}`getting_started`
 ::::
@@ -223,18 +228,18 @@ Rustvello is available as both a **Rust crate** and a **Python package**:
 
 ### Capabilities by surface
 
-| Feature                       |      Rust crate      | Python standalone |  Python via pynenc  |
-| ----------------------------- | :------------------: | :---------------: | :-----------------: |
-| 7 backend types               |          ✅          |        ✅         |         ✅          |
-| Task registration             | `#[rustvello::task]` |    `@app.task`    |     `@app.task`     |
-| Persistent runner             |          ✅          |    `app.run()`    |     runner CLI      |
-| Cron/interval triggers        |   `TriggerBuilder`   |  `app.trigger()`  | Full trigger system |
-| Concurrency control (4 modes) |          ✅          |        ✅         |         ✅          |
-| Web monitoring dashboard      |          ✅          |         —         |          —          |
-| Prometheus metrics            |          ✅          |         —         |          —          |
-| CLI tooling                   |          ✅          |         —         |          —          |
-| Workflow support              |          ✅          |         —         |         ✅          |
-| Plugin system                 |          —           |         —         |         ✅          |
+| Feature                       |       Rust crate        |      Python bindings       |        Python via pynenc        |
+| ----------------------------- | :---------------------: | :------------------------: | :-----------------------------: |
+| 7 backend types               |           ✅            |             ✅             |               ✅                |
+| Task registration             |  `#[rustvello::task]`   |        `@app.task`         |           `@app.task`           |
+| Persistent runner             |           ✅            |        `app.run()`         |           Pynenc CLI            |
+| Cron/interval triggers        |    `TriggerBuilder`     |      `app.trigger()`       |      Pynenc trigger system      |
+| Concurrency control (4 modes) |           ✅            |             ✅             |               ✅                |
+| Monitoring                    | Rustvello dashboard/API |  Rustvello dashboard/API   | Pynmon plus Rustvello dashboard |
+| Prometheus metrics            |           ✅            | Rustvello-backed exporters |      Pynenc/Pynmon metrics      |
+| CLI tooling                   |      Rustvello CLI      |       Rustvello CLI        |  Pynenc CLI plus Rustvello CLI  |
+| Workflow support              |           ✅            |      `@app.workflow`       |               ✅                |
+| Plugin system                 |            —            |             —              |               ✅                |
 
 ---
 
@@ -256,7 +261,7 @@ builder methods like `.rustvello_redis()` and `.rustvello_postgres()` to `Pynenc
 Python tasks decorated with `@app.task` and Rust tasks annotated with
 `#[rustvello::task]` share the same broker and orchestrator when deployed
 under the same `app_id`. The cross-language architecture uses
-language-qualified `TaskId`s (`py::module.name` / `rs::crate::name`)
+language-qualified `TaskId`s (`python::module.name` / `rust::crate.name`)
 and a canonical JSON wire format so Python workers and Rust workers can
 invoke each other seamlessly.
 

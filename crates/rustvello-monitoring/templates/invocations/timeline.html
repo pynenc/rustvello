@@ -5,10 +5,10 @@
 <style>
   #invocation-details-panel .detail-label { font-weight: 600; color: #495057; min-width: 110px; display: inline-block; }
   #invocation-details-panel .detail-value { word-break: break-all; }
-  .timeline-filter-sidebar .form-label { font-size: 12px; margin-bottom: 2px; font-weight: 600; }
-  .timeline-filter-sidebar .form-select,
-  .timeline-filter-sidebar .form-control { font-size: 12px; padding: 4px 8px; }
-  .invocation-highlight { filter: brightness(1.3) drop-shadow(0 0 4px rgba(0,0,0,0.4)); }
+  .timeline-filter-bar .form-label { font-size: 11px; margin-bottom: 2px; font-weight: 600; }
+  .timeline-filter-bar .form-select,
+  .timeline-filter-bar .form-control { font-size: 12px; padding: 4px 8px; }
+  .invocation-highlight { filter: brightness(1.12); }
   .runner-highlight { filter: brightness(1.15); }
   .ft-hover .ft-node:not(.ft-related) { opacity: 0.3; }
   .ft-hover .ft-edge:not(.ft-related) { opacity: 0.15; }
@@ -16,7 +16,7 @@
   .timeline-zoom-active { cursor: crosshair; user-select: none; }
   .timeline-zoom-dragging { cursor: col-resize; }
   .timeline-zoom-selection { fill: rgba(13, 110, 253, 0.18); stroke: #0d6efd; stroke-width: 1; pointer-events: none; }
-  .overlap-highlight { r: 7; stroke: #333; stroke-width: 2.5; filter: drop-shadow(0 0 6px rgba(0,0,0,0.5)); }
+  .overlap-highlight { r: 6; stroke: #1e293b; stroke-width: 2.5; }
   #overlap-tooltip {
     position: fixed; display: none; z-index: 2000; pointer-events: none;
     background: #fff; border: 1px solid #dee2e6; border-radius: 6px;
@@ -42,14 +42,20 @@
     </a>
   </div>
 
-  <div class="row">
-    <!-- Filter Sidebar -->
-    <div class="col-md-2 timeline-filter-sidebar">
-      <div class="card pynmon-card">
-        <div class="card-header pynmon-card-header compact-header">Filters</div>
-        <div class="card-body pynmon-card-body">
-          <form method="get" action="/invocations/timeline" id="timeline-filter-form">
-            <div class="mb-2">
+  <section class="timeline-filter-bar mb-2" aria-label="Timeline filters">
+    <div class="monitor-filter-header">
+      <button class="timeline-filter-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#timeline-filter-fields" aria-expanded="false" aria-controls="timeline-filter-fields">
+        <span class="d-inline-flex align-items-center gap-2">
+          <span class="material-icons" aria-hidden="true">tune</span>
+          <strong>Filters</strong>
+        </span>
+      </button>
+      {% include "components/filter_summary.html" %}
+      <span class="material-icons timeline-filter-chevron" aria-hidden="true">expand_more</span>
+    </div>
+    <div class="collapse" id="timeline-filter-fields">
+      <form method="get" action="/invocations/timeline" id="timeline-filter-form" class="timeline-filter-grid">
+            <div>
               <label class="form-label" for="time_range">Time Range</label>
               <select name="time_range" id="time_range" class="form-select">
                 <option value="1m" {% if current_filters.time_range == "1m" %}selected{% endif %}>1m</option>
@@ -64,13 +70,13 @@
                 <option value="custom" {% if current_filters.time_range == "custom" %}selected{% endif %}>custom</option>
               </select>
             </div>
-            <div class="mb-2" id="custom-date-fields" style="{% if current_filters.time_range != "custom" %}display:none{% endif %}">
+            <div id="custom-date-fields" class="timeline-filter-dates" style="{% if current_filters.time_range != "custom" %}display:none{% endif %}">
               <label class="form-label" for="start_date">Start</label>
               <input type="datetime-local" name="start_date" id="start_date" class="form-control" step="0.001" value="{{ current_filters.start_date }}">
               <label class="form-label mt-1" for="end_date">End</label>
               <input type="datetime-local" name="end_date" id="end_date" class="form-control" step="0.001" value="{{ current_filters.end_date }}">
             </div>
-            <div class="mb-2">
+            <div>
               <label class="form-label" for="filter_task_id">Task ID</label>
               <select name="task_id" id="filter_task_id" class="form-select">
                 <option value="">All Tasks</option>
@@ -79,7 +85,7 @@
                 {% endfor %}
               </select>
             </div>
-            <div class="mb-2">
+            <div>
               <label class="form-label" for="filter_limit">Limit</label>
               <select name="limit" id="filter_limit" class="form-select">
                 <option value="100" {% if current_filters.limit == "100" %}selected{% endif %}>100</option>
@@ -91,7 +97,7 @@
                 <option value="" {% if current_filters.limit == "" %}selected{% endif %}>No limit</option>
               </select>
             </div>
-            <div class="mb-2">
+            <div>
               <label class="form-label" for="filter_workflow_type">Workflow Type</label>
               <select name="workflow_type" id="filter_workflow_type" class="form-select">
                 <option value="">All</option>
@@ -100,37 +106,27 @@
                 {% endfor %}
               </select>
             </div>
-            <div class="mb-2">
+            <div>
               <label class="form-label" for="filter_workflow_id">Workflow ID</label>
               <input type="text" name="workflow_id" id="filter_workflow_id" class="form-control" value="{{ current_filters.workflow_id }}" placeholder="Workflow ID">
             </div>
-            <div class="mb-2">
+            <div>
               <label class="form-label" for="filter_inv_ids">Invocation Scope</label>
               <input type="text" name="inv_ids" id="filter_inv_ids" class="form-control" value="{{ current_filters.inv_ids }}" placeholder="Comma-separated IDs" spellcheck="false" autocomplete="off">
             </div>
+            {% if !current_filters.runner_ids.is_empty() %}<input type="hidden" name="runner_ids" value="{{ current_filters.runner_ids }}">{% endif %}
             {% if !selected_invocation.is_empty() %}
             <input type="hidden" name="selected" value="{{ selected_invocation }}">
             {% endif %}
-            <button type="submit" class="btn btn-sm btn-primary w-100 mt-1">
+            <button type="submit" class="btn btn-sm btn-primary timeline-filter-apply">
               <span class="material-icons align-middle" style="font-size: 14px">filter_list</span>
               Apply
             </button>
-          </form>
-        </div>
-      </div>
-
-      <!-- Time Info -->
-      <div class="card pynmon-card mt-2">
-        <div class="card-body pynmon-card-body" style="font-size: 11px">
-          <strong>Range:</strong><br>
-          {{ start_datetime }}<br>
-          &mdash; {{ end_datetime }}
-        </div>
-      </div>
+      </form>
     </div>
+  </section>
 
-    <!-- Main Content -->
-    <div class="col-md-10">
+  <div class="timeline-main">
       <div class="card pynmon-card">
         <div class="card-header pynmon-card-header compact-header d-flex justify-content-between align-items-center">
           <span>Timeline</span>
@@ -146,6 +142,26 @@
             {{ svg_content|safe }}
           </div>
           {% include "partials/histogram.html" %}
+        </div>
+      </div>
+
+      <div id="invocation-choice-panel" class="card pynmon-card mt-3 d-none">
+        <div class="card-header pynmon-card-header compact-header">Invocations at this point</div>
+        <div class="card-body pynmon-card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-hover pynmon-table mb-0">
+              <thead><tr><th>Status</th><th>Task</th><th>Invocation ID</th><th></th></tr></thead>
+              <tbody id="invocation-choice-list"></tbody>
+            </table>
+          </div>
+          <nav id="invocation-choice-pagination" class="monitor-pagination d-none" aria-label="Invocations at this point pagination">
+            <div class="monitor-pagination-summary" id="invocation-choice-page-info"></div>
+            <ul class="pagination pagination-sm mb-0">
+              <li class="page-item" id="invocation-choice-prev-item"><button type="button" class="page-link" id="invocation-choice-prev">Previous</button></li>
+              <li class="page-item active"><span class="page-link" id="invocation-choice-current-page">1</span></li>
+              <li class="page-item" id="invocation-choice-next-item"><button type="button" class="page-link" id="invocation-choice-next">Next</button></li>
+            </ul>
+          </nav>
         </div>
       </div>
 
@@ -201,7 +217,6 @@
           <span class="text-muted" style="font-size:12px;padding:8px;display:inline-block">Loading family tree&hellip;</span>
         </div>
       </div>
-    </div>
   </div>
 </div>
 
@@ -293,7 +308,7 @@
     params.set('time_range', 'custom');
     params.set('start_date', start.toISOString().slice(0, 23));
     params.set('end_date', end.toISOString().slice(0, 23));
-    window.location.href = '/invocations/timeline?' + params.toString();
+    window.location.href = RustvelloMonitoringLinks.timelineFromCurrent(Object.fromEntries(params));
   }
 
   if (rangeZoomButton && timelineContainer) {
@@ -393,23 +408,68 @@
   }
 
   // --- Cross-highlight helpers ---
+  var timelineElementsByInvocation = new Map();
+  var timelineElements = document.querySelectorAll('#timeline-container [data-invocation-id]');
+  timelineElements.forEach(function(element) {
+    var id = element.getAttribute('data-invocation-id');
+    if (!id) return;
+    if (!timelineElementsByInvocation.has(id)) timelineElementsByInvocation.set(id, []);
+    timelineElementsByInvocation.get(id).push(element);
+  });
+  window.rustvelloTimelineElements = timelineElementsByInvocation;
+
+  function setTimeCursor(startValue, endValue, visible) {
+    var start = new Date(startValue);
+    var end = new Date(endValue || startValue);
+    var timestamp = (start.getTime() + end.getTime()) / 2;
+    document.querySelectorAll('#timeline-container svg, .histogram-svg-container svg').forEach(function(svg) {
+      var startAttr = svg.dataset.timelineStart || svg.dataset.histogramStart;
+      var endAttr = svg.dataset.timelineEnd || svg.dataset.histogramEnd;
+      var left = Number(svg.dataset.timelineLeft || svg.dataset.histogramLeft);
+      var right = Number(svg.dataset.timelineRight || svg.dataset.histogramRight);
+      var rangeStart = new Date(startAttr).getTime();
+      var rangeEnd = new Date(endAttr).getTime();
+      var cursor = svg.querySelector('.linked-time-cursor');
+      if (!visible || !Number.isFinite(timestamp) || rangeEnd <= rangeStart) {
+        if (cursor) cursor.remove();
+        return;
+      }
+      if (!cursor) {
+        cursor = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        cursor.setAttribute('class', 'linked-time-cursor');
+        svg.appendChild(cursor);
+      }
+      var x = left + (timestamp - rangeStart) / (rangeEnd - rangeStart) * (right - left);
+      cursor.setAttribute('x1', x.toFixed(1));
+      cursor.setAttribute('x2', x.toFixed(1));
+      cursor.setAttribute('y1', '0');
+      cursor.setAttribute('y2', String(svg.viewBox.baseVal.height));
+    });
+  }
+  window.rustvelloSetTimeCursor = setTimeCursor;
+
+  var histogramScroll = document.querySelector('.histogram-svg-container');
+  if (timelineContainer && histogramScroll) {
+    var syncingScroll = false;
+    function syncHorizontalScroll(source, target) {
+      if (syncingScroll) return;
+      syncingScroll = true;
+      target.scrollLeft = source.scrollLeft;
+      window.requestAnimationFrame(function() { syncingScroll = false; });
+    }
+    timelineContainer.addEventListener('scroll', function() {
+      syncHorizontalScroll(timelineContainer, histogramScroll);
+    }, { passive: true });
+    histogramScroll.addEventListener('scroll', function() {
+      syncHorizontalScroll(histogramScroll, timelineContainer);
+    }, { passive: true });
+  }
+
   function highlightInvocation(invId, on) {
     if (on === undefined) on = true;
     // Timeline SVG
-    var container = document.getElementById('timeline-container');
-    if (container) {
-      container.querySelectorAll('[data-invocation-id="' + invId + '"]').forEach(function(el) {
-        if (on) el.classList.add('invocation-highlight');
-        else el.classList.remove('invocation-highlight');
-      });
-    }
-    // Histogram buckets store their many invocation IDs as whitespace tokens.
-    document.querySelectorAll('.histogram-bucket').forEach(function(bucket) {
-      var ids = (bucket.getAttribute('data-invocation-ids') || '').split(/\s+/);
-      if (ids.indexOf(String(invId)) !== -1) {
-        if (on) bucket.classList.add('invocation-highlight');
-        else bucket.classList.remove('invocation-highlight');
-      }
+    (timelineElementsByInvocation.get(String(invId)) || []).forEach(function(el) {
+      el.classList.toggle('invocation-highlight', on);
     });
     // Family tree
     var ftBody = document.getElementById('ft-body');
@@ -446,6 +506,15 @@
   var overlapTooltip = document.getElementById('overlap-tooltip');
   var overlapHighlighted = [];
   var OVERLAP_RADIUS = 8; // px threshold to consider dots as overlapping
+  var circleSpatialIndex = new Map();
+
+  document.querySelectorAll('#timeline-container circle[data-invocation-id]').forEach(function(circle) {
+    var cx = parseFloat(circle.getAttribute('cx'));
+    var cy = parseFloat(circle.getAttribute('cy'));
+    var key = Math.floor(cx / OVERLAP_RADIUS) + ':' + Math.floor(cy / OVERLAP_RADIUS);
+    if (!circleSpatialIndex.has(key)) circleSpatialIndex.set(key, []);
+    circleSpatialIndex.get(key).push(circle);
+  });
 
   function findNearbyCircles(target) {
     if (target.tagName !== 'circle') return [target];
@@ -453,13 +522,19 @@
     if (!svg) return [target];
     var cx = parseFloat(target.getAttribute('cx'));
     var cy = parseFloat(target.getAttribute('cy'));
-    var circles = svg.querySelectorAll('circle[data-invocation-id]');
     var nearby = [];
-    for (var i = 0; i < circles.length; i++) {
-      var c = circles[i];
-      var dx = parseFloat(c.getAttribute('cx')) - cx;
-      var dy = parseFloat(c.getAttribute('cy')) - cy;
-      if (Math.sqrt(dx * dx + dy * dy) <= OVERLAP_RADIUS) nearby.push(c);
+    var cellX = Math.floor(cx / OVERLAP_RADIUS);
+    var cellY = Math.floor(cy / OVERLAP_RADIUS);
+    for (var xOffset = -1; xOffset <= 1; xOffset++) {
+      for (var yOffset = -1; yOffset <= 1; yOffset++) {
+        var candidates = circleSpatialIndex.get((cellX + xOffset) + ':' + (cellY + yOffset)) || [];
+        for (var i = 0; i < candidates.length; i++) {
+          var c = candidates[i];
+          var dx = parseFloat(c.getAttribute('cx')) - cx;
+          var dy = parseFloat(c.getAttribute('cy')) - cy;
+          if (dx * dx + dy * dy <= OVERLAP_RADIUS * OVERLAP_RADIUS) nearby.push(c);
+        }
+      }
     }
     return nearby;
   }
@@ -519,6 +594,9 @@
       if (el) {
         var invId = el.getAttribute('data-invocation-id');
         highlightInvocation(invId);
+        var elementStart = el.getAttribute('data-start') || el.getAttribute('data-timestamp');
+        var elementEnd = el.getAttribute('data-end') || elementStart;
+        if (elementStart) setTimeCursor(elementStart, elementEnd, true);
         if (hoverInfo) hoverInfo.textContent = 'Invocation: ' + invId.substring(0, 12) + '...';
 
         // Overlap detection for circle elements
@@ -552,14 +630,32 @@
         }
         clearOverlapHighlights();
         hideOverlapTooltip();
+        setTimeCursor(null, null, false);
       }
       var runnerEl = e.target.closest('.runner-label[data-runner-id]');
       if (runnerEl) unhighlightRunner(runnerEl.getAttribute('data-runner-id'));
       if (hoverInfo && !e.target.closest('[data-invocation-id]')) hoverInfo.textContent = '';
     });
     container.addEventListener('click', function(e) {
+      var atomicEl = e.target.closest('.atomic-service-window[data-atomic-service]');
+      if (atomicEl) {
+        window.location.href = '/atomic-service';
+        return;
+      }
       var el = e.target.closest('rect[data-invocation-id], circle[data-invocation-id]');
-      if (el) loadInvocationDetails(el.getAttribute('data-invocation-id'));
+      if (el) {
+        if (el.tagName === 'circle') {
+          var nearby = findNearbyCircles(el);
+          if (nearby.length > 1) {
+            showInvocationChoices(nearby);
+            return;
+          }
+        }
+        loadInvocationDetails(el.getAttribute('data-invocation-id'));
+        return;
+      }
+      var runnerEl = e.target.closest('.runner-label[data-runner-id]');
+      if (runnerEl) window.location.href = '/runners/' + encodeURIComponent(runnerEl.getAttribute('data-runner-id'));
     });
   }
 
@@ -575,6 +671,16 @@
 
   // --- Details panel ---
   var panel = document.getElementById('invocation-details-panel');
+  var choicePanel = document.getElementById('invocation-choice-panel');
+  var choiceList = document.getElementById('invocation-choice-list');
+  var choicePagination = document.getElementById('invocation-choice-pagination');
+  var choicePageInfo = document.getElementById('invocation-choice-page-info');
+  var choicePrevious = document.getElementById('invocation-choice-prev');
+  var choiceNext = document.getElementById('invocation-choice-next');
+  var choicePreviousItem = document.getElementById('invocation-choice-prev-item');
+  var choiceNextItem = document.getElementById('invocation-choice-next-item');
+  var choiceCurrentPage = document.getElementById('invocation-choice-current-page');
+  var choiceState = { items: [], page: 0, pageSize: 10 };
   var panelBody = document.getElementById('panel-body');
   var panelLink = document.getElementById('panel-view-detail');
   var panelCloseBtn = document.getElementById('panel-close-btn');
@@ -600,9 +706,9 @@
       var maxT = Math.max.apply(null, times);
       var span = maxT - minT;
       if (span < 1) span = 1;
-      var padding = Math.max(span * 0.5, 100);
-      var startDt = new Date(minT - padding);
-      var endDt = new Date(maxT + padding);
+      var fitted = RustvelloMonitoringLinks.fitWindow(minT, maxT, 0.82);
+      var startDt = fitted.start;
+      var endDt = fitted.end;
       function toLocalInput(d) {
         return d.getUTCFullYear() + '-' +
           String(d.getUTCMonth()+1).padStart(2,'0') + '-' +
@@ -617,7 +723,8 @@
       params.set('start_date', toLocalInput(startDt));
       params.set('end_date', toLocalInput(endDt));
       if (currentInvId) params.set('selected', currentInvId);
-      window.location.href = '/invocations/timeline?' + params.toString();
+      if (currentInvId) params.set('inv_ids', currentInvId);
+      window.location.href = RustvelloMonitoringLinks.timelineFromCurrent(Object.fromEntries(params));
     });
   }
 
@@ -975,6 +1082,78 @@
   // Make globally available for family tree click handler
   window.loadInvocationDetails = loadInvocationDetails;
 
+  function showInvocationChoices(elements) {
+    if (!choicePanel || !choiceList) return;
+    var seen = new Set();
+    var choices = elements.filter(function(element) {
+      var id = element.getAttribute('data-invocation-id');
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    if (choices.length < 2) return;
+    choiceState.items = choices.map(function(element) {
+      return {
+        id: element.getAttribute('data-invocation-id'),
+        status: element.getAttribute('data-status') || 'Invocation',
+        task: element.getAttribute('data-task-key') || 'unknown task'
+      };
+    });
+    choiceState.page = 0;
+    renderInvocationChoices();
+    choicePanel.classList.remove('d-none');
+  }
+
+  function renderInvocationChoices() {
+    if (!choiceList) return;
+    var start = choiceState.page * choiceState.pageSize;
+    var end = Math.min(start + choiceState.pageSize, choiceState.items.length);
+    var pageCount = Math.max(1, Math.ceil(choiceState.items.length / choiceState.pageSize));
+    choiceList.innerHTML = '';
+    choiceState.items.slice(start, end).forEach(function(choice) {
+      var row = document.createElement('tr');
+      var status = document.createElement('td');
+      var statusBadge = document.createElement('span');
+      statusBadge.className = 'badge bg-secondary';
+      statusBadge.textContent = choice.status;
+      status.appendChild(statusBadge);
+      var task = document.createElement('td');
+      var taskCode = document.createElement('code');
+      taskCode.textContent = choice.task;
+      task.appendChild(taskCode);
+      var id = document.createElement('td');
+      var idCode = document.createElement('code');
+      idCode.className = 'small text-muted';
+      idCode.textContent = choice.id;
+      id.appendChild(idCode);
+      var action = document.createElement('td');
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn btn-sm btn-outline-primary';
+      button.textContent = 'Details';
+      button.addEventListener('click', function() { loadInvocationDetails(choice.id); });
+      action.appendChild(button);
+      row.appendChild(status); row.appendChild(task); row.appendChild(id); row.appendChild(action);
+      choiceList.appendChild(row);
+    });
+    if (choicePagination) choicePagination.classList.toggle('d-none', pageCount <= 1);
+    if (choicePageInfo) choicePageInfo.textContent = 'Showing ' + (start + 1) + '-' + end + ' of ' + choiceState.items.length;
+    var previousDisabled = choiceState.page === 0;
+    var nextDisabled = choiceState.page + 1 >= pageCount;
+    if (choicePrevious) choicePrevious.disabled = previousDisabled;
+    if (choiceNext) choiceNext.disabled = nextDisabled;
+    if (choicePreviousItem) choicePreviousItem.classList.toggle('disabled', previousDisabled);
+    if (choiceNextItem) choiceNextItem.classList.toggle('disabled', nextDisabled);
+    if (choiceCurrentPage) choiceCurrentPage.textContent = String(choiceState.page + 1);
+  }
+
+  if (choicePrevious) choicePrevious.addEventListener('click', function() {
+    if (choiceState.page > 0) { choiceState.page -= 1; renderInvocationChoices(); }
+  });
+  if (choiceNext) choiceNext.addEventListener('click', function() {
+    if ((choiceState.page + 1) * choiceState.pageSize < choiceState.items.length) { choiceState.page += 1; renderInvocationChoices(); }
+  });
+
   function buildRunnerHtml(h) {
     if (!h.runner_id) return '<span class="text-muted">—</span>';
     var rid = h.runner_id || '';
@@ -985,6 +1164,12 @@
       html += '<a href="/runners/' + encodeURIComponent(rid) + '" class="text-decoration-none" title="View runner">';
       html += '<span class="badge bg-secondary" style="font-size:9px">' + (info.runner_cls || 'Runner') + '</span>';
       html += '</a>';
+      if (info.runner_language) {
+        html += '<span class="badge language-badge language-' + info.runner_language + '" style="font-size:9px">' + info.runner_language + '</span>';
+      }
+      if (info.executor_kind) {
+        html += '<code style="font-size:9px;background:#e9ecef;padding:1px 4px;border-radius:3px;color:#495057">' + info.executor_kind + '</code>';
+      }
       html += '<a href="/runners/' + encodeURIComponent(rid) + '" class="text-decoration-none" title="View worker"><code style="font-size:9px;background:#e9ecef;padding:1px 4px;border-radius:3px;color:#0d6efd;cursor:pointer">' + rid.substring(0, 8) + '</code></a>';
       html += '<span style="font-size:10px;color:#495057">' + (info.hostname || '?') + '</span>';
       html += '<code style="font-size:9px;background:#e9ecef;padding:1px 4px;border-radius:3px;color:#495057">pid:' + (info.pid || '?') + '</code>';
@@ -1028,7 +1213,7 @@
     // Task — clickable link with language badge
     html += '<tr><td class="detail-label">Task</td><td>';
     if (api.task_language) {
-      html += '<span class="badge bg-info" style="font-size:8px;margin-right:3px">' + api.task_language + '</span>';
+      html += '<span class="badge language-badge language-' + api.task_language + '" style="font-size:8px;margin-right:3px">' + api.task_language + '</span>';
     }
     html += '<a href="/tasks/' + encodeURIComponent(taskId) + '" class="text-decoration-none"><code style="font-size:11px">' + taskId + '</code></a></td></tr>';
     html += '<tr><td class="detail-label">Call ID</td><td><code style="font-size:10px">' + callId + '</code></td></tr>';
@@ -1053,6 +1238,9 @@
       if (wf.workflow_id) {
         html += '<a href="/workflows/' + encodeURIComponent(wf.workflow_type) + '/' + encodeURIComponent(wf.workflow_id) + '" class="text-decoration-none">';
         html += '<code style="font-size:9px;color:#0d6efd">' + wf.workflow_id + '</code></a>';
+        var workflowTimeline = RustvelloMonitoringLinks.timelineFromCurrent({workflow_type: wf.workflow_type, workflow_id: wf.workflow_id, selected: null, inv_ids: null});
+        html += ' <a href="' + workflowTimeline + '" class="btn btn-sm btn-outline-success py-0 px-1" title="Open workflow run in timeline">';
+        html += '<span class="material-icons align-middle" style="font-size:12px">timeline</span></a>';
       }
       html += '</td></tr>';
     }

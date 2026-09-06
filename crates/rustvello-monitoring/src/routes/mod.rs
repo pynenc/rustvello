@@ -1,5 +1,6 @@
 //! Route modules for the monitoring dashboard.
 
+pub mod api;
 pub mod atomic_service;
 pub mod broker;
 pub mod calls;
@@ -24,6 +25,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(home::router())
+        .nest("/api", api::router())
         .nest("/broker", broker::router())
         .nest("/orchestrator", orchestrator::router())
         .nest("/atomic-service", atomic_service::router())

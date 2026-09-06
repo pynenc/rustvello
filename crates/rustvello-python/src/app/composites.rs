@@ -37,8 +37,12 @@ impl PyRustvello {
     ) -> PyResult<(String, Option<String>, f64)> {
         let inv_id = rustvello_proto::identifiers::InvocationId::from(invocation_id.to_owned());
         let runner = rustvello_proto::identifiers::RunnerId::from(runner_id.to_owned());
-        let task_id = TaskId::try_new(task_module, task_name)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let task_id = TaskId::try_for_language(
+            rustvello_proto::identifiers::TaskLanguage::Python,
+            task_module,
+            task_name,
+        )
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let inv_status = crate::orchestrator::parse_status(status)?;
         let args = arguments.unwrap_or_default();
 
@@ -76,8 +80,12 @@ impl PyRustvello {
         let mut inv_pairs = Vec::with_capacity(invocations.len());
         for (inv_id_str, task_module, task_name, args) in &invocations {
             let inv_id = rustvello_proto::identifiers::InvocationId::from(inv_id_str.clone());
-            let task_id = TaskId::try_new(task_module, task_name)
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            let task_id = TaskId::try_for_language(
+                rustvello_proto::identifiers::TaskLanguage::Python,
+                task_module,
+                task_name,
+            )
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
             let mut ser_args = SerializedArguments::new();
             for (k, v) in args {
                 ser_args.insert(k, v.clone());
@@ -117,8 +125,12 @@ impl PyRustvello {
     ) -> PyResult<()> {
         let inv_id = rustvello_proto::identifiers::InvocationId::from(invocation_id.to_owned());
         let runner = rustvello_proto::identifiers::RunnerId::from(runner_id.to_owned());
-        let task_id = TaskId::try_new(task_module, task_name)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let task_id = TaskId::try_for_language(
+            rustvello_proto::identifiers::TaskLanguage::Python,
+            task_module,
+            task_name,
+        )
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let args = arguments.unwrap_or_default();
 
         let app = Arc::clone(&self.inner);
@@ -149,8 +161,12 @@ impl PyRustvello {
     ) -> PyResult<()> {
         let inv_id = rustvello_proto::identifiers::InvocationId::from(invocation_id.to_owned());
         let runner = rustvello_proto::identifiers::RunnerId::from(runner_id.to_owned());
-        let task_id = TaskId::try_new(task_module, task_name)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let task_id = TaskId::try_for_language(
+            rustvello_proto::identifiers::TaskLanguage::Python,
+            task_module,
+            task_name,
+        )
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let args = arguments.unwrap_or_default();
 
         let app = Arc::clone(&self.inner);
@@ -185,8 +201,12 @@ impl PyRustvello {
     ) -> PyResult<()> {
         let inv_id = rustvello_proto::identifiers::InvocationId::from(invocation_id.to_owned());
         let runner = rustvello_proto::identifiers::RunnerId::from(runner_id.to_owned());
-        let task_id = TaskId::try_new(task_module, task_name)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let task_id = TaskId::try_for_language(
+            rustvello_proto::identifiers::TaskLanguage::Python,
+            task_module,
+            task_name,
+        )
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let args = arguments.unwrap_or_default();
 
         let app = Arc::clone(&self.inner);
@@ -253,8 +273,12 @@ impl PyRustvello {
 
         let inv_id = rustvello_proto::identifiers::InvocationId::from(new_invocation_id.to_owned());
         let runner = rustvello_proto::identifiers::RunnerId::from(runner_id.to_owned());
-        let task_id = TaskId::try_new(task_module, task_name)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let task_id = TaskId::try_for_language(
+            rustvello_proto::identifiers::TaskLanguage::Python,
+            task_module,
+            task_name,
+        )
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
         let mut ser_args = SerializedArguments::new();
         for (k, v) in &arguments {

@@ -7,11 +7,14 @@ pub mod data;
 pub mod family_tree;
 pub mod histogram;
 pub mod log_explorer;
+pub mod navigation;
+pub mod query;
 pub mod routes;
 pub mod server;
 pub mod state;
 pub mod svg;
 pub mod util;
+pub mod view;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -19,7 +22,7 @@ use std::sync::Arc;
 use rustvello_core::broker::Broker;
 use rustvello_core::client_data_store::ClientDataStoreManager;
 use rustvello_core::error::RustvelloResult;
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::trigger::TriggerStore;
 use rustvello_proto::config::AppConfig;
@@ -51,7 +54,7 @@ pub struct AppInstance {
     pub app_id: String,
     pub config: AppConfig,
     pub broker: Arc<dyn Broker>,
-    pub orchestrator: Arc<dyn Orchestrator>,
+    pub orchestrator: Arc<dyn InvocationControlBackend>,
     pub state_backend: Arc<dyn StateBackend>,
     /// Trigger evidence for full stores; absent only for broker-only apps.
     pub trigger_store: Option<Arc<dyn TriggerStore>>,

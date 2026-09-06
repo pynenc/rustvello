@@ -9,10 +9,13 @@ use crate::histogram::{
     build_histogram, parse_categories, serialize_categories, HistogramCategory, HistogramEntry,
     HistogramPanel,
 };
+use crate::navigation::{MonitoringDestination, MonitoringLink, MonitoringScope, TimeWindow};
+use crate::query::{PageRequest, TotalCount};
 use crate::state::AppState;
 use crate::util::escape::xml_escape;
 use crate::util::status_colors;
 use crate::util::view_helpers::{get_active_app, AppResult, HtmlTemplate};
+use crate::view::PaginationView;
 
 #[derive(Template)]
 #[template(path = "workflows/list.html")]
@@ -23,6 +26,10 @@ struct WorkflowListTemplate {
     nav_path: &'static str,
     workflow_types: Vec<WorkflowTypeRow>,
     workflow_runs: Vec<WorkflowRunInfo>,
+    total_workflow_runs: usize,
+    pagination: PaginationView,
+    pagination_path: &'static str,
+    pagination_query: String,
 }
 
 struct WorkflowTypeRow {
@@ -39,6 +46,12 @@ struct WorkflowRunInfo {
     child_count: usize,
 }
 
+#[derive(serde::Deserialize, Default)]
+struct WorkflowListQuery {
+    page: Option<usize>,
+    limit: Option<usize>,
+}
+
 #[derive(Template)]
 #[template(path = "workflows/detail.html")]
 #[allow(dead_code)]
@@ -47,17 +60,32 @@ struct WorkflowDetailTemplate {
     app_ids: Vec<String>,
     nav_path: &'static str,
     workflow_type: String,
+    workflow_task_id: String,
     runs: Vec<WorkflowRunRow>,
+    total_runs: usize,
+    pagination: PaginationView,
+    pagination_path: String,
+    pagination_query: String,
+    selected_workflow_ids: String,
     workflow_histograms: Vec<WorkflowHistogramView>,
     histogram_selection_capped: bool,
     histogram_status: String,
+    limit: usize,
 }
 
+#[derive(Clone)]
 struct WorkflowRunRow {
     workflow_id: String,
     short_id: String,
     member_count: usize,
+    worker_count: usize,
+    duration_ms: i64,
+    duration: String,
     histogram_selected: bool,
+    selection_url: String,
+    invocations_url: String,
+    timeline_url: String,
+    root_invocation_url: String,
 }
 
 struct WorkflowHistogramView {
@@ -70,6 +98,59 @@ struct WorkflowHistogramView {
 struct WorkflowDetailQuery {
     histogram_workflow: Option<String>,
     histogram_status: Option<String>,
+    page: Option<usize>,
+    limit: Option<usize>,
+}
+
+fn workflow_run_urls(
+    workflow_type: &str,
+    workflow_id: &str,
+    start: chrono::DateTime<chrono::Utc>,
+    end: chrono::DateTime<chrono::Utc>,
+    limit: usize,
+) -> (String, String, String) {
+    let scope = MonitoringScope::default()
+        .with_workflow(workflow_type, workflow_id)
+        .with_time(TimeWindow::fit_default(start, end));
+    let invocations_url = MonitoringLink::new(MonitoringDestination::InvocationList)
+        .with_scope(scope.clone())
+        .with_limit(limit)
+        .href();
+    let timeline_url = MonitoringLink::new(MonitoringDestination::Timeline)
+        .with_scope(scope)
+        .href();
+    let root_invocation_url = MonitoringLink::new(MonitoringDestination::InvocationDetail(
+        workflow_id.to_owned(),
+    ))
+    .href();
+    (invocations_url, timeline_url, root_invocation_url)
+}
+
+fn workflow_selection_url(
+    workflow_type: &str,
+    selected: &std::collections::BTreeSet<String>,
+    toggled_workflow_id: &str,
+    histogram_status: &str,
+    limit: usize,
+    page: usize,
+) -> String {
+    let mut next = selected.clone();
+    if !next.remove(toggled_workflow_id) {
+        next.insert(toggled_workflow_id.to_owned());
+    }
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    if !next.is_empty() {
+        serializer.append_pair(
+            "histogram_workflow",
+            &next.into_iter().collect::<Vec<_>>().join(","),
+        );
+    }
+    if !histogram_status.is_empty() {
+        serializer.append_pair("histogram_status", histogram_status);
+    }
+    serializer.append_pair("limit", &limit.to_string());
+    serializer.append_pair("page", &page.to_string());
+    format!("/workflows/{workflow_type}?{}", serializer.finish())
 }
 
 pub fn router() -> Router<AppState> {
@@ -80,18 +161,19 @@ pub fn router() -> Router<AppState> {
         .route("/children/{invocation_id}", axum::routing::get(children))
         .route("/{workflow_type}", axum::routing::get(detail))
         .route(
-            "/{workflow_type}/refresh",
-            axum::routing::get(detail_refresh),
-        )
-        .route(
             "/{workflow_type}/{workflow_id}",
             axum::routing::get(workflow_run_detail),
         )
 }
 
-async fn list(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
+async fn list(
+    State(state): State<AppState>,
+    Query(query): Query<WorkflowListQuery>,
+) -> AppResult<impl IntoResponse> {
     let app = get_active_app(&state)?;
-    let (workflow_types, workflow_runs) = collect_workflow_data(&app).await;
+    let page_request = PageRequest::new(query.page, query.limit);
+    let (workflow_types, workflow_runs, total_workflow_runs) =
+        collect_workflow_data(&app, page_request).await;
 
     Ok(HtmlTemplate(WorkflowListTemplate {
         app_id: app.app_id.clone(),
@@ -99,6 +181,14 @@ async fn list(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
         nav_path: "workflows",
         workflow_types,
         workflow_runs,
+        total_workflow_runs,
+        pagination: PaginationView::new(
+            page_request,
+            TotalCount::Exact(total_workflow_runs),
+            page_request.offset() + page_request.limit < total_workflow_runs,
+        ),
+        pagination_path: "/workflows",
+        pagination_query: format!("limit={}", page_request.limit),
     }))
 }
 
@@ -107,80 +197,105 @@ async fn list(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
 struct WorkflowListContentPartial {
     workflow_types: Vec<WorkflowTypeRow>,
     workflow_runs: Vec<WorkflowRunInfo>,
+    total_workflow_runs: usize,
+    pagination: PaginationView,
+    pagination_path: &'static str,
+    pagination_query: String,
 }
 
-async fn list_refresh(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
+async fn list_refresh(
+    State(state): State<AppState>,
+    Query(query): Query<WorkflowListQuery>,
+) -> AppResult<impl IntoResponse> {
     let app = get_active_app(&state)?;
-    let (workflow_types, workflow_runs) = collect_workflow_data(&app).await;
+    let page_request = PageRequest::new(query.page, query.limit);
+    let (workflow_types, workflow_runs, total_workflow_runs) =
+        collect_workflow_data(&app, page_request).await;
     Ok(HtmlTemplate(WorkflowListContentPartial {
         workflow_types,
         workflow_runs,
+        total_workflow_runs,
+        pagination: PaginationView::new(
+            page_request,
+            TotalCount::Exact(total_workflow_runs),
+            page_request.offset() + page_request.limit < total_workflow_runs,
+        ),
+        pagination_path: "/workflows",
+        pagination_query: format!("limit={}", page_request.limit),
     }))
 }
 
 /// Collect workflow types with run counts and all workflow runs (invocations with children).
 async fn collect_workflow_data(
     app: &crate::AppInstance,
-) -> (Vec<WorkflowTypeRow>, Vec<WorkflowRunInfo>) {
+    page_request: PageRequest,
+) -> (Vec<WorkflowTypeRow>, Vec<WorkflowRunInfo>, usize) {
     use rustvello_proto::status::InvocationStatus;
 
     let mut workflow_types = Vec::new();
     let mut workflow_runs = Vec::new();
-
-    // Hard cap to prevent DoS from unbounded iteration.
-    const MAX_WORKFLOW_RUNS: usize = 500;
-
-    for tid in &app.task_ids {
-        let inv_ids = app
-            .orchestrator
-            .get_invocations_by_task(tid)
+    let mut total_runs = 0usize;
+    let mut skip = page_request.offset();
+    let mut remaining = page_request.limit;
+    let workflow_task_ids = app
+        .state_backend
+        .get_all_workflow_types()
+        .await
+        .unwrap_or_default();
+    for tid in workflow_task_ids {
+        let run_count = app
+            .state_backend
+            .count_workflow_runs(&tid)
             .await
-            .unwrap_or_default();
-
-        let mut run_count = 0usize;
-        for inv_id in &inv_ids {
-            let children = app
-                .state_backend
-                .get_child_invocations(inv_id)
-                .await
-                .unwrap_or_default();
-            if !children.is_empty() {
-                run_count += 1;
-                if workflow_runs.len() < MAX_WORKFLOW_RUNS {
-                    let status = app
-                        .orchestrator
-                        .get_invocation_status(inv_id)
-                        .await
-                        .map(|r| r.status)
-                        .unwrap_or(InvocationStatus::Registered);
-                    let badge = status_colors::badge_class(&status);
-                    let full_id = inv_id.to_string();
-                    let short = crate::util::formatting::truncate_id(&full_id);
-                    workflow_runs.push(WorkflowRunInfo {
-                        invocation_id: full_id,
-                        short_id: short,
-                        task_id: tid.to_string(),
-                        status: format!("{status:?}"),
-                        status_class: badge.to_owned(),
-                        child_count: children.len(),
-                    });
-                }
-            }
-        }
-
+            .unwrap_or(0);
+        total_runs = total_runs.saturating_add(run_count);
         workflow_types.push(WorkflowTypeRow {
             workflow_type: tid.to_string(),
             run_count,
         });
+        if remaining == 0 || skip >= run_count {
+            skip = skip.saturating_sub(run_count);
+            continue;
+        }
+        let identities = app
+            .state_backend
+            .get_workflow_runs_paginated(&tid, remaining, skip)
+            .await
+            .unwrap_or_default();
+        skip = 0;
+        for identity in identities {
+            let inv_id = identity.workflow_id;
+            let (children, status) = tokio::join!(
+                app.state_backend.get_child_invocations(&inv_id),
+                app.orchestrator.get_invocation_status(&inv_id)
+            );
+            let children = children.unwrap_or_default();
+            let status = status
+                .map(|record| record.status)
+                .unwrap_or(InvocationStatus::Registered);
+            let full_id = inv_id.to_string();
+            workflow_runs.push(WorkflowRunInfo {
+                short_id: crate::util::formatting::truncate_id(&full_id),
+                invocation_id: full_id,
+                task_id: tid.to_string(),
+                status: format!("{status:?}"),
+                status_class: status_colors::badge_class(&status).to_owned(),
+                child_count: children.len(),
+            });
+            remaining = remaining.saturating_sub(1);
+        }
     }
 
-    (workflow_types, workflow_runs)
+    (workflow_types, workflow_runs, total_runs)
 }
 
-async fn all_runs(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
+async fn all_runs(
+    State(state): State<AppState>,
+    Query(query): Query<WorkflowListQuery>,
+) -> AppResult<impl IntoResponse> {
     let app = get_active_app(&state)?;
-    let (_, workflow_runs) = collect_workflow_data(&app).await;
-    let count = workflow_runs.len();
+    let (_, workflow_runs, count) =
+        collect_workflow_data(&app, PageRequest::new(query.page, query.limit)).await;
     let mut html =
         format!("<h5>All Workflow Runs <span class=\"badge bg-primary\">{count}</span></h5>");
     if workflow_runs.is_empty() {
@@ -204,59 +319,101 @@ async fn detail(
     Query(query): Query<WorkflowDetailQuery>,
 ) -> AppResult<impl IntoResponse> {
     let app = get_active_app(&state)?;
-    let mut runs = collect_workflow_runs(&app, &workflow_type).await;
-    let selected = select_workflow_histograms(&runs, query.histogram_workflow.as_deref());
-    for run in &mut runs {
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(25).clamp(10, 100);
+    let categories = parse_categories(query.histogram_status.as_deref());
+    let histogram_status = serialize_categories(&categories);
+    let workflow_task_id = workflow_type
+        .parse::<rustvello_proto::identifiers::TaskId>()
+        .unwrap_or_else(|_| rustvello_proto::identifiers::TaskId::new(&workflow_type, ""));
+    let total_runs = app
+        .state_backend
+        .count_workflow_runs(&workflow_task_id)
+        .await
+        .unwrap_or(0);
+    let total_pages = total_runs.div_ceil(limit).max(1);
+    let current_page = page.min(total_pages);
+    let page_identities = app
+        .state_backend
+        .get_workflow_runs_paginated(
+            &workflow_task_id,
+            limit,
+            (current_page - 1).saturating_mul(limit),
+        )
+        .await
+        .unwrap_or_default();
+    let page_ids = page_identities
+        .into_iter()
+        .map(|identity| identity.workflow_id.to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    let requested_ids = query
+        .histogram_workflow
+        .as_deref()
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut roots = page_ids.clone();
+    roots.extend(requested_ids.iter().cloned());
+    let mut all_runs = collect_workflow_runs(&app, &workflow_type, roots, limit).await;
+    let selected = select_workflow_histograms(&all_runs, query.histogram_workflow.as_deref());
+    for run in &mut all_runs {
         run.histogram_selected = selected.contains(&run.workflow_id);
     }
-    let categories = parse_categories(query.histogram_status.as_deref());
+    let selected_runs = all_runs
+        .iter()
+        .filter(|run| run.histogram_selected)
+        .cloned()
+        .collect::<Vec<_>>();
+    for run in &mut all_runs {
+        run.selection_url = workflow_selection_url(
+            &workflow_type,
+            &selected,
+            &run.workflow_id,
+            &histogram_status,
+            limit,
+            current_page,
+        );
+    }
+    let runs = all_runs
+        .into_iter()
+        .filter(|run| page_ids.contains(&run.workflow_id) || run.histogram_selected)
+        .collect::<Vec<_>>();
     let workflow_histograms =
-        build_workflow_histograms(&app, &workflow_type, &runs, &selected, &categories).await;
-    let histogram_status = serialize_categories(&categories);
+        build_workflow_histograms(&app, &selected_runs, &selected, &categories).await;
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    if let Some(selected) = query
+        .histogram_workflow
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        serializer.append_pair("histogram_workflow", selected);
+    }
+    serializer.append_pair("histogram_status", &histogram_status);
+    serializer.append_pair("limit", &limit.to_string());
+    let pagination_query = serializer.finish();
     Ok(HtmlTemplate(WorkflowDetailTemplate {
         app_id: app.app_id.clone(),
         app_ids: state.app_ids().unwrap_or_default(),
         nav_path: "workflows",
-        workflow_type,
+        workflow_task_id: workflow_type.clone(),
+        workflow_type: workflow_type.clone(),
         runs,
+        total_runs,
+        pagination: PaginationView::new(
+            PageRequest::new(Some(current_page), Some(limit)),
+            TotalCount::Exact(total_runs),
+            current_page < total_pages,
+        ),
+        pagination_path: format!("/workflows/{workflow_type}"),
+        pagination_query,
+        selected_workflow_ids: selected.iter().cloned().collect::<Vec<_>>().join(","),
         workflow_histograms,
         histogram_selection_capped: selected.len() > 10,
         histogram_status,
-    }))
-}
-
-#[derive(Template)]
-#[template(path = "workflows/partials/detail_content.html")]
-#[allow(dead_code)]
-struct WorkflowDetailContentPartial {
-    workflow_type: String,
-    runs: Vec<WorkflowRunRow>,
-    workflow_histograms: Vec<WorkflowHistogramView>,
-    histogram_selection_capped: bool,
-    histogram_status: String,
-}
-
-async fn detail_refresh(
-    State(state): State<AppState>,
-    Path(workflow_type): Path<String>,
-    Query(query): Query<WorkflowDetailQuery>,
-) -> AppResult<impl IntoResponse> {
-    let app = get_active_app(&state)?;
-    let mut runs = collect_workflow_runs(&app, &workflow_type).await;
-    let selected = select_workflow_histograms(&runs, query.histogram_workflow.as_deref());
-    for run in &mut runs {
-        run.histogram_selected = selected.contains(&run.workflow_id);
-    }
-    let categories = parse_categories(query.histogram_status.as_deref());
-    let workflow_histograms =
-        build_workflow_histograms(&app, &workflow_type, &runs, &selected, &categories).await;
-    let histogram_status = serialize_categories(&categories);
-    Ok(HtmlTemplate(WorkflowDetailContentPartial {
-        workflow_type,
-        runs,
-        workflow_histograms,
-        histogram_selection_capped: selected.len() > 10,
-        histogram_status,
+        limit,
     }))
 }
 
@@ -264,20 +421,17 @@ async fn detail_refresh(
 async fn collect_workflow_runs(
     app: &crate::AppInstance,
     workflow_type: &str,
+    root_ids: std::collections::BTreeSet<String>,
+    limit: usize,
 ) -> Vec<WorkflowRunRow> {
-    let tid: rustvello_proto::identifiers::TaskId = workflow_type
-        .parse()
-        .unwrap_or_else(|_| rustvello_proto::identifiers::TaskId::new(workflow_type, ""));
-    let identities = app
-        .state_backend
-        .get_workflow_runs(&tid)
-        .await
-        .unwrap_or_default();
-    let mut root_ids: Vec<_> = identities
+    let mut root_ids = root_ids
         .into_iter()
-        .map(|identity| identity.workflow_id)
-        .collect();
+        .map(rustvello_proto::identifiers::InvocationId::from_string)
+        .collect::<Vec<_>>();
     if root_ids.is_empty() {
+        let tid: rustvello_proto::identifiers::TaskId = workflow_type
+            .parse()
+            .unwrap_or_else(|_| rustvello_proto::identifiers::TaskId::new(workflow_type, ""));
         root_ids = app
             .orchestrator
             .get_invocations_by_task(&tid)
@@ -300,26 +454,66 @@ async fn collect_workflow_runs(
 
     let mut dated_runs = Vec::new();
     for inv_id in root_ids {
-        let members = app
+        let mut members = app
             .state_backend
             .get_workflow_invocations(&inv_id)
             .await
             .unwrap_or_default();
+        if !members.contains(&inv_id) {
+            members.push(inv_id.clone());
+        }
         let created_at = app
             .state_backend
             .get_invocation(&inv_id)
             .await
             .ok()
             .map_or_else(chrono::Utc::now, |invocation| invocation.created_at);
+        let mut worker_ids = std::collections::HashSet::new();
+        let mut first_seen = created_at;
+        let mut completed_at = created_at;
+        for member_id in &members {
+            let history = app
+                .state_backend
+                .get_history(member_id)
+                .await
+                .unwrap_or_default();
+            for entry in history {
+                let timestamp = entry
+                    .history_timestamp
+                    .unwrap_or(entry.status_record.timestamp);
+                first_seen = first_seen.min(timestamp);
+                completed_at = completed_at.max(timestamp);
+                if let Some(runner_id) = entry.runner_id.or(entry.status_record.runner_id) {
+                    worker_ids.insert(runner_id.to_string());
+                }
+            }
+        }
+        let duration_ms = (completed_at - created_at).num_milliseconds().max(0);
         let full_id = inv_id.to_string();
         let short = crate::util::formatting::truncate_id(&full_id);
+        let (invocations_url, timeline_url, root_invocation_url) = workflow_run_urls(
+            workflow_type,
+            &full_id,
+            first_seen,
+            completed_at.max(first_seen + chrono::Duration::milliseconds(1)),
+            limit,
+        );
         dated_runs.push((
             created_at,
             WorkflowRunRow {
                 workflow_id: full_id,
                 short_id: short,
                 member_count: members.len(),
+                worker_count: worker_ids.len(),
+                duration_ms,
+                duration: crate::util::formatting::format_duration_secs(
+                    duration_ms as f64 / 1_000.0,
+                ),
                 histogram_selected: false,
+                selection_url: String::new(),
+                invocations_url,
+                timeline_url,
+                root_invocation_url,
             },
         ));
     }
@@ -335,7 +529,16 @@ fn select_workflow_histograms(
         runs.iter().map(|run| run.workflow_id.as_str()).collect();
     requested.map_or_else(
         || {
-            runs.iter()
+            let mut candidates = runs.iter().collect::<Vec<_>>();
+            candidates.sort_by(|left, right| {
+                right
+                    .duration_ms
+                    .cmp(&left.duration_ms)
+                    .then_with(|| right.worker_count.cmp(&left.worker_count))
+                    .then_with(|| right.member_count.cmp(&left.member_count))
+            });
+            candidates
+                .into_iter()
                 .take(3)
                 .map(|run| run.workflow_id.clone())
                 .collect()
@@ -353,7 +556,6 @@ fn select_workflow_histograms(
 
 async fn build_workflow_histograms(
     app: &crate::AppInstance,
-    workflow_type: &str,
     runs: &[WorkflowRunRow],
     selected: &std::collections::BTreeSet<String>,
     categories: &std::collections::BTreeSet<HistogramCategory>,
@@ -413,50 +615,67 @@ async fn build_workflow_histograms(
         if end <= start {
             end = start + chrono::Duration::seconds(1);
         }
-        let data = build_histogram(&entries, start, end, categories.clone(), None);
-        let common_params = vec![
-            ("workflow_id".to_owned(), run.workflow_id.clone()),
-            ("workflow_type".to_owned(), workflow_type.to_owned()),
-        ];
         models.push((
             run.workflow_id.clone(),
             run.short_id.clone(),
-            data,
-            common_params,
+            start,
+            end,
+            entries,
         ));
     }
+    let shared_duration = models
+        .iter()
+        .map(|(_, _, start, end, _)| (*end - *start).num_milliseconds())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let comparison_start = chrono::DateTime::from_timestamp(0, 0)
+        .expect("the Unix epoch is representable as a UTC timestamp");
+    let comparison_end = comparison_start + chrono::Duration::milliseconds(shared_duration);
+    let models = models
+        .into_iter()
+        .map(|(workflow_id, short_id, start, _end, mut entries)| {
+            for entry in &mut entries {
+                entry.timestamp = comparison_start + (entry.timestamp - start);
+            }
+            (
+                workflow_id,
+                short_id,
+                build_histogram(
+                    &entries,
+                    comparison_start,
+                    comparison_end,
+                    categories.clone(),
+                    None,
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
     let shared_max = models
         .iter()
-        .map(|(_, _, data, _)| data.max_count)
+        .map(|(_, _, data)| data.max_count)
         .max()
         .unwrap_or_default();
     models
         .into_iter()
-        .map(
-            |(workflow_id, short_id, data, common_params)| WorkflowHistogramView {
-                workflow_id,
-                short_id,
-                histogram: HistogramPanel::from_data_with_y_axis(
-                    &data,
-                    &common_params,
-                    "/invocations",
-                    true,
-                    Some(shared_max),
-                ),
-            },
-        )
+        .map(|(_workflow_id, short_id, data)| WorkflowHistogramView {
+            workflow_id: _workflow_id,
+            short_id,
+            histogram: HistogramPanel::from_data_comparison(&data, Some(shared_max)),
+        })
         .collect()
 }
 
-/// Redirect a workflow run (identified by its root invocation_id) to the invocations detail page.
+/// Redirect a workflow run to the workflow detail page with that run selected.
 async fn workflow_run_detail(
-    Path((_workflow_type, workflow_id)): Path<(String, String)>,
+    Path((workflow_type, workflow_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let sanitized_id: String = workflow_id
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-        .collect();
-    Redirect::to(&format!("/invocations/{sanitized_id}"))
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("histogram_workflow", &workflow_id);
+    Redirect::to(&format!(
+        "/workflows/{workflow_type}?{}",
+        serializer.finish()
+    ))
 }
 
 /// HTMX partial: return the child invocations of a workflow root as an inline table.

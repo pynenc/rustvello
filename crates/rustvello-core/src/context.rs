@@ -22,7 +22,7 @@
 
 use std::sync::Arc;
 
-use rustvello_proto::identifiers::{InvocationId, RunnerId, TaskId};
+use rustvello_proto::identifiers::{ExecutorKind, InvocationId, RunnerId, TaskId, TaskLanguage};
 use rustvello_proto::invocation::WorkflowIdentity;
 use serde::{Deserialize, Serialize};
 
@@ -101,6 +101,11 @@ pub struct RunnerContext {
     /// Set at runner creation time so monitoring and recovery can distinguish
     /// runner types without introspecting the `app_id`.
     pub runner_cls: Arc<str>,
+    /// Runtime language this runner executes.
+    pub runner_language: TaskLanguage,
+    /// Local executor family used by this runner or worker.
+    #[serde(default)]
+    pub executor_kind: ExecutorKind,
     /// The application identifier (shared via `Arc` to avoid per-invocation clones).
     #[serde(
         serialize_with = "serialize_arc_str",
@@ -129,9 +134,42 @@ fn deserialize_arc_str<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Arc<str
 impl RunnerContext {
     /// Create a new `RunnerContext` capturing current process/host metadata.
     pub fn new(runner_id: RunnerId, app_id: Arc<str>, runner_cls: impl Into<Arc<str>>) -> Self {
+        Self::new_with_language(runner_id, app_id, runner_cls, TaskLanguage::Rust)
+    }
+
+    /// Create a new `RunnerContext` with an explicit runtime language.
+    pub fn new_with_language(
+        runner_id: RunnerId,
+        app_id: Arc<str>,
+        runner_cls: impl Into<Arc<str>>,
+        runner_language: TaskLanguage,
+    ) -> Self {
+        let executor_kind = match runner_language {
+            TaskLanguage::Rust => ExecutorKind::Tokio,
+            TaskLanguage::Python => ExecutorKind::Python,
+        };
+        Self::new_with_runtime(
+            runner_id,
+            app_id,
+            runner_cls,
+            runner_language,
+            executor_kind,
+        )
+    }
+
+    /// Create a runner context with explicit language and executor identity.
+    pub fn new_with_runtime(
+        runner_id: RunnerId,
+        app_id: Arc<str>,
+        runner_cls: impl Into<Arc<str>>,
+        runner_language: TaskLanguage,
+        executor_kind: ExecutorKind,
+    ) -> Self {
         Self {
             runner_id,
             runner_cls: runner_cls.into(),
+            runner_language,
+            executor_kind,
             app_id,
             pid: std::process::id(),
             hostname: Self::get_hostname(),
@@ -148,6 +186,8 @@ impl RunnerContext {
         Self {
             runner_id,
             runner_cls: Arc::clone(&self.runner_cls),
+            runner_language: self.runner_language,
+            executor_kind: self.executor_kind,
             app_id: Arc::clone(&self.app_id),
             pid: std::process::id(),
             hostname: self.hostname.clone(),
@@ -175,6 +215,8 @@ impl RunnerContext {
         Self {
             runner_id,
             runner_cls: Arc::from("ExternalRunner"),
+            runner_language: TaskLanguage::Rust,
+            executor_kind: ExecutorKind::Tokio,
             app_id: Arc::from("external"),
             pid,
             hostname,

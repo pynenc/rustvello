@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use rustvello_core::broker::Broker;
 use rustvello_core::client_data_store::ClientDataStoreManager;
-use rustvello_core::orchestrator::Orchestrator;
+use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::trigger::TriggerManager;
 
@@ -20,29 +20,29 @@ use crate::orchestrator::PyMemOrchestrator;
 use crate::state_backend::PyMemStateBackend;
 use crate::trigger::PyMemTriggerStore;
 
-pub fn extract_orchestrator(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn Orchestrator>> {
+pub fn extract_orchestrator(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn InvocationControlBackend>> {
     if let Ok(r) = obj.extract::<PyRef<'_, PyMemOrchestrator>>() {
-        return Ok(Arc::clone(&r.inner) as Arc<dyn Orchestrator>);
+        return Ok(Arc::clone(&r.inner) as Arc<dyn InvocationControlBackend>);
     }
     #[cfg(feature = "sqlite")]
     if let Ok(r) = obj.extract::<PyRef<'_, crate::sqlite::PySqliteOrchestrator>>() {
-        return Ok(Arc::clone(&r.inner) as Arc<dyn Orchestrator>);
+        return Ok(Arc::clone(&r.inner) as Arc<dyn InvocationControlBackend>);
     }
     #[cfg(feature = "postgres")]
     if let Ok(r) = obj.extract::<PyRef<'_, crate::postgres::PyPostgresOrchestrator>>() {
-        return Ok(Arc::clone(&r.inner) as Arc<dyn Orchestrator>);
+        return Ok(Arc::clone(&r.inner) as Arc<dyn InvocationControlBackend>);
     }
     #[cfg(feature = "redis")]
     if let Ok(r) = obj.extract::<PyRef<'_, crate::redis::PyRedisOrchestrator>>() {
-        return Ok(Arc::clone(&r.inner) as Arc<dyn Orchestrator>);
+        return Ok(Arc::clone(&r.inner) as Arc<dyn InvocationControlBackend>);
     }
     #[cfg(feature = "mongodb")]
     if let Ok(r) = obj.extract::<PyRef<'_, crate::mongo::PyMongoOrchestrator>>() {
-        return Ok(Arc::clone(&r.inner) as Arc<dyn Orchestrator>);
+        return Ok(Arc::clone(&r.inner) as Arc<dyn InvocationControlBackend>);
     }
     #[cfg(feature = "mongodb3")]
     if let Ok(r) = obj.extract::<PyRef<'_, crate::mongo3::PyMongo3Orchestrator>>() {
-        return Ok(Arc::clone(&r.inner) as Arc<dyn Orchestrator>);
+        return Ok(Arc::clone(&r.inner) as Arc<dyn InvocationControlBackend>);
     }
     Err(pyo3::exceptions::PyTypeError::new_err(
         "unsupported orchestrator backend type",

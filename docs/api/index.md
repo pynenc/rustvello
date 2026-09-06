@@ -4,22 +4,22 @@
 
 All public Rust APIs are documented with `cargo doc` and published to docs.rs.
 
-| Crate                  | docs.rs                                                              | Description                                     |
-| ---------------------- | -------------------------------------------------------------------- | ----------------------------------------------- |
-| `rustvello`            | [docs.rs/rustvello](https://docs.rs/rustvello)                       | Application layer, builder, runner              |
-| `rustvello-proto`      | [docs.rs/rustvello-proto](https://docs.rs/rustvello-proto)           | DTOs, identifiers, status FSM, config           |
-| `rustvello-core`       | [docs.rs/rustvello-core](https://docs.rs/rustvello-core)             | Core traits: Broker, Orchestrator, StateBackend |
-| `rustvello-macros`     | [docs.rs/rustvello-macros](https://docs.rs/rustvello-macros)         | `#[rustvello::task]` proc macro                 |
-| `rustvello-mem`        | [docs.rs/rustvello-mem](https://docs.rs/rustvello-mem)               | In-memory backend implementations               |
-| `rustvello-sqlite`     | [docs.rs/rustvello-sqlite](https://docs.rs/rustvello-sqlite)         | SQLite backend implementations                  |
-| `rustvello-redis`      | [docs.rs/rustvello-redis](https://docs.rs/rustvello-redis)           | Redis backend implementations                   |
-| `rustvello-mongo`      | [docs.rs/rustvello-mongo](https://docs.rs/rustvello-mongo)           | MongoDB backend implementations                 |
-| `rustvello-rabbitmq`   | [docs.rs/rustvello-rabbitmq](https://docs.rs/rustvello-rabbitmq)     | RabbitMQ broker                                 |
-| `rustvello-postgres`   | [docs.rs/rustvello-postgres](https://docs.rs/rustvello-postgres)     | PostgreSQL trigger store                        |
-| `rustvello-prometheus` | [docs.rs/rustvello-prometheus](https://docs.rs/rustvello-prometheus) | Prometheus EventEmitter                         |
-| `rustvello-monitoring` | [docs.rs/rustvello-monitoring](https://docs.rs/rustvello-monitoring) | Web dashboard                                   |
-| `rustvello-cli`        | [docs.rs/rustvello-cli](https://docs.rs/rustvello-cli)               | CLI binary                                      |
-| `rustvello-test-suite` | [docs.rs/rustvello-test-suite](https://docs.rs/rustvello-test-suite) | Backend compliance tests                        |
+| Crate                  | docs.rs                                                              | Description                                                |
+| ---------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `rustvello`            | [docs.rs/rustvello](https://docs.rs/rustvello)                       | Application layer, builder, runner                         |
+| `rustvello-proto`      | [docs.rs/rustvello-proto](https://docs.rs/rustvello-proto)           | DTOs, identifiers, status FSM, config                      |
+| `rustvello-core`       | [docs.rs/rustvello-core](https://docs.rs/rustvello-core)             | Core ports: Broker, InvocationControlBackend, StateBackend |
+| `rustvello-macros`     | [docs.rs/rustvello-macros](https://docs.rs/rustvello-macros)         | `#[rustvello::task]` proc macro                            |
+| `rustvello-mem`        | [docs.rs/rustvello-mem](https://docs.rs/rustvello-mem)               | In-memory backend implementations                          |
+| `rustvello-sqlite`     | [docs.rs/rustvello-sqlite](https://docs.rs/rustvello-sqlite)         | SQLite backend implementations                             |
+| `rustvello-redis`      | [docs.rs/rustvello-redis](https://docs.rs/rustvello-redis)           | Redis backend implementations                              |
+| `rustvello-mongo`      | [docs.rs/rustvello-mongo](https://docs.rs/rustvello-mongo)           | MongoDB backend implementations                            |
+| `rustvello-rabbitmq`   | [docs.rs/rustvello-rabbitmq](https://docs.rs/rustvello-rabbitmq)     | RabbitMQ broker                                            |
+| `rustvello-postgres`   | [docs.rs/rustvello-postgres](https://docs.rs/rustvello-postgres)     | PostgreSQL trigger store                                   |
+| `rustvello-prometheus` | [docs.rs/rustvello-prometheus](https://docs.rs/rustvello-prometheus) | Prometheus EventEmitter                                    |
+| `rustvello-monitoring` | [docs.rs/rustvello-monitoring](https://docs.rs/rustvello-monitoring) | Web dashboard                                              |
+| `rustvello-cli`        | [docs.rs/rustvello-cli](https://docs.rs/rustvello-cli)               | CLI binary                                                 |
+| `rustvello-test-suite` | [docs.rs/rustvello-test-suite](https://docs.rs/rustvello-test-suite) | Backend compliance tests                                   |
 
 To generate the full API docs locally:
 
@@ -110,19 +110,26 @@ structured fields preserved.
 
 ---
 
-## Python API (pynenc)
+## Python API
 
-:::{admonition} See also: Pynenc Docs
+:::{admonition} Two Python surfaces
 :class: seealso
-Python users interact with Pynenc functions and decorators, not these PyO3 boundaries directly. See the [Pynenc API Reference](https://pynenc.github.io/apidocs/index.html) for public interfaces available to Python apps.
+Use `rustvello` directly for the lightweight standalone Python queue. Use
+`pynenc-rustvello` when you want the full Pynenc framework, including its CLI,
+plugins, import discovery, and Pynmon views.
 :::
 
-Python users interact with rustvello through [pynenc](https://docs.pynenc.org).
-The `py-rustvello` wheel provides thin PyO3 wrappers but the user-facing Python
-API lives in pynenc.
+The `rustvello` wheel exposes a small Python API over the Rust engine:
 
+- `App.task(...)` registers synchronous Python callables as tasks.
+- `App.workflow(...)` registers explicit workflow roots.
+- `workflow_root()` is available inside a workflow invocation for deterministic
+  `random()`, `utc_now()`, and `uuid()` operations.
+- `TaskConfig(is_workflow_task=True)` remains available for lower-level
+  adapters that translate another framework's workflow decorator.
+
+- **[py-rustvello on PyPI](https://pypi.org/project/rustvello/)** — standalone Python wheel
 - **[pynenc Python API](https://docs.pynenc.org)** — decorators, builder, configuration
-- **[py-rustvello on PyPI](https://pypi.org/project/py-rustvello/)** — Python wheel
 
 ---
 

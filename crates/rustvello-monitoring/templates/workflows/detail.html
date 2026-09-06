@@ -1,52 +1,61 @@
-{% extends "base.html" %} {% block title %}Workflow: {{ workflow_type }} —
-Rustvello Monitor{% endblock %} {% block content %}
-<div class="pynmon-container">
-  <div class="row">
-    <div class="col-12">
-      <div class="card pynmon-card">
-        <div
-          class="card-header pynmon-card-header d-flex justify-content-between align-items-center"
-        >
-          <span class="compact-header">
-            <span
-              class="material-icons align-middle me-1"
-              style="font-size: 20px"
-              >workspaces</span
-            >
-            {{ workflow_type }}
-          </span>
-          <div class="d-flex gap-2">
-            <a href="/workflows" class="btn btn-sm btn-outline-secondary">
-              <span class="material-icons align-middle" style="font-size: 16px"
-                >arrow_back</span
-              >
-              Back
-            </a>
-            <button
-              class="btn btn-sm btn-outline-primary"
-              hx-get="/workflows/{{ workflow_type }}/refresh"
-              hx-target="#workflow-detail-content"
-              hx-swap="innerHTML"
-            >
-              <span class="material-icons align-middle" style="font-size: 16px"
-                >refresh</span
-              >
-              Refresh
-            </button>
-          </div>
-        </div>
-        <div class="card-body pynmon-card-body">
-          <div
-            id="workflow-detail-content"
-            hx-get="/workflows/{{ workflow_type }}/refresh"
-            hx-trigger="every 10s"
-            hx-swap="innerHTML"
-          >
-            {% include "workflows/partials/detail_content.html" %}
-          </div>
-        </div>
-      </div>
-    </div>
+{% extends "base.html" %}
+{% block title %}Workflow: {{ workflow_type }} - Rustvello Monitor{% endblock %}
+{% block content %}
+<div class="container-fluid workflow-detail-page">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div><h2 class="h4 mb-0 text-primary">{{ workflow_type }}</h2><small class="text-muted">Workflow execution comparison</small></div>
+    <a href="/workflows" class="btn btn-sm btn-outline-secondary"><span class="material-icons align-middle" style="font-size:15px">arrow_back</span> Back</a>
   </div>
+  <section class="metric-card mb-3" aria-labelledby="workflow-summary-title">
+    <h6 id="workflow-summary-title" class="section-title">Workflow Details</h6>
+    <div class="metric-grid">
+      <div class="metric-item"><span class="metric-label">Workflow task</span><a href="/tasks/{{ workflow_task_id }}"><code>{{ workflow_task_id }}</code></a></div>
+      <div class="metric-item"><span class="metric-label">Recorded runs</span><span class="badge bg-primary">{{ total_runs }}</span></div>
+      <div class="metric-item"><span class="metric-label">Comparison scale</span><span>Shared occupancy and elapsed-time axes</span></div>
+    </div>
+  </section>
+  {% if !workflow_histograms.is_empty() %}
+  <section class="mb-3" aria-labelledby="workflow-comparison-title">
+    <div class="mb-2"><h6 id="workflow-comparison-title" class="section-title mb-1">Selected Run Comparison</h6><span class="text-muted small">Charts start at +0 and share duration and occupancy scales. Select runs below to compare their workload.</span></div>
+    {% for workflow_histogram in &workflow_histograms %}
+    <div class="border rounded p-2 mb-2"><div class="small fw-semibold mb-1">Run <a href="/invocations/{{ workflow_histogram.workflow_id }}"><code>{{ workflow_histogram.short_id }}</code></a></div>{% let histogram = workflow_histogram.histogram %}{% include "partials/histogram.html" %}</div>
+    {% endfor %}
+  </section>
+  {% endif %}
+  <section class="card pynmon-card" aria-labelledby="workflow-runs-title">
+    <div class="card-header pynmon-card-header d-flex justify-content-between align-items-center"><span id="workflow-runs-title" class="compact-header">Workflow Runs ({{ total_runs }})</span><span class="text-muted small">Click rows to add or remove them from comparison.</span></div>
+    <div class="card-body pynmon-card-body p-0">
+      {% if !runs.is_empty() %}
+      <form method="get" id="workflow-selection-form">
+        <input type="hidden" name="histogram_workflow" id="workflow-selection-input" value="{{ selected_workflow_ids }}">
+        <input type="hidden" name="histogram_status" value="{{ histogram_status }}"><input type="hidden" name="limit" value="{{ limit }}">
+        <div class="table-responsive"><table class="table table-hover pynmon-table mb-0"><thead><tr><th>Run ID (Main Invocation ID)</th><th>Duration</th><th>Tasks</th><th>Workers</th><th>Actions</th></tr></thead><tbody>
+        {% for run in runs %}
+          <tr class="workflow-run-row{% if run.histogram_selected %} table-primary{% endif %}" data-selection-url="{{ run.selection_url }}">
+            <td><a href="{{ run.root_invocation_url }}" class="text-decoration-none"><code>{{ run.workflow_id }}</code></a></td>
+            <td>{{ run.duration }}</td><td><span class="badge bg-info text-dark">{{ run.member_count }}</span></td><td><span class="badge bg-secondary">{{ run.worker_count }}</span></td>
+            <td class="text-nowrap"><a href="{{ run.invocations_url }}" class="btn btn-sm btn-outline-secondary">Invocations</a> <a href="{{ run.timeline_url }}" class="btn btn-sm btn-outline-success"><span class="material-icons align-middle" style="font-size:14px">timeline</span></a></td>
+          </tr>
+        {% endfor %}
+        </tbody></table></div>
+        {% include "components/pagination.html" %}
+      </form>
+      {% else %}<p class="text-muted m-3">No workflow runs recorded yet.</p>{% endif %}
+    </div>
+  </section>
 </div>
+<script>
+(function () {
+  var form = document.getElementById('workflow-selection-form');
+  var input = document.getElementById('workflow-selection-input');
+  if (!form || !input) return;
+  form.querySelectorAll('.workflow-run-row').forEach(function (row) {
+    row.addEventListener('click', function (event) {
+      if (event.target.closest('a, button')) return;
+      var url = row.getAttribute('data-selection-url');
+      if (url) window.location.href = url;
+    });
+  });
+})();
+</script>
 {% endblock %}

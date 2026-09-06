@@ -9,9 +9,9 @@ use rustvello_proto::identifiers::{InvocationId, RunnerId, TaskId};
 use rustvello_proto::invocation::InvocationHistory;
 use rustvello_proto::status::InvocationStatus;
 
-use super::OrchestratorCoordinator;
+use super::Orchestrator;
 
-impl OrchestratorCoordinator {
+impl Orchestrator {
     // -----------------------------------------------------------------------
     // get_invocations_to_run — mirrors pynenc's BaseOrchestrator method
     // -----------------------------------------------------------------------
@@ -37,7 +37,8 @@ impl OrchestratorCoordinator {
 
         // --- Phase 1: blocking-priority invocations ---
         if let Ok(blocking) = self
-            .orchestrator
+            .backends
+            .invocation_control
             .get_blocking_invocations(max_num_invocations)
             .await
         {
@@ -45,7 +46,12 @@ impl OrchestratorCoordinator {
                 if result.len() >= max_num_invocations {
                     break;
                 }
-                let status_rec = match self.orchestrator.get_invocation_status(inv_id).await {
+                let status_rec = match self
+                    .backends
+                    .invocation_control
+                    .get_invocation_status(inv_id)
+                    .await
+                {
                     Ok(r) => r,
                     Err(_) => continue,
                 };
@@ -79,6 +85,7 @@ impl OrchestratorCoordinator {
             let mut candidate = None;
             for queue_name in queue_names {
                 if let Some(invocation_id) = self
+                    .backends
                     .broker
                     .retrieve_invocation_from_queue(queue_name, None)
                     .await?
@@ -93,7 +100,12 @@ impl OrchestratorCoordinator {
                 continue;
             }
 
-            let status_rec = match self.orchestrator.get_invocation_status(&inv_id).await {
+            let status_rec = match self
+                .backends
+                .invocation_control
+                .get_invocation_status(&inv_id)
+                .await
+            {
                 Ok(r) => r,
                 Err(_) => continue,
             };
@@ -106,7 +118,7 @@ impl OrchestratorCoordinator {
                 .check_cc_for_invocation(&inv_id, config_for_task)
                 .await?;
             if !cc_ok {
-                let inv_dto = match self.state_backend.get_invocation(&inv_id).await {
+                let inv_dto = match self.backends.state_backend.get_invocation(&inv_id).await {
                     Ok(dto) => dto,
                     Err(_) => continue,
                 };
@@ -114,7 +126,8 @@ impl OrchestratorCoordinator {
 
                 if reroute {
                     match self
-                        .orchestrator
+                        .backends
+                        .invocation_control
                         .set_invocation_status(
                             &inv_id,
                             InvocationStatus::ConcurrencyControlled,
@@ -128,7 +141,8 @@ impl OrchestratorCoordinator {
                     }
                 } else {
                     match self
-                        .orchestrator
+                        .backends
+                        .invocation_control
                         .set_invocation_status(
                             &inv_id,
                             InvocationStatus::ConcurrencyControlledFinal,
@@ -151,14 +165,17 @@ impl OrchestratorCoordinator {
         // --- Phase 3: reroute CC-denied invocations ---
         for inv_id in &reroute_ids {
             match self
-                .orchestrator
+                .backends
+                .invocation_control
                 .set_invocation_status(inv_id, InvocationStatus::Rerouted, Some(runner_id))
                 .await
             {
                 Ok(_) => {
-                    if let Ok(invocation) = self.state_backend.get_invocation(inv_id).await {
+                    if let Ok(invocation) = self.backends.state_backend.get_invocation(inv_id).await
+                    {
                         if let Some(config) = config_for_task(&invocation.task_id) {
                             let _ = self
+                                .backends
                                 .broker
                                 .route_invocation_with_options(
                                     inv_id,
@@ -192,17 +209,23 @@ impl OrchestratorCoordinator {
         result: &mut Vec<InvocationId>,
     ) -> RustvelloResult<bool> {
         match self
-            .orchestrator
+            .backends
+            .invocation_control
             .set_invocation_status(inv_id, InvocationStatus::Pending, Some(runner_id))
             .await
         {
             Ok(record) => {
-                let inv_dto = self.state_backend.get_invocation(inv_id).await.ok();
+                let inv_dto = self
+                    .backends
+                    .state_backend
+                    .get_invocation(inv_id)
+                    .await
+                    .ok();
                 let task_id = inv_dto.as_ref().map(|d| &d.task_id);
                 let history = InvocationHistory::new(inv_id.clone(), record, None)
                     .with_runner(runner_id.clone());
-                let _ = self.state_backend.add_history(&history).await;
-                if let (Some(ref tm), Some(tid)) = (&self.trigger_manager, task_id) {
+                let _ = self.backends.state_backend.add_history(&history).await;
+                if let (Some(ref tm), Some(tid)) = (&self.backends.trigger_manager, task_id) {
                     let args = self.get_invocation_arguments(inv_id).await;
                     let ctx = rustvello_proto::trigger::StatusContext {
                         invocation_id: inv_id.clone(),
@@ -228,10 +251,14 @@ impl OrchestratorCoordinator {
         invocation_id: &InvocationId,
         config_for_task: &dyn Fn(&TaskId) -> Option<TaskConfig>,
     ) -> RustvelloResult<bool> {
-        use crate::runner::executor_common::compute_cc_args;
         use rustvello_proto::status::ConcurrencyControlType;
 
-        let inv_dto = match self.state_backend.get_invocation(invocation_id).await {
+        let inv_dto = match self
+            .backends
+            .state_backend
+            .get_invocation(invocation_id)
+            .await
+        {
             Ok(dto) => dto,
             Err(_) => return Ok(true),
         };
@@ -245,14 +272,19 @@ impl OrchestratorCoordinator {
             return Ok(true);
         }
 
-        let call_dto = match self.state_backend.get_call(&inv_dto.call_id).await {
+        let call_dto = match self.backends.state_backend.get_call(&inv_dto.call_id).await {
             Ok(c) => c,
             Err(_) => return Ok(true),
         };
 
-        let cc_args = compute_cc_args(&config, &call_dto.serialized_arguments);
+        let cc_args = crate::task_config::concurrency_arguments(
+            config.concurrency_control,
+            &config.key_arguments,
+            &call_dto.serialized_arguments,
+        );
 
-        self.orchestrator
+        self.backends
+            .invocation_control
             .check_running_concurrency(&inv_dto.task_id, &config, cc_args.as_ref())
             .await
     }

@@ -46,7 +46,8 @@ fn cli_help_flag() {
         .success()
         .stdout(predicate::str::contains(
             "Rustvello distributed task system CLI",
-        ));
+        ))
+        .stdout(predicate::str::contains("investigate"));
 }
 
 #[test]
@@ -74,6 +75,15 @@ fn cli_status_invalid_uuid() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("Invalid invocation ID"));
+}
+
+#[test]
+fn cli_investigate_invalid_uuid() {
+    cli()
+        .args(["investigate", "not-a-uuid"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid UUID for InvocationId"));
 }
 
 #[test]

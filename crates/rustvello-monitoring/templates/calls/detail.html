@@ -64,7 +64,7 @@ Monitor{% endblock %} {% block content %}
                     <div class="metric-item">
                       <span class="metric-label">Invocations</span>
                       <span class="badge bg-primary"
-                        >{{ invocation_ids.len() }}</span
+                        >{{ invocation_count }}</span
                       >
                     </div>
                   </div>
@@ -78,43 +78,13 @@ Monitor{% endblock %} {% block content %}
             <div class="col-12">
               <div class="card pynmon-card">
                 <div class="card-header compact-header">
-                  Invocations ({{ invocation_ids.len() }})
+                  <span>Invocations ({{ invocation_count }})</span>
+                  <a href="{{ timeline_url }}" class="btn btn-sm btn-outline-success"><span class="material-icons align-middle" style="font-size:14px">timeline</span> Timeline</a>
                 </div>
                 <div class="card-body">
-                  {% if !invocation_ids.is_empty() %}
-                  <div class="table-responsive">
-                    <table class="table table-hover pynmon-table">
-                      <thead>
-                        <tr>
-                          <th>Invocation ID</th>
-                          <th>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {% for inv_id in invocation_ids %}
-                        <tr>
-                          <td>
-                            <a
-                              href="/invocations/{{ inv_id }}"
-                              class="text-decoration-none"
-                            >
-                              <code class="small text-primary"
-                                >{{ inv_id }}</code
-                              >
-                            </a>
-                          </td>
-                          <td>
-                            <a
-                              href="/invocations/{{ inv_id }}"
-                              class="btn btn-sm btn-outline-primary"
-                              >Details</a
-                            >
-                          </td>
-                        </tr>
-                        {% endfor %}
-                      </tbody>
-                    </table>
-                  </div>
+                  {% if !invocations.is_empty() %}
+                  {% include "components/invocation_table.html" %}
+                  {% include "components/pagination.html" %}
                   {% else %}
                   <p class="text-muted mb-0">
                     No invocations found for this call.
