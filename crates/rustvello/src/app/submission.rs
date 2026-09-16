@@ -4,11 +4,37 @@ use rustvello_core::invocation::{Invocation, InvocationHandle, SyncInvocation};
 use rustvello_core::task::{ForeignTask, Task};
 use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::identifiers::{InvocationId, TaskId};
+use rustvello_proto::invocation::TraceContextCarrier;
 use rustvello_proto::status::InvocationStatus;
 
 use super::RustvelloApp;
 
 impl RustvelloApp {
+    /// Reject unsupported or mixed transaction domains before accepting durable work.
+    pub fn require_crash_consistent_publication(&self) -> RustvelloResult<()> {
+        self.orchestrator.require_crash_consistent_publication()
+    }
+
+    /// Idempotent durable submission. Reuse this ID and identical arguments/lineage
+    /// after an ambiguous acknowledgement. Unsupported/mixed backends fail closed.
+    pub async fn submit_with_id(
+        &self,
+        invocation_id: InvocationId,
+        task_id: &TaskId,
+        args: SerializedArguments,
+        trace_context: Option<TraceContextCarrier>,
+    ) -> RustvelloResult<InvocationId> {
+        self.orchestrator
+            .submit_with_id(
+                &self.config,
+                &self.task_catalog,
+                CallDTO::new(task_id.clone(), args),
+                trace_context,
+                Some(invocation_id),
+            )
+            .await
+    }
+
     /// Submit a task for distributed execution.
     ///
     /// Creates a call from the task and arguments, registers an invocation
@@ -19,11 +45,22 @@ impl RustvelloApp {
         task_id: &TaskId,
         args: SerializedArguments,
     ) -> RustvelloResult<InvocationId> {
+        self.submit_with_trace_context(task_id, args, None).await
+    }
+
+    /// Submit a task with an explicit W3C carrier supplied by another runtime.
+    pub async fn submit_with_trace_context(
+        &self,
+        task_id: &TaskId,
+        args: SerializedArguments,
+        trace_context: Option<TraceContextCarrier>,
+    ) -> RustvelloResult<InvocationId> {
         self.orchestrator
-            .submit(
+            .submit_with_trace_context(
                 &self.config,
                 &self.task_catalog,
                 CallDTO::new(task_id.clone(), args),
+                trace_context,
             )
             .await
     }
@@ -126,6 +163,30 @@ impl RustvelloApp {
 
         Ok(InvocationHandle::new(
             invocation_id,
+            self.orchestrator.invocation_control(),
+            self.orchestrator.state_backend(),
+        ))
+    }
+
+    /// Typed, idempotent durable submission with an explicit original trace carrier.
+    pub async fn submit_call_with_id<T: Task>(
+        &self,
+        invocation_id: InvocationId,
+        task: &T,
+        params: T::Params,
+        trace_context: Option<TraceContextCarrier>,
+    ) -> RustvelloResult<InvocationHandle<T::Result>> {
+        let call = Call::new(task, params).to_dto()?;
+        let id = self
+            .submit_with_id(
+                invocation_id,
+                &call.task_id,
+                call.serialized_arguments,
+                trace_context,
+            )
+            .await?;
+        Ok(InvocationHandle::new(
+            id,
             self.orchestrator.invocation_control(),
             self.orchestrator.state_backend(),
         ))

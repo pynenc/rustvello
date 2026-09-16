@@ -259,6 +259,24 @@ async fn ensure_indexes(db: &Database) -> Result<(), mongodb::error::Error> {
         )
         .await?;
 
+    // Cover membership filtering and stable page order without a collection scan.
+    db.collection::<mongodb::bson::Document>("state_invocations")
+        .create_index(
+            IndexModel::builder()
+                .keys(mongodb::bson::doc! { "workflow_id": 1, "_id": 1 })
+                .build(),
+            None,
+        )
+        .await?;
+    db.collection::<mongodb::bson::Document>("state_workflow_runs")
+        .create_index(
+            IndexModel::builder()
+                .keys(mongodb::bson::doc! { "workflow_type": 1, "_id": -1 })
+                .build(),
+            None,
+        )
+        .await?;
+
     // State backend: workflow runs index
     let wf_runs_col = db.collection::<mongodb::bson::Document>("state_workflow_runs");
     wf_runs_col

@@ -15,16 +15,15 @@ impl OrchestratorRecovery for PostgresOrchestrator {
     async fn register_heartbeat(
         &self,
         runner_id: &RunnerId,
-        _can_run_atomic_service: bool,
+        can_run_atomic_service: bool,
     ) -> RustvelloResult<()> {
         let client = self.db.conn().await?;
-        let now = Utc::now();
 
         client
             .execute(
-                "INSERT INTO runner_heartbeats (runner_id, last_heartbeat) VALUES ($1, $2)
-                 ON CONFLICT (runner_id) DO UPDATE SET last_heartbeat = $2",
-                &[&runner_id.as_str(), &now],
+                "INSERT INTO runner_heartbeats (runner_id, last_heartbeat, can_run_atomic_service) VALUES ($1, clock_timestamp(), $2)
+                 ON CONFLICT (runner_id) DO UPDATE SET last_heartbeat = clock_timestamp(), can_run_atomic_service = EXCLUDED.can_run_atomic_service",
+                &[&runner_id.as_str(), &can_run_atomic_service],
             )
             .await
             .map_err(pg_err)?;
@@ -37,14 +36,13 @@ impl OrchestratorRecovery for PostgresOrchestrator {
         max_pending_seconds: u64,
     ) -> RustvelloResult<Vec<InvocationId>> {
         let client = self.db.conn().await?;
-        let threshold = Utc::now()
-            - chrono::Duration::seconds(i64::try_from(max_pending_seconds).unwrap_or(i64::MAX));
+        let age = max_pending_seconds.min(31_536_000) as f64;
 
         let rows = client
             .query(
                 "SELECT invocation_id FROM status_records
-                 WHERE status = 'PENDING' AND timestamp < $1",
-                &[&threshold],
+                 WHERE status = 'PENDING' AND timestamp < clock_timestamp() - $1 * interval '1 second' ORDER BY timestamp LIMIT 256",
+                &[&age],
             )
             .await
             .map_err(pg_err)?;
@@ -60,18 +58,15 @@ impl OrchestratorRecovery for PostgresOrchestrator {
         runner_dead_after_seconds: u64,
     ) -> RustvelloResult<Vec<InvocationId>> {
         let client = self.db.conn().await?;
-        let threshold = Utc::now()
-            - chrono::Duration::seconds(
-                i64::try_from(runner_dead_after_seconds).unwrap_or(i64::MAX),
-            );
+        let age = runner_dead_after_seconds.min(31_536_000) as f64;
 
         let rows = client
             .query(
                 "SELECT sr.invocation_id FROM status_records sr
                  LEFT JOIN runner_heartbeats rh ON sr.runner_id = rh.runner_id
                  WHERE sr.status = 'RUNNING'
-                   AND (rh.last_heartbeat IS NULL OR rh.last_heartbeat < $1)",
-                &[&threshold],
+                   AND (rh.last_heartbeat IS NULL OR rh.last_heartbeat < clock_timestamp() - $1 * interval '1 second') ORDER BY sr.timestamp LIMIT 256",
+                &[&age],
             )
             .await
             .map_err(pg_err)?;
@@ -84,12 +79,11 @@ impl OrchestratorRecovery for PostgresOrchestrator {
 
     async fn get_active_runner_ids(&self, timeout_seconds: u64) -> RustvelloResult<Vec<RunnerId>> {
         let client = self.db.conn().await?;
-        let threshold = Utc::now()
-            - chrono::Duration::seconds(i64::try_from(timeout_seconds).unwrap_or(i64::MAX));
+        let age = timeout_seconds.min(31_536_000) as f64;
         let rows = client
             .query(
-                "SELECT runner_id FROM runner_heartbeats WHERE last_heartbeat >= $1",
-                &[&threshold],
+                "SELECT runner_id FROM runner_heartbeats WHERE last_heartbeat >= clock_timestamp() - $1 * interval '1 second' ORDER BY runner_id",
+                &[&age],
             )
             .await
             .map_err(pg_err)?;
@@ -102,15 +96,16 @@ impl OrchestratorRecovery for PostgresOrchestrator {
     async fn get_active_runners(
         &self,
         timeout_seconds: u64,
-        _can_run_atomic_service: Option<bool>,
+        can_run_atomic_service: Option<bool>,
     ) -> RustvelloResult<Vec<ActiveRunnerInfo>> {
         let client = self.db.conn().await?;
-        let threshold = Utc::now()
-            - chrono::Duration::seconds(i64::try_from(timeout_seconds).unwrap_or(i64::MAX));
+        let age = timeout_seconds.min(31_536_000) as f64;
         let rows = client
             .query(
-                "SELECT runner_id, last_heartbeat FROM runner_heartbeats WHERE last_heartbeat >= $1",
-                &[&threshold],
+                "SELECT runner_id, last_heartbeat, can_run_atomic_service FROM runner_heartbeats
+                 WHERE last_heartbeat >= clock_timestamp() - $1 * interval '1 second'
+                   AND ($2::boolean IS NULL OR can_run_atomic_service = $2) ORDER BY runner_id",
+                &[&age, &can_run_atomic_service],
             )
             .await
             .map_err(pg_err)?;
@@ -122,7 +117,7 @@ impl OrchestratorRecovery for PostgresOrchestrator {
                     runner_id: RunnerId::from_string(r.get::<_, String>(0)),
                     creation_time: ts,
                     last_heartbeat: ts,
-                    can_run_atomic_service: true,
+                    can_run_atomic_service: r.get(2),
                     last_service_start: None,
                     last_service_end: None,
                 }

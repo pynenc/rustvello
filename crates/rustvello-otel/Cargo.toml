@@ -1,0 +1,32 @@
+[package]
+name = "rustvello-otel"
+description = "OpenTelemetry lifecycle exporter for Rustvello"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-proto = { version = "=0.32.0", default-features = false, features = ["gen-tonic-messages", "logs", "metrics", "trace"] }
+opentelemetry_sdk = { workspace = true }
+prost = "0.14"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+rustvello-core = { workspace = true }
+rustvello-proto = { workspace = true }
+
+[dev-dependencies]
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+rustvello = { workspace = true, features = ["sqlite"] }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true
+
+[features]
+network-acceptance = ["rustvello/postgres", "rustvello/tls"]

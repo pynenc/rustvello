@@ -14,6 +14,47 @@ use super::SqliteStateBackend;
 
 #[async_trait]
 impl StateBackendQuery for SqliteStateBackend {
+    async fn get_workflow_run_offset(
+        &self,
+        workflow_type: &TaskId,
+        workflow_id: &InvocationId,
+    ) -> RustvelloResult<Option<usize>> {
+        let db = Arc::clone(&self.db);
+        let type_key = workflow_type.to_string();
+        let id = workflow_id.to_string();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM workflow_runs WHERE workflow_type = ?1 AND workflow_id = ?2)", rusqlite::params![type_key, id], |row| row.get(0)).map_err(sql_err)?;
+            if !exists { return Ok(None); }
+            let count: i64 = conn.query_row("SELECT COUNT(*) FROM workflow_runs WHERE workflow_type = ?1 AND workflow_id > ?2", rusqlite::params![type_key, id], |row| row.get(0)).map_err(sql_err)?;
+            Ok(Some(count as usize))
+        }).await
+    }
+
+    async fn get_workflow_invocations_page(
+        &self,
+        workflow_id: &InvocationId,
+        limit: usize,
+        offset: usize,
+    ) -> RustvelloResult<(Vec<InvocationId>, usize)> {
+        let db = Arc::clone(&self.db);
+        let workflow_id = workflow_id.clone();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let total: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM invocations WHERE workflow_id = ?1",
+                [workflow_id.as_str()], |row| row.get(0),
+            ).map_err(sql_err)?;
+            let mut stmt = conn.prepare(
+                "SELECT invocation_id FROM invocations WHERE workflow_id = ?1 ORDER BY invocation_id LIMIT ?2 OFFSET ?3",
+            ).map_err(sql_err)?;
+            let ids = stmt.query_map(rusqlite::params![workflow_id.as_str(), i64::try_from(limit).unwrap_or(i64::MAX), i64::try_from(offset).unwrap_or(i64::MAX)], |row| {
+                Ok(InvocationId::from_string(row.get::<_, String>(0)?))
+            }).map_err(sql_err)?.collect::<Result<Vec<_>, _>>().map_err(sql_err)?;
+            Ok((ids, usize::try_from(total).unwrap_or(usize::MAX)))
+        }).await
+    }
+
     async fn get_workflow_invocations(
         &self,
         workflow_id: &InvocationId,

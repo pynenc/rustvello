@@ -134,9 +134,8 @@ async fn collect_status_counts(app: &crate::AppInstance) -> Vec<(String, usize, 
     for status in &statuses {
         let count = app
             .orchestrator
-            .get_invocations_by_status(*status, None)
+            .count_invocations(None, Some(std::slice::from_ref(status)))
             .await
-            .map(|ids| ids.len())
             .unwrap_or(0);
         let color = status_colors::hex_color(status);
         counts.push((format!("{status:?}"), count, color.to_owned()));

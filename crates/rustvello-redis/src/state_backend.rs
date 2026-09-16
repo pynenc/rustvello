@@ -71,6 +71,10 @@ impl RedisStateBackend {
 
 #[async_trait]
 impl StateBackendCore for RedisStateBackend {
+    fn publication_domain(&self) -> Option<rustvello_core::publication::PublicationDomain> {
+        Some(Arc::clone(&self.pool.domain))
+    }
+
     async fn upsert_invocation(
         &self,
         invocation: &InvocationDTO,
@@ -315,6 +319,34 @@ impl StateBackendQuery for RedisStateBackend {
         Ok(members.into_iter().map(InvocationId::from_string).collect())
     }
 
+    async fn get_workflow_invocations_page(
+        &self,
+        workflow_id: &InvocationId,
+        limit: usize,
+        offset: usize,
+    ) -> RustvelloResult<(Vec<InvocationId>, usize)> {
+        let mut conn = self.pool.conn().await?;
+        let key = prefixed_key(&self.wf_prefix, workflow_id.as_ref());
+        let total: usize = conn.scard(&key).await.map_err(redis_err)?;
+        let ids: Vec<String> = if limit == 0 {
+            Vec::new()
+        } else {
+            redis::cmd("SORT")
+                .arg(&key)
+                .arg("ALPHA")
+                .arg("LIMIT")
+                .arg(offset)
+                .arg(limit)
+                .query_async(&mut conn)
+                .await
+                .map_err(redis_err)?
+        };
+        Ok((
+            ids.into_iter().map(InvocationId::from_string).collect(),
+            total,
+        ))
+    }
+
     async fn get_child_invocations(
         &self,
         parent_invocation_id: &InvocationId,
@@ -358,6 +390,16 @@ impl StateBackendQuery for RedisStateBackend {
                     .map_err(|e| RustvelloError::state_backend(format!("invalid task_id: {e}")))
             })
             .collect()
+    }
+
+    async fn count_workflow_runs(&self, workflow_type: &TaskId) -> RustvelloResult<usize> {
+        let mut conn = self.pool.conn().await?;
+        conn.hlen(prefixed_key(
+            &self.wf_runs_prefix,
+            &workflow_type.to_string(),
+        ))
+        .await
+        .map_err(redis_err)
     }
 
     async fn get_workflow_runs(

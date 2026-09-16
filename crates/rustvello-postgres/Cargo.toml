@@ -19,13 +19,17 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-postgres = { workspace = true }
-postgres-native-tls = { workspace = true, optional = true }
-native-tls = { workspace = true, optional = true }
+tokio-postgres-rustls = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+rustls-native-certs = { workspace = true, optional = true }
+rustls-pemfile = { workspace = true, optional = true }
 
 [features]
-tls = ["postgres-native-tls", "native-tls"]
+fault-injection = []
+tls = ["dep:tokio-postgres-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pemfile"]
 
 [dev-dependencies]
+tempfile = { workspace = true }
 rustvello-test-suite = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }

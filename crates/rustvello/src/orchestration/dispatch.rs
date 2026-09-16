@@ -145,6 +145,27 @@ impl Orchestrator {
         }
 
         if config.reroute_on_cc {
+            if let Some(publication) = self.publication()? {
+                let runner = rustvello_core::context::get_or_create_runner_context().runner_id;
+                match publication
+                    .change(
+                        invocation_id,
+                        &runner,
+                        rustvello_core::publication::PublicationChange::ConcurrencyReroute(
+                            rustvello_core::publication::PublicationRoute {
+                                queue: config.queue.clone(),
+                                priority: config.priority,
+                            },
+                        ),
+                        false,
+                    )
+                    .await
+                {
+                    Ok(_) | Err(RustvelloError::InvalidStatusTransition { .. }) => {}
+                    Err(error) => return Err(error),
+                }
+                return Ok(false);
+            }
             match self
                 .backends
                 .invocation_control

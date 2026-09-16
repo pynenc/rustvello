@@ -4,7 +4,9 @@ use rustvello_core::state_backend::{StateBackendCore, StateBackendQuery};
 
 use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::identifiers::{InvocationId, TaskId};
-use rustvello_proto::invocation::{InvocationDTO, InvocationHistory, WorkflowIdentity};
+use rustvello_proto::invocation::{
+    InvocationDTO, InvocationHistory, TraceContextCarrier, WorkflowIdentity,
+};
 use rustvello_proto::status::{InvocationStatus, InvocationStatusRecord};
 
 use rustvello_core::error::TaskError;
@@ -16,6 +18,42 @@ use super::SqliteStateBackend;
 fn make_backend() -> SqliteStateBackend {
     let db = Arc::new(Database::in_memory().unwrap());
     SqliteStateBackend::new(db)
+}
+
+#[tokio::test]
+async fn workflow_run_pages_and_deep_links_share_order() {
+    let backend = make_backend();
+    let task = TaskId::new("test", "paged_workflow");
+    for number in 0..32 {
+        backend
+            .store_workflow_run(&WorkflowIdentity::root(
+                InvocationId::from_string(format!("run-{number:03}")),
+                task.clone(),
+            ))
+            .await
+            .unwrap();
+    }
+    let page = backend
+        .get_workflow_runs_paginated(&task, 10, 20)
+        .await
+        .unwrap();
+    assert_eq!(page.len(), 10);
+    assert_eq!(page[0].workflow_id.as_str(), "run-011");
+    assert_eq!(
+        backend
+            .get_workflow_run_offset(&task, &page[0].workflow_id)
+            .await
+            .unwrap(),
+        Some(20)
+    );
+    assert_eq!(
+        backend
+            .get_workflow_run_offset(&task, &InvocationId::from_string("missing"))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(backend.count_workflow_runs(&task).await.unwrap(), 32);
 }
 
 fn make_fixtures() -> (InvocationDTO, CallDTO) {
@@ -175,6 +213,30 @@ async fn test_workflow_invocations() {
     // Workflow query
     let members = backend.get_workflow_invocations(&root_id).await.unwrap();
     assert_eq!(members.len(), 2);
+    let (first, total) = backend
+        .get_workflow_invocations_page(&root_id, 1, 0)
+        .await
+        .unwrap();
+    let (second, _) = backend
+        .get_workflow_invocations_page(&root_id, 1, 1)
+        .await
+        .unwrap();
+    assert_eq!(total, 2);
+    assert_eq!(first, vec![child_id.clone()]);
+    assert_eq!(second, vec![root_id.clone()]);
+    assert!(backend
+        .get_workflow_invocations_page(&root_id, 1, 2)
+        .await
+        .unwrap()
+        .0
+        .is_empty());
+    assert_eq!(
+        backend
+            .get_workflow_invocations_page(&root_id, 0, 0)
+            .await
+            .unwrap(),
+        (vec![], 2)
+    );
 
     // Child query
     let children = backend.get_child_invocations(&root_id).await.unwrap();
@@ -191,6 +253,10 @@ async fn test_get_invocation_with_workflow_round_trip() {
     let call = CallDTO::new(task_id.clone(), args);
     let inv_id = InvocationId::from_string("inv-wf");
     let wf = WorkflowIdentity::root(inv_id.clone(), task_id.clone());
+    let trace_context = TraceContextCarrier {
+        traceparent: Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string()),
+        tracestate: Some("ih=sqlite".to_string()),
+    };
 
     let inv = InvocationDTO::with_workflow(
         inv_id.clone(),
@@ -198,7 +264,8 @@ async fn test_get_invocation_with_workflow_round_trip() {
         call.call_id.clone(),
         None,
         wf,
-    );
+    )
+    .with_trace_context(trace_context.clone());
     backend.upsert_invocation(&inv, &call).await.unwrap();
 
     let got = backend.get_invocation(&inv_id).await.unwrap();
@@ -206,6 +273,7 @@ async fn test_get_invocation_with_workflow_round_trip() {
     let got_wf = got.workflow.unwrap();
     assert_eq!(got_wf.workflow_id.as_str(), "inv-wf");
     assert_eq!(got_wf.workflow_type.name(), "func");
+    assert_eq!(got.trace_context, trace_context);
 }
 
 // --- Workflow discovery tests ---

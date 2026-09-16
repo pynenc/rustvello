@@ -170,7 +170,7 @@ wires them together.
 ::::{grid-item-card} Live Monitoring
 A built-in Axum web dashboard, modeled after Pynmon, shows SVG timelines,
 invocation tables, runner status, log exploration with cross-highlighting,
-and Prometheus metrics export — all served from a single binary.
+and correlated OpenTelemetry export.
 
 {doc}`monitoring/index`
 ::::
@@ -192,17 +192,16 @@ the shared Rustvello backends.
 
 The default build includes the in-memory backend. Enable others with Cargo feature flags:
 
-| Feature      | Crate                  | Use case                             |
-| ------------ | ---------------------- | ------------------------------------ |
-| `mem`        | `rustvello-mem`        | Development & unit testing (default) |
-| `sqlite`     | `rustvello-sqlite`     | Single-host persistence              |
-| `redis`      | `rustvello-redis`      | Distributed production               |
-| `mongodb`    | `rustvello-mongo`      | Distributed production (document DB) |
-| `rabbitmq`   | `rustvello-rabbitmq`   | High-throughput broker               |
-| `postgres`   | `rustvello-postgres`   | PostgreSQL trigger store             |
-| `prometheus` | `rustvello-prometheus` | Prometheus metrics export            |
-| `rayon`      | _(rayon thread-pool)_  | CPU-bound parallel task execution    |
-| `full`       | all of the above       | Everything enabled                   |
+| Feature    | Crate                 | Use case                             |
+| ---------- | --------------------- | ------------------------------------ |
+| `mem`      | `rustvello-mem`       | Development & unit testing (default) |
+| `sqlite`   | `rustvello-sqlite`    | Single-host persistence              |
+| `redis`    | `rustvello-redis`     | Distributed production               |
+| `mongodb`  | `rustvello-mongo`     | Distributed production (document DB) |
+| `rabbitmq` | `rustvello-rabbitmq`  | High-throughput broker               |
+| `postgres` | `rustvello-postgres`  | PostgreSQL trigger store             |
+| `rayon`    | _(rayon thread-pool)_ | CPU-bound parallel task execution    |
+| `full`     | all of the above      | Everything enabled                   |
 
 Switch backends in the builder — no code changes in task functions:
 
@@ -228,18 +227,18 @@ Rustvello is available as both a **Rust crate** and a **Python package**:
 
 ### Capabilities by surface
 
-| Feature                       |       Rust crate        |      Python bindings       |        Python via pynenc        |
-| ----------------------------- | :---------------------: | :------------------------: | :-----------------------------: |
-| 7 backend types               |           ✅            |             ✅             |               ✅                |
-| Task registration             |  `#[rustvello::task]`   |        `@app.task`         |           `@app.task`           |
-| Persistent runner             |           ✅            |        `app.run()`         |           Pynenc CLI            |
-| Cron/interval triggers        |    `TriggerBuilder`     |      `app.trigger()`       |      Pynenc trigger system      |
-| Concurrency control (4 modes) |           ✅            |             ✅             |               ✅                |
-| Monitoring                    | Rustvello dashboard/API |  Rustvello dashboard/API   | Pynmon plus Rustvello dashboard |
-| Prometheus metrics            |           ✅            | Rustvello-backed exporters |      Pynenc/Pynmon metrics      |
-| CLI tooling                   |      Rustvello CLI      |       Rustvello CLI        |  Pynenc CLI plus Rustvello CLI  |
-| Workflow support              |           ✅            |      `@app.workflow`       |               ✅                |
-| Plugin system                 |            —            |             —              |               ✅                |
+| Feature                       |       Rust crate        |     Python bindings     |        Python via pynenc        |
+| ----------------------------- | :---------------------: | :---------------------: | :-----------------------------: |
+| 7 backend types               |           ✅            |           ✅            |               ✅                |
+| Task registration             |  `#[rustvello::task]`   |       `@app.task`       |           `@app.task`           |
+| Persistent runner             |           ✅            |       `app.run()`       |           Pynenc CLI            |
+| Cron/interval triggers        |    `TriggerBuilder`     |     `app.trigger()`     |      Pynenc trigger system      |
+| Concurrency control (4 modes) |           ✅            |           ✅            |               ✅                |
+| Monitoring                    | Rustvello dashboard/API | Rustvello dashboard/API | Pynmon plus Rustvello dashboard |
+| OpenTelemetry lifecycle       |           ✅            | Rustvello OTLP exporter |   Python context propagation    |
+| CLI tooling                   |      Rustvello CLI      |      Rustvello CLI      |  Pynenc CLI plus Rustvello CLI  |
+| Workflow support              |           ✅            |     `@app.workflow`     |               ✅                |
+| Plugin system                 |            —            |            —            |               ✅                |
 
 ---
 

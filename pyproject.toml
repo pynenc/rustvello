@@ -18,6 +18,8 @@ dev = [
     "maturin>=1.7.4",
     "mypy>=1.13.0",
     "tomli>=2.0; python_version < '3.11'",
+    # exercised by the W3C trace-context tests; the wheel itself only needs it through the telemetry extra
+    "opentelemetry-api>=1.41.1",
 ]
 docs = [
     "sphinx>=7.0",

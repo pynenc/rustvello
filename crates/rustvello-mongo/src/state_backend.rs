@@ -281,6 +281,41 @@ impl StateBackendQuery for MongoStateBackend {
         Ok(result)
     }
 
+    async fn get_workflow_invocations_page(
+        &self,
+        workflow_id: &InvocationId,
+        limit: usize,
+        offset: usize,
+    ) -> RustvelloResult<(Vec<InvocationId>, usize)> {
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(INV_COL);
+        let filter = doc! { "workflow_id": workflow_id.to_string() };
+        let total = col
+            .count_documents(filter.clone())
+            .await
+            .map_err(mongo_err)?;
+        if limit == 0 {
+            return Ok((Vec::new(), total as usize));
+        }
+        let mut cursor = col
+            .find(filter)
+            .sort(doc! { "_id": 1 })
+            .projection(doc! { "_id": 1 })
+            .skip(offset as u64)
+            .limit(i64::try_from(limit).unwrap_or(i64::MAX))
+            .await
+            .map_err(mongo_err)?;
+        let mut ids = Vec::new();
+        use futures_util::StreamExt;
+        while let Some(item) = StreamExt::next(&mut cursor).await {
+            let item = item.map_err(mongo_err)?;
+            if let Ok(id) = item.get_str("_id") {
+                ids.push(InvocationId::from_string(id.to_owned()));
+            }
+        }
+        Ok((ids, total as usize))
+    }
+
     async fn get_child_invocations(
         &self,
         parent_invocation_id: &InvocationId,
@@ -343,10 +378,54 @@ impl StateBackendQuery for MongoStateBackend {
         &self,
         workflow_type: &TaskId,
     ) -> RustvelloResult<Vec<WorkflowIdentity>> {
+        self.get_workflow_runs_paginated(workflow_type, usize::MAX, 0)
+            .await
+    }
+
+    async fn get_workflow_run_offset(
+        &self,
+        workflow_type: &TaskId,
+        workflow_id: &InvocationId,
+    ) -> RustvelloResult<Option<usize>> {
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(WF_RUNS_COL);
+        let filter =
+            doc! { "workflow_type": workflow_type.to_string(), "_id": workflow_id.to_string() };
+        if col.count_documents(filter).await.map_err(mongo_err)? == 0 {
+            return Ok(None);
+        }
+        let filter = doc! { "workflow_type": workflow_type.to_string(), "_id": { "$gt": workflow_id.to_string() } };
+        Ok(Some(
+            col.count_documents(filter).await.map_err(mongo_err)? as usize
+        ))
+    }
+
+    async fn count_workflow_runs(&self, workflow_type: &TaskId) -> RustvelloResult<usize> {
         let db = self.pool.db().await?;
         let col = db.collection::<mongodb::bson::Document>(WF_RUNS_COL);
         let filter = doc! { "workflow_type": workflow_type.to_string() };
-        let mut cursor = col.find(filter).await.map_err(mongo_err)?;
+        Ok(col.count_documents(filter).await.map_err(mongo_err)? as usize)
+    }
+
+    async fn get_workflow_runs_paginated(
+        &self,
+        workflow_type: &TaskId,
+        limit: usize,
+        offset: usize,
+    ) -> RustvelloResult<Vec<WorkflowIdentity>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(WF_RUNS_COL);
+        let filter = doc! { "workflow_type": workflow_type.to_string() };
+        let mut cursor = col
+            .find(filter)
+            .sort(doc! { "_id": -1 })
+            .skip(offset as u64)
+            .limit(i64::try_from(limit).unwrap_or(i64::MAX))
+            .await
+            .map_err(mongo_err)?;
         let mut result = Vec::new();
         use futures_util::StreamExt;
         while let Some(doc_result) = StreamExt::next(&mut cursor).await {

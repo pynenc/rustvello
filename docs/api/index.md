@@ -16,7 +16,7 @@ All public Rust APIs are documented with `cargo doc` and published to docs.rs.
 | `rustvello-mongo`      | [docs.rs/rustvello-mongo](https://docs.rs/rustvello-mongo)           | MongoDB backend implementations                            |
 | `rustvello-rabbitmq`   | [docs.rs/rustvello-rabbitmq](https://docs.rs/rustvello-rabbitmq)     | RabbitMQ broker                                            |
 | `rustvello-postgres`   | [docs.rs/rustvello-postgres](https://docs.rs/rustvello-postgres)     | PostgreSQL trigger store                                   |
-| `rustvello-prometheus` | [docs.rs/rustvello-prometheus](https://docs.rs/rustvello-prometheus) | Prometheus EventEmitter                                    |
+| `rustvello-otel`       | [docs.rs/rustvello-otel](https://docs.rs/rustvello-otel)             | OTLP lifecycle exporter                                    |
 | `rustvello-monitoring` | [docs.rs/rustvello-monitoring](https://docs.rs/rustvello-monitoring) | Web dashboard                                              |
 | `rustvello-cli`        | [docs.rs/rustvello-cli](https://docs.rs/rustvello-cli)               | CLI binary                                                 |
 | `rustvello-test-suite` | [docs.rs/rustvello-test-suite](https://docs.rs/rustvello-test-suite) | Backend compliance tests                                   |

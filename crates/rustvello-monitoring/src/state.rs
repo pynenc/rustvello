@@ -11,6 +11,15 @@ use crate::AppInstance;
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<RwLock<AppStateInner>>,
+    workflow_histories: Arc<std::sync::Mutex<WorkflowHistoryCache>>,
+}
+
+type WorkflowHistoryCache =
+    HashMap<(String, String), (std::time::Instant, Arc<WorkflowHistorySnapshot>)>;
+
+pub(crate) struct WorkflowHistorySnapshot {
+    pub entries: Vec<crate::histogram::HistogramEntry>,
+    pub truncated: bool,
 }
 
 struct AppStateInner {
@@ -33,11 +42,47 @@ impl AppState {
             });
         }
         Ok(Self {
+            workflow_histories: Arc::default(),
             inner: Arc::new(RwLock::new(AppStateInner {
                 apps,
                 active_app_id: selected.to_owned(),
             })),
         })
+    }
+
+    pub(crate) fn workflow_history(
+        &self,
+        app_id: &str,
+        workflow_id: &str,
+    ) -> Option<Arc<WorkflowHistorySnapshot>> {
+        let cache = self.workflow_histories.lock().ok()?;
+        let (loaded, snapshot) = cache.get(&(app_id.to_owned(), workflow_id.to_owned()))?;
+        (loaded.elapsed() < std::time::Duration::from_secs(2)).then(|| Arc::clone(snapshot))
+    }
+
+    pub(crate) fn cache_workflow_history(
+        &self,
+        app_id: &str,
+        workflow_id: &str,
+        snapshot: Arc<WorkflowHistorySnapshot>,
+    ) {
+        let Ok(mut cache) = self.workflow_histories.lock() else {
+            return;
+        };
+        cache.retain(|_, (loaded, _)| loaded.elapsed() < std::time::Duration::from_secs(2));
+        if cache.len() >= 10 {
+            if let Some(oldest) = cache
+                .iter()
+                .min_by_key(|(_, (loaded, _))| *loaded)
+                .map(|(key, _)| key.clone())
+            {
+                cache.remove(&oldest);
+            }
+        }
+        cache.insert(
+            (app_id.to_owned(), workflow_id.to_owned()),
+            (std::time::Instant::now(), snapshot),
+        );
     }
 
     /// Get the currently active application instance.
@@ -74,5 +119,40 @@ impl AppState {
         }
         inner.active_app_id = app_id.to_owned();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workflow_cache_is_bounded_isolated_and_expires() {
+        let state = AppState {
+            inner: Arc::new(RwLock::new(AppStateInner {
+                apps: HashMap::new(),
+                active_app_id: String::new(),
+            })),
+            workflow_histories: Arc::default(),
+        };
+        let snapshot = Arc::new(WorkflowHistorySnapshot {
+            entries: Vec::new(),
+            truncated: false,
+        });
+        state.cache_workflow_history("app-a", "run", Arc::clone(&snapshot));
+        assert!(state.workflow_history("app-a", "run").is_some());
+        assert!(state.workflow_history("app-b", "run").is_none());
+        state
+            .workflow_histories
+            .lock()
+            .unwrap()
+            .get_mut(&("app-a".into(), "run".into()))
+            .unwrap()
+            .0 -= std::time::Duration::from_secs(3);
+        assert!(state.workflow_history("app-a", "run").is_none());
+        for id in 0..20 {
+            state.cache_workflow_history("app-a", &id.to_string(), Arc::clone(&snapshot));
+        }
+        assert_eq!(state.workflow_histories.lock().unwrap().len(), 10);
     }
 }

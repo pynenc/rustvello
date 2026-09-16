@@ -18,6 +18,11 @@ pub struct RedisBroker {
     queue_prefix: String,
     metadata_prefix: String,
     sequence_key: String,
+    queued_by_inv_key: String,
+    leases_key: String,
+    lease_payload_key: String,
+    leased_by_inv_key: String,
+    count_key: String,
 }
 
 impl RedisBroker {
@@ -27,6 +32,11 @@ impl RedisBroker {
             queue_prefix: format!("{prefix}broker:queue:"),
             metadata_prefix: format!("{prefix}broker:metadata:"),
             sequence_key: format!("{prefix}broker:sequence"),
+            queued_by_inv_key: format!("{prefix}broker:queued_by_inv"),
+            leases_key: format!("{prefix}broker:leases"),
+            lease_payload_key: format!("{prefix}broker:lease_payload"),
+            leased_by_inv_key: format!("{prefix}broker:leased_by_inv"),
+            count_key: format!("{prefix}broker:count"),
             pool,
         }
     }
@@ -67,6 +77,22 @@ impl RedisBroker {
     ) -> RustvelloResult<Option<InvocationId>> {
         let script = redis::Script::new(
             r#"
+            local expired = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', ARGV[3])
+            for _, leased_member in ipairs(expired) do
+                local payload = redis.call('HGET', KEYS[4], leased_member)
+                if payload then
+                    local fields = {}
+                    for field in string.gmatch(payload, '([^\31]+)') do table.insert(fields, field) end
+                    if #fields == 5 and redis.call('HGET', KEYS[5], fields[1]) == leased_member then
+                        redis.call('ZADD', ARGV[4] .. fields[2], tonumber(fields[5]), fields[3])
+                        redis.call('HSET', ARGV[5] .. fields[2], fields[3], fields[4])
+                        redis.call('HSET', KEYS[6], fields[1], fields[2] .. '\31' .. fields[3])
+                        redis.call('HDEL', KEYS[5], fields[1])
+                    end
+                end
+                redis.call('ZREM', KEYS[3], leased_member)
+                redis.call('HDEL', KEYS[4], leased_member)
+            end
             local members = redis.call('ZREVRANGE', KEYS[1], 0, -1)
             for _, member in ipairs(members) do
                 local task = redis.call('HGET', KEYS[2], member) or ''
@@ -81,8 +107,16 @@ impl RedisBroker {
                     end
                 end
                 if matches then
+                    local priority = redis.call('ZSCORE', KEYS[1], member) or '0'
                     redis.call('ZREM', KEYS[1], member)
                     redis.call('HDEL', KEYS[2], member)
+                    local split = string.find(member, ':', 1, true)
+                    local id = string.sub(member, split + 1)
+                    redis.call('HDEL', KEYS[6], id)
+                    redis.call('ZADD', KEYS[3], tonumber(ARGV[3]) + tonumber(ARGV[6]), member)
+                    redis.call('HSET', KEYS[4], member,
+                        id .. '\31' .. ARGV[7] .. '\31' .. member .. '\31' .. task .. '\31' .. priority)
+                    redis.call('HSET', KEYS[5], id, member)
                     return member
                 end
             end
@@ -93,8 +127,17 @@ impl RedisBroker {
         let member: Option<String> = script
             .key(self.queue_key(queue_name))
             .key(self.metadata_key(queue_name))
+            .key(&self.leases_key)
+            .key(&self.lease_payload_key)
+            .key(&self.leased_by_inv_key)
+            .key(&self.queued_by_inv_key)
             .arg(mode)
             .arg(value)
+            .arg(chrono::Utc::now().timestamp_millis())
+            .arg(&self.queue_prefix)
+            .arg(&self.metadata_prefix)
+            .arg(self.pool.options.delivery_lease_ms)
+            .arg(queue_name)
             .invoke_async(&mut conn)
             .await
             .map_err(redis_err)?;
@@ -140,6 +183,10 @@ impl RedisBroker {
 
 #[async_trait]
 impl Broker for RedisBroker {
+    fn publication_domain(&self) -> Option<rustvello_core::publication::PublicationDomain> {
+        Some(Arc::clone(&self.pool.domain))
+    }
+
     async fn route_invocation_with_options(
         &self,
         invocation_id: &InvocationId,
@@ -155,13 +202,58 @@ impl Broker for RedisBroker {
             .map_err(redis_err)?;
         let member = Self::queue_member(sequence, invocation_id)?;
         let task_id = task_id.map_or_else(String::new, ToString::to_string);
-        redis::pipe()
-            .atomic()
-            .zadd(self.queue_key(queue_name), &member, priority)
-            .hset(self.metadata_key(queue_name), &member, task_id)
-            .query_async::<()>(&mut conn)
+        let script = redis::Script::new(
+            r#"
+            local id, queue, member = ARGV[1], ARGV[2], ARGV[3]
+            local queued = redis.call('HGET', KEYS[3], id)
+            local leased = redis.call('HGET', KEYS[6], id)
+            local had = queued or leased
+            local count = tonumber(redis.call('GET', KEYS[7]) or '0')
+            if not had and count >= tonumber(ARGV[6]) then return 0 end
+            if queued then
+                local split = string.find(queued, '\31', 1, true)
+                local old_queue, old_member = string.sub(queued, 1, split - 1), string.sub(queued, split + 1)
+                redis.call('ZREM', ARGV[7] .. old_queue, old_member)
+                redis.call('HDEL', ARGV[8] .. old_queue, old_member)
+            end
+            if leased then
+                redis.call('ZREM', KEYS[4], leased)
+                redis.call('HDEL', KEYS[5], leased)
+                redis.call('HDEL', KEYS[6], id)
+            end
+            redis.call('ZADD', KEYS[1], ARGV[5], member)
+            redis.call('HSET', KEYS[2], member, ARGV[4])
+            redis.call('HSET', KEYS[3], id, queue .. '\31' .. member)
+            if not had then redis.call('SET', KEYS[7], count + 1) end
+            return 1
+            "#,
+        );
+        let accepted: i32 = script
+            .key(self.queue_key(queue_name))
+            .key(self.metadata_key(queue_name))
+            .key(&self.queued_by_inv_key)
+            .key(&self.leases_key)
+            .key(&self.lease_payload_key)
+            .key(&self.leased_by_inv_key)
+            .key(&self.count_key)
+            .arg(invocation_id.as_str())
+            .arg(queue_name)
+            .arg(&member)
+            .arg(task_id)
+            .arg(priority)
+            .arg(self.pool.options.max_queue_rows)
+            .arg(&self.queue_prefix)
+            .arg(&self.metadata_prefix)
+            .invoke_async(&mut conn)
             .await
-            .map_err(redis_err)
+            .map_err(redis_err)?;
+        if accepted == 1 {
+            Ok(())
+        } else {
+            Err(RustvelloError::Configuration {
+                message: "Redis queue admission capacity reached".into(),
+            })
+        }
     }
 
     async fn route_invocation(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
@@ -250,34 +342,77 @@ impl Broker for RedisBroker {
         let mut conn = self.pool.conn().await?;
         let queue_keys = scan_keys(&mut conn, &format!("{}*", self.queue_prefix)).await?;
         if let Some(task_id) = task_id {
+            let task_id = task_id.to_string();
             let script = redis::Script::new(
                 r#"
+                local removed = 0
                 local members = redis.call('ZRANGE', KEYS[1], 0, -1)
                 for _, member in ipairs(members) do
                     if redis.call('HGET', KEYS[2], member) == ARGV[1] then
                         redis.call('ZREM', KEYS[1], member)
                         redis.call('HDEL', KEYS[2], member)
+                        local split = string.find(member, ':', 1, true)
+                        redis.call('HDEL', KEYS[3], string.sub(member, split + 1))
+                        removed = removed + 1
                     end
                 end
-                return 1
+                local count = tonumber(redis.call('GET', KEYS[4]) or '0')
+                redis.call('SET', KEYS[4], math.max(0, count - removed))
+                return removed
                 "#,
             );
             for queue_key in queue_keys {
                 let queue_name = queue_key
                     .strip_prefix(&self.queue_prefix)
                     .unwrap_or_default();
-                script
+                let _: i64 = script
                     .key(&queue_key)
                     .key(self.metadata_key(queue_name))
-                    .arg(task_id.to_string())
-                    .invoke_async::<()>(&mut conn)
+                    .key(&self.queued_by_inv_key)
+                    .key(&self.count_key)
+                    .arg(&task_id)
+                    .invoke_async(&mut conn)
                     .await
                     .map_err(redis_err)?;
             }
+            let leased_script = redis::Script::new(
+                r#"
+                local removed = 0
+                local entries = redis.call('HGETALL', KEYS[2])
+                for index = 1, #entries, 2 do
+                    local member, payload = entries[index], entries[index + 1]
+                    local fields = {}
+                    for field in string.gmatch(payload, '([^\31]+)') do table.insert(fields, field) end
+                    if #fields == 5 and fields[4] == ARGV[1] then
+                        redis.call('ZREM', KEYS[1], member)
+                        redis.call('HDEL', KEYS[2], member)
+                        redis.call('HDEL', KEYS[3], fields[1])
+                        removed = removed + 1
+                    end
+                end
+                local count = tonumber(redis.call('GET', KEYS[4]) or '0')
+                redis.call('SET', KEYS[4], math.max(0, count - removed))
+                return removed
+                "#,
+            );
+            let _: i64 = leased_script
+                .key(&self.leases_key)
+                .key(&self.lease_payload_key)
+                .key(&self.leased_by_inv_key)
+                .key(&self.count_key)
+                .arg(&task_id)
+                .invoke_async(&mut conn)
+                .await
+                .map_err(redis_err)?;
         } else {
             let mut keys = queue_keys;
             keys.extend(scan_keys(&mut conn, &format!("{}*", self.metadata_prefix)).await?);
             keys.push(self.sequence_key.clone());
+            keys.push(self.queued_by_inv_key.clone());
+            keys.push(self.leases_key.clone());
+            keys.push(self.lease_payload_key.clone());
+            keys.push(self.leased_by_inv_key.clone());
+            keys.push(self.count_key.clone());
             if !keys.is_empty() {
                 conn.del::<_, ()>(keys).await.map_err(redis_err)?;
             }

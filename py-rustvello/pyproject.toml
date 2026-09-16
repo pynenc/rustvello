@@ -21,6 +21,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+[project.optional-dependencies]
+telemetry = ["opentelemetry-api==1.41.1"]
+
 [project.urls]
 Homepage = "https://pynenc.github.io/rustvello/"
 Repository = "https://github.com/pynenc/rustvello"

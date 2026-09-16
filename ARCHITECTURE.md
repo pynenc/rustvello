@@ -40,7 +40,7 @@ The Cargo workspace contains 16 packages under `crates/` plus the
   or more core traits.
 - `rustvello-macros` generates typed tasks and link-time `inventory`
   registrations. Generated code targets public APIs exposed by `rustvello`.
-- `rustvello-monitoring`, `rustvello-prometheus`, and `rustvello-cli` are edge
+- `rustvello-monitoring`, `rustvello-otel`, and `rustvello-cli` are edge
   consumers of the engine.
 - `rustvello-test-suite` defines reusable backend contracts.
 - `rustvello-python` wraps Rust APIs with PyO3 classes; `py-rustvello` is the

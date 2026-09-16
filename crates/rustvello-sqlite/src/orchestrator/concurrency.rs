@@ -138,29 +138,35 @@ impl OrchestratorConcurrency for SqliteOrchestrator {
         let cc_args = cc_args.cloned().unwrap_or_default();
         blocking(move || {
             let conn = db.conn.lock().map_err(lock_err)?;
-            let tx = conn.unchecked_transaction().map_err(sql_err)?;
+            let tx = rusqlite::Transaction::new_unchecked(
+                &conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )
+            .map_err(sql_err)?;
             let task_key = task_id.to_string();
             let pairs = cc_args.cc_arg_pairs();
             let pair_conditions: Vec<String> = (0..pairs.len())
                 .map(|index| {
                     format!(
                         "(cp.arg_key = ?{} AND cp.arg_value = ?{})",
-                        index * 2 + 2,
-                        index * 2 + 3
+                        index * 2 + 3,
+                        index * 2 + 4
                     )
                 })
                 .collect();
             let sql = format!(
                 "SELECT COUNT(*) FROM (
                      SELECT cp.invocation_id FROM cc_arg_pairs cp
-                     WHERE cp.task_id = ?1 AND ({})
+                     WHERE cp.task_id = ?1 AND cp.invocation_id <> ?2 AND ({})
                      GROUP BY cp.invocation_id
                      HAVING COUNT(*) = {}
                  )",
                 pair_conditions.join(" OR "),
                 pairs.len()
             );
-            let mut params = vec![task_key.clone()];
+            // Leased redelivery may revisit admission after this ID reserved its slot.
+            // Count only other invocations; Pending ownership still fences execution.
+            let mut params = vec![task_key.clone(), invocation_id.to_string()];
             for (key, value) in &pairs {
                 params.push(key.clone());
                 params.push(value.clone());

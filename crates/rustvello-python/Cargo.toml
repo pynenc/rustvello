@@ -13,12 +13,15 @@ readme = "../../README.md"
 [features]
 default = []
 sqlite = ["dep:rustvello-sqlite"]
+sqlite-fault-injection = ["sqlite", "rustvello-sqlite/fault-injection"]
 postgres = ["dep:rustvello-postgres"]
+postgres-tls = ["postgres", "rustvello-postgres/tls"]
 redis = ["dep:rustvello-redis"]
 mongodb = ["dep:rustvello-mongo"]
 mongodb3 = ["dep:rustvello-mongo3"]
 rabbitmq = ["dep:rustvello-rabbitmq"]
-all-backends = ["sqlite", "postgres", "redis", "mongodb", "mongodb3", "rabbitmq"]
+monitoring = ["dep:rustvello-monitoring"]
+all-backends = ["sqlite", "postgres-tls", "redis", "mongodb", "mongodb3", "rabbitmq"]
 
 [dependencies]
 rustvello = { workspace = true }
@@ -26,6 +29,9 @@ glob = { workspace = true }
 rustvello-core = { workspace = true }
 rustvello-mem = { workspace = true }
 rustvello-proto = { workspace = true }
+rustvello-otel = { workspace = true }
+rustvello-monitoring = { workspace = true, optional = true }
+cistell-core = { workspace = true }
 
 rustvello-sqlite = { workspace = true, optional = true }
 rustvello-postgres = { workspace = true, optional = true }

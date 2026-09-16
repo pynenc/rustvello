@@ -12,8 +12,12 @@ use std::time::Instant;
 use rustvello_core::context::{InvocationContext, RunnerContext};
 use rustvello_core::error::{RustvelloError, RustvelloResult, TaskError};
 use rustvello_core::middleware::TaskMiddleware;
-use rustvello_core::observability::{EventEmitter, LastResult, WorkerState};
+use rustvello_core::observability::{
+    EventEmitter, LastResult, TaskAttemptContext, TaskLifecycleEvent, WorkerState,
+    WorkerTelemetryContext,
+};
 use rustvello_core::state_backend::StateBackend;
+use rustvello_proto::config::AppConfig;
 use rustvello_proto::identifiers::{InvocationId, RunnerId};
 use rustvello_proto::status::InvocationStatus;
 
@@ -45,6 +49,7 @@ pub(crate) struct ExecutionDeps {
     pub emitter: Arc<dyn EventEmitter>,
     pub middlewares: Vec<Arc<dyn TaskMiddleware>>,
     pub task_catalog: Arc<TaskCatalog>,
+    pub app_config: AppConfig,
     pub worker_states: Option<Arc<std::sync::Mutex<HashMap<RunnerId, WorkerState>>>>,
 }
 
@@ -78,19 +83,22 @@ pub(crate) async fn execute_invocation_common(
                 to_status
             );
             deps.lifecycle
-                .release_concurrency_slot(invocation_id)
+                .release_nontransactional_concurrency_slot(invocation_id)
                 .await?;
             return Ok(());
         }
         Err(RustvelloError::OwnershipViolation { .. }) => {
             tracing::warn!("Already owned by another runner");
             deps.lifecycle
-                .release_concurrency_slot(invocation_id)
+                .release_nontransactional_concurrency_slot(invocation_id)
                 .await?;
             return Ok(());
         }
         Err(e) => {
-            let _ = deps.lifecycle.release_concurrency_slot(invocation_id).await;
+            let _ = deps
+                .lifecycle
+                .release_nontransactional_concurrency_slot(invocation_id)
+                .await;
             return Err(e);
         }
     }
@@ -111,6 +119,9 @@ pub(crate) async fn execute_invocation_common(
             task_id: inv_dto.task_id.clone(),
         }
     })?;
+    let resolved_task_config =
+        deps.task_catalog
+            .resolve_config(&deps.app_config, &inv_dto.task_id, task.config());
 
     tracing::debug!(
         runner = runner_label,
@@ -126,6 +137,15 @@ pub(crate) async fn execute_invocation_common(
         .filter(|h| h.status_record.status == InvocationStatus::Retry)
         .count() as u32;
 
+    let identity = deps
+        .lifecycle
+        .begin_execution(
+            invocation_id,
+            worker_runner_id,
+            num_retries,
+            &inv_dto.trace_context,
+        )
+        .await?;
     let inv_ctx = InvocationContext {
         invocation_id: invocation_id.clone(),
         task_id: inv_dto.task_id.clone(),
@@ -134,12 +154,26 @@ pub(crate) async fn execute_invocation_common(
         state_backend: Some(Arc::clone(&deps.state_backend)),
         parent_invocation_id: inv_dto.parent_invocation_id.clone(),
         num_retries,
+        trace_context: identity.execution_trace_context.clone(),
     };
     let run_ctx = worker_ctx.clone();
+    let mut telemetry_context = TaskAttemptContext::new(
+        Arc::clone(&worker_ctx.app_id),
+        inv_dto.task_id.clone(),
+        invocation_id.clone(),
+        identity.attempt,
+        resolved_task_config.queue.clone(),
+        inv_dto.parent_invocation_id.clone(),
+        inv_dto.workflow.clone(),
+        WorkerTelemetryContext::from(worker_ctx),
+        inv_dto.trace_context.clone(),
+    );
+    telemetry_context.execution_trace_context = identity.execution_trace_context;
+    telemetry_context.previous_attempt_trace_context = identity.previous_attempt_trace_context;
 
     // --- 5. Pre-execution bookkeeping ---
     deps.emitter
-        .on_task_started(&inv_dto.task_id, invocation_id);
+        .on_task_lifecycle(&TaskLifecycleEvent::started(telemetry_context.clone()));
 
     if let Some(ref ws) = deps.worker_states {
         if let Ok(mut ws) = ws.lock() {
@@ -191,7 +225,11 @@ pub(crate) async fn execute_invocation_common(
                 .await?;
 
             // Remove from CC index now that invocation is complete
-            if let Err(e) = deps.lifecycle.release_concurrency_slot(invocation_id).await {
+            if let Err(e) = deps
+                .lifecycle
+                .release_nontransactional_concurrency_slot(invocation_id)
+                .await
+            {
                 tracing::warn!("Failed to remove from CC index: {}", e);
             }
 
@@ -199,7 +237,10 @@ pub(crate) async fn execute_invocation_common(
 
             let exec_duration = exec_start.elapsed();
             deps.emitter
-                .on_task_succeeded(&inv_dto.task_id, invocation_id, exec_duration);
+                .on_task_lifecycle(&TaskLifecycleEvent::succeeded(
+                    telemetry_context,
+                    exec_duration,
+                ));
 
             if let Some(ref ws) = deps.worker_states {
                 if let Ok(mut ws) = ws.lock() {
@@ -243,9 +284,19 @@ pub(crate) async fn execute_invocation_common(
                         .iter()
                         .any(|e| task_error.error_type.contains(e.as_str())));
 
+            let exec_duration = exec_start.elapsed();
+            deps.emitter.on_task_lifecycle(&TaskLifecycleEvent::failed(
+                telemetry_context.clone(),
+                task_error.error_type.clone(),
+                exec_duration,
+            ));
+
             if should_retry {
+                let next_attempt = telemetry_context.attempt.checked_add(1).ok_or_else(|| {
+                    RustvelloError::state_backend("execution attempt counter exhausted")
+                })?;
                 deps.lifecycle
-                    .release_concurrency_slot(invocation_id)
+                    .release_nontransactional_concurrency_slot(invocation_id)
                     .await?;
                 deps.lifecycle
                     .set_invocation_retry_with_context(
@@ -253,14 +304,17 @@ pub(crate) async fn execute_invocation_common(
                         worker_runner_id,
                         &inv_dto.task_id,
                         call_dto.serialized_arguments.0.clone(),
-                        &task.config().queue,
-                        task.config().priority,
+                        &resolved_task_config.queue,
+                        resolved_task_config.priority,
                     )
                     .await?;
 
                 tracing::warn!("Failed status:retry {}/{}", retry_count + 1, max_retries);
                 deps.emitter
-                    .on_task_retried(&inv_dto.task_id, invocation_id, retry_count + 1);
+                    .on_task_lifecycle(&TaskLifecycleEvent::retry_scheduled(
+                        telemetry_context,
+                        next_attempt,
+                    ));
             } else {
                 deps.lifecycle
                     .set_invocation_exception_with_context(
@@ -276,17 +330,13 @@ pub(crate) async fn execute_invocation_common(
                 tracing::error!("Invocation status:failed permanently: {}", err);
 
                 // Remove from CC index now that invocation is terminal
-                if let Err(e) = deps.lifecycle.release_concurrency_slot(invocation_id).await {
+                if let Err(e) = deps
+                    .lifecycle
+                    .release_nontransactional_concurrency_slot(invocation_id)
+                    .await
+                {
                     tracing::warn!("Failed to remove from CC index: {}", e);
                 }
-
-                let exec_duration = exec_start.elapsed();
-                deps.emitter.on_task_failed(
-                    &inv_dto.task_id,
-                    invocation_id,
-                    &err.to_string(),
-                    exec_duration,
-                );
 
                 if let Some(ref ws) = deps.worker_states {
                     if let Ok(mut ws) = ws.lock() {

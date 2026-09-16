@@ -155,6 +155,16 @@ FIFO; other backends preserve the original float precision.
 
 ---
 
+### Retry only for some exceptions
+
+`retry_for_errors` lists exception class names; an attempt is retried only when
+the raised exception's class name contains one of them. From Python:
+
+```python
+@app.task(max_retries=3, retry_for=(ConnectionError, TimeoutError))
+def fetch(url: str) -> str: ...
+```
+
 ## Concurrency Control
 
 `ConcurrencyControlType` controls how concurrent invocations are managed:
@@ -232,6 +242,21 @@ let app = Rustvello::builder()
 ```
 
 ---
+
+### From Python
+
+The same resolution is available to the standalone Python `App`:
+
+```python
+from rustvello import App, AppConfig
+
+config = AppConfig.from_env()                 # env + ./pyproject.toml [tool.rustvello.app]
+config = AppConfig.from_file("rustvello.toml") # + a TOML file
+config.runner_queues = ["hpa"]                 # settable, like broker_queues, logging_level, ...
+
+app = App(app_id="calculation", config=config)
+app = App(app_id="calculation")               # same as config=AppConfig.from_env(app_id=...)
+```
 
 ## TOML Config File
 

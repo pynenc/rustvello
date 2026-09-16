@@ -6,6 +6,7 @@ use std::sync::Arc;
 use rustvello_core::broker::Broker;
 use rustvello_core::client_data_store::ClientDataStoreManager;
 use rustvello_core::error::RustvelloResult;
+use rustvello_core::observability::{CompositeEmitter, EventEmitter, EventLevel};
 use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::task::{DynTask, ForeignTask, Task, TaskFn, TaskRegistry};
@@ -145,6 +146,11 @@ impl RustvelloApp {
         self.task_catalog.register_task(task_id, config, func)
     }
 
+    /// Remove a registered task; returns whether it existed.
+    pub fn unregister_task(&mut self, task_id: &TaskId) -> bool {
+        self.task_catalog.registry_mut().unregister(task_id)
+    }
+
     /// Register a task implemented by another language runtime.
     ///
     /// The task can be submitted by this app and routed through the shared
@@ -239,6 +245,27 @@ impl RustvelloApp {
         self.orchestrator.set_trigger_manager(manager);
     }
 
+    /// Attach a context-bearing lifecycle event sink to submissions and runners.
+    pub fn with_event_emitter(
+        mut self,
+        level: EventLevel,
+        emitter: impl EventEmitter + 'static,
+    ) -> Self {
+        self.add_shared_event_emitter(level, Arc::new(emitter));
+        self
+    }
+
+    /// Attach a shared lifecycle sink without consuming the application.
+    pub fn add_shared_event_emitter(&mut self, level: EventLevel, emitter: Arc<dyn EventEmitter>) {
+        let mut composite = CompositeEmitter::new();
+        composite.add_shared_sink(
+            EventLevel::DistributedTracing,
+            self.orchestrator.event_emitter(),
+        );
+        composite.add_shared_sink(level, emitter);
+        self.orchestrator.set_event_emitter(Arc::new(composite));
+    }
+
     /// Purge all data from all backends (orchestrator, broker, state backend).
     ///
     /// Equivalent to pynenc's `Pynenc.purge()`.
@@ -253,6 +280,7 @@ impl RustvelloApp {
             invocation_control,
             state_backend,
             trigger_manager,
+            event_emitter,
         } = self.orchestrator.into_runner_ports();
         crate::runner::TaskRunner::new_with_catalog(
             self.config.app_id.clone(),
@@ -263,6 +291,7 @@ impl RustvelloApp {
             Arc::new(self.task_catalog),
             trigger_manager,
         )
+        .with_shared_event_emitter(event_emitter)
     }
 }
 
@@ -270,8 +299,21 @@ impl RustvelloApp {
 mod tests {
     use super::*;
     use rustvello_core::error::RustvelloError;
+    use rustvello_core::observability::{TaskLifecycleEvent, TaskLifecycleKind};
     use rustvello_proto::call::SerializedArguments;
+    use rustvello_proto::identifiers::InvocationId;
+    use rustvello_proto::invocation::TraceContextCarrier;
     use rustvello_proto::status::InvocationStatus;
+    use std::sync::Mutex;
+
+    #[derive(Clone, Default)]
+    struct RecordingEmitter(Arc<Mutex<Vec<TaskLifecycleEvent>>>);
+
+    impl EventEmitter for RecordingEmitter {
+        fn on_task_lifecycle(&self, event: &TaskLifecycleEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
 
     fn make_app() -> RustvelloApp {
         let mut app = RustvelloApp::new(AppConfig::new("test-app"));
@@ -308,6 +350,147 @@ mod tests {
 
         let status = app.get_status(&inv_id).await.unwrap();
         assert_eq!(status, InvocationStatus::Registered);
+    }
+
+    #[tokio::test]
+    async fn submission_emits_context_after_successful_routing() {
+        let recording = RecordingEmitter::default();
+        let events = Arc::clone(&recording.0);
+        let app = make_app().with_event_emitter(EventLevel::TaskLifecycle, recording);
+
+        let invocation_id = app
+            .submit(&TaskId::new("test", "double"), SerializedArguments::new())
+            .await
+            .unwrap();
+
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].kind, TaskLifecycleKind::Submitted));
+        assert_eq!(events[0].context.invocation_id, invocation_id);
+        assert_eq!(events[0].context.app_id.as_ref(), "test-app");
+        assert_eq!(events[0].context.queue.as_ref(), "default");
+        assert_eq!(events[0].context.attempt, 0);
+    }
+
+    #[tokio::test]
+    async fn submission_persists_and_emits_explicit_w3c_context() {
+        let recording = RecordingEmitter::default();
+        let events = Arc::clone(&recording.0);
+        let app = make_app().with_event_emitter(EventLevel::TaskLifecycle, recording);
+        let trace_context = TraceContextCarrier {
+            traceparent: Some(
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
+            ),
+            tracestate: Some("ih=test".to_string()),
+        };
+
+        let invocation_id = app
+            .submit_with_trace_context(
+                &TaskId::new("test", "double"),
+                SerializedArguments::new(),
+                Some(trace_context.clone()),
+            )
+            .await
+            .unwrap();
+
+        let stored = app
+            .state_backend()
+            .get_invocation(&invocation_id)
+            .await
+            .unwrap();
+        assert_eq!(stored.trace_context, trace_context);
+        assert_eq!(
+            events.lock().unwrap()[0].context.trace_context,
+            trace_context
+        );
+    }
+
+    #[tokio::test]
+    async fn child_submission_inherits_parent_w3c_context() {
+        use rustvello_core::context::{InvocationContext, INVOCATION_CTX};
+
+        let app = make_app();
+        let trace_context = TraceContextCarrier {
+            traceparent: Some(
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
+            ),
+            tracestate: None,
+        };
+        let parent = InvocationContext {
+            invocation_id: InvocationId::new(),
+            task_id: TaskId::new("test", "parent"),
+            workflow: None,
+            is_workflow_defining: false,
+            state_backend: Some(app.state_backend()),
+            parent_invocation_id: None,
+            num_retries: 0,
+            trace_context: trace_context.clone(),
+        };
+
+        let invocation_id = INVOCATION_CTX
+            .scope(parent, async {
+                app.submit(&TaskId::new("test", "double"), SerializedArguments::new())
+                    .await
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            app.state_backend()
+                .get_invocation(&invocation_id)
+                .await
+                .unwrap()
+                .trace_context,
+            trace_context
+        );
+    }
+
+    #[tokio::test]
+    async fn child_submission_prefers_active_w3c_context_over_persisted_parent() {
+        use rustvello_core::context::{InvocationContext, INVOCATION_CTX};
+        use rustvello_core::observability::extract_w3c_trace_context;
+
+        let app = make_app();
+        let persisted = TraceContextCarrier {
+            traceparent: Some(
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
+            ),
+            tracestate: None,
+        };
+        let active = TraceContextCarrier {
+            traceparent: Some(
+                "00-80e1afed08e019fc1110464cfa66635c-7a085853722dc6d2-01".to_string(),
+            ),
+            tracestate: Some("ih=child".to_string()),
+        };
+        let parent = InvocationContext {
+            invocation_id: InvocationId::new(),
+            task_id: TaskId::new("test", "parent"),
+            workflow: None,
+            is_workflow_defining: false,
+            state_backend: Some(app.state_backend()),
+            parent_invocation_id: None,
+            num_retries: 0,
+            trace_context: persisted,
+        };
+
+        let invocation_id = INVOCATION_CTX
+            .scope(parent, async {
+                let _guard = extract_w3c_trace_context(&active).attach();
+                app.submit(&TaskId::new("test", "double"), SerializedArguments::new())
+                    .await
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            app.state_backend()
+                .get_invocation(&invocation_id)
+                .await
+                .unwrap()
+                .trace_context,
+            active
+        );
     }
 
     #[tokio::test]

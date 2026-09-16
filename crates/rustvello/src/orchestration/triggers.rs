@@ -70,6 +70,30 @@ impl Orchestrator {
                 trigger_def.task_id.clone(),
                 call_dto.call_id.clone(),
             );
+            let (queue_name, priority) = routes.get(&trigger_def.task_id).ok_or_else(|| {
+                RustvelloError::TaskNotRegistered {
+                    task_id: trigger_def.task_id.clone(),
+                }
+            })?;
+            if let Some(publication) = self.publication()? {
+                publication
+                    .submit(rustvello_core::publication::SubmissionPublication {
+                        invocation: inv_dto,
+                        call: call_dto,
+                        runner_id: runner_id.clone(),
+                        runner_context: None,
+                        workflow_root: false,
+                        cc_arguments: None,
+                        route: rustvello_core::publication::PublicationRoute {
+                            queue: queue_name.clone(),
+                            priority: *priority,
+                        },
+                    })
+                    .await?;
+                tm.complete_trigger_run(&execution.run_id, &inv_id).await?;
+                created_ids.push(inv_id);
+                continue;
+            }
             self.backends
                 .state_backend
                 .upsert_invocation(&inv_dto, &call_dto)

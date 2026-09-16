@@ -92,7 +92,7 @@ impl RunnerControlPlane {
     }
 
     pub(crate) fn request_shutdown(&self) {
-        let _ = self.shutdown_tx.send(true);
+        self.shutdown_tx.send_replace(true);
     }
 
     pub(crate) fn is_shutdown(&self) -> bool {

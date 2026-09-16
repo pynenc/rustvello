@@ -4,10 +4,13 @@ use pyo3::prelude::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::telemetry::TelemetryEmitter;
 use rustvello::app::RustvelloApp;
 use rustvello_core::error::RustvelloError;
+use rustvello_core::observability::EventLevel;
 use rustvello_proto::call::SerializedArguments;
 use rustvello_proto::identifiers::{TaskId, TaskLanguage};
+use rustvello_proto::invocation::TraceContextCarrier;
 
 use crate::config::{PyAppConfig, PyTaskConfig};
 use crate::error::to_py_err;
@@ -27,6 +30,7 @@ use crate::utils::parse_task_id;
 #[pyclass(name = "Rustvello")]
 pub struct PyRustvello {
     pub(crate) inner: Arc<tokio::sync::Mutex<RustvelloApp>>,
+    telemetry: Option<TelemetryEmitter>,
 }
 
 #[pymethods]
@@ -41,11 +45,79 @@ impl PyRustvello {
         let app = RustvelloApp::new(app_config);
         Ok(Self {
             inner: Arc::new(tokio::sync::Mutex::new(app)),
+            telemetry: None,
         })
     }
 
+    /// Enable bounded OTLP/HTTP-Protobuf lifecycle export for submissions.
+    /// Switch synchronous in-process execution on or off at runtime (tests flip this).
+    fn set_dev_mode_force_sync(&self, py: Python<'_>, enabled: bool) -> PyResult<()> {
+        let app = Arc::clone(&self.inner);
+        py.allow_threads(|| {
+            shared_runtime()?.block_on(async {
+                app.lock().await.config.dev_mode_force_sync = enabled;
+            });
+            Ok(())
+        })
+    }
+
+    fn enable_otlp(&mut self, py: Python<'_>, endpoint: &str, bearer_token: &str) -> PyResult<()> {
+        if self.telemetry.is_some() {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "OTLP telemetry is already enabled",
+            ));
+        }
+        let emitter = crate::telemetry::emitter(endpoint, bearer_token)?;
+        let app = Arc::clone(&self.inner);
+        let shared = Arc::new(emitter.clone());
+        py.allow_threads(|| {
+            shared_runtime()?.block_on(async {
+                app.lock()
+                    .await
+                    .add_shared_event_emitter(EventLevel::TaskLifecycle, shared);
+                Ok::<(), PyErr>(())
+            })
+        })?;
+        self.telemetry = Some(emitter);
+        Ok(())
+    }
+
+    /// Read delivery counters without waiting, including after an export timeout.
+    fn telemetry_stats(&self) -> PyResult<std::collections::BTreeMap<&'static str, u64>> {
+        self.telemetry
+            .as_ref()
+            .map(crate::telemetry::snapshot)
+            .ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("OTLP telemetry is not enabled")
+            })
+    }
+
+    #[pyo3(signature = (timeout_ms=5000))]
+    fn flush_telemetry(
+        &self,
+        py: Python<'_>,
+        timeout_ms: u64,
+    ) -> PyResult<std::collections::BTreeMap<&'static str, u64>> {
+        let emitter = self.telemetry.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("OTLP telemetry is not enabled")
+        })?;
+        py.allow_threads(|| crate::telemetry::flush(emitter, timeout_ms))
+    }
+
+    #[pyo3(signature = (timeout_ms=5000))]
+    fn shutdown_telemetry(
+        &self,
+        py: Python<'_>,
+        timeout_ms: u64,
+    ) -> PyResult<std::collections::BTreeMap<&'static str, u64>> {
+        let emitter = self.telemetry.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("OTLP telemetry is not enabled")
+        })?;
+        py.allow_threads(|| crate::telemetry::shutdown(emitter, timeout_ms))
+    }
+
     /// Register a Python callable as a task.
-    #[pyo3(signature = (module, name, func, config=None))]
+    #[pyo3(signature = (module, name, func, config=None, replace=false))]
     fn register_task(
         &self,
         py: Python<'_>,
@@ -53,6 +125,7 @@ impl PyRustvello {
         name: &str,
         func: PyObject,
         config: Option<PyTaskConfig>,
+        replace: bool,
     ) -> PyResult<()> {
         let task_id = TaskId::try_for_language(TaskLanguage::Python, module, name)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -78,8 +151,23 @@ impl PyRustvello {
         py.allow_threads(|| {
             shared_runtime()?.block_on(async {
                 let mut app = self.inner.lock().await;
+                if replace {
+                    app.unregister_task(&task_id);
+                }
                 app.register_task(task_id, task_config, task_fn)
                     .map_err(to_py_err)
+            })
+        })
+    }
+
+    /// Remove a registered Python task; returns whether it existed.
+    fn unregister_task(&self, py: Python<'_>, module: &str, name: &str) -> PyResult<bool> {
+        let task_id = TaskId::try_for_language(TaskLanguage::Python, module, name)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        py.allow_threads(|| {
+            shared_runtime()?.block_on(async {
+                let mut app = self.inner.lock().await;
+                Ok(app.unregister_task(&task_id))
             })
         })
     }
@@ -112,13 +200,15 @@ impl PyRustvello {
     }
 
     /// Submit a task for asynchronous execution.
-    #[pyo3(signature = (module, name, kwargs=None))]
+    #[pyo3(signature = (module, name, kwargs=None, traceparent=None, tracestate=None))]
     fn submit(
         &self,
         py: Python<'_>,
         module: &str,
         name: &str,
         kwargs: Option<BTreeMap<String, String>>,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
     ) -> PyResult<PyInvocationId> {
         let task_id = TaskId::try_for_language(TaskLanguage::Python, module, name)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -134,7 +224,12 @@ impl PyRustvello {
             shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
-                    app.submit(&task_id, args).await
+                    app.submit_with_trace_context(
+                        &task_id,
+                        args,
+                        trace_carrier(traceparent, tracestate),
+                    )
+                    .await
                 })
                 .map_err(to_py_err)
         })?;
@@ -143,7 +238,8 @@ impl PyRustvello {
     }
 
     /// Submit a task by fully qualified language/module/name identity.
-    #[pyo3(signature = (language, module, name, kwargs=None))]
+    #[allow(clippy::too_many_arguments)] // Flat parameters are part of the Python API.
+    #[pyo3(signature = (language, module, name, kwargs=None, traceparent=None, tracestate=None, invocation_id=None))]
     fn submit_task(
         &self,
         py: Python<'_>,
@@ -151,6 +247,9 @@ impl PyRustvello {
         module: &str,
         name: &str,
         kwargs: Option<BTreeMap<String, String>>,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
+        invocation_id: Option<&PyInvocationId>,
     ) -> PyResult<PyInvocationId> {
         let task_id = parse_task_id(language, module, name)?;
         let mut args = SerializedArguments::new();
@@ -161,11 +260,27 @@ impl PyRustvello {
         }
 
         let app = Arc::clone(&self.inner);
+        let requested_id = invocation_id.map(|id| id.inner.clone());
         let inv_id = py.allow_threads(|| {
             shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
-                    app.submit(&task_id, args).await
+                    if let Some(id) = requested_id {
+                        return app
+                            .submit_with_id(
+                                id,
+                                &task_id,
+                                args,
+                                trace_carrier(traceparent, tracestate),
+                            )
+                            .await;
+                    }
+                    app.submit_with_trace_context(
+                        &task_id,
+                        args,
+                        trace_carrier(traceparent, tracestate),
+                    )
+                    .await
                 })
                 .map_err(to_py_err)
         })?;
@@ -310,11 +425,26 @@ impl PyRustvello {
         let app = RustvelloApp::with_backends_and_triggers(app_config, br, orch, sb, cds, tm);
         Ok(Self {
             inner: Arc::new(tokio::sync::Mutex::new(app)),
+            telemetry: None,
         })
     }
 
     fn __repr__(&self) -> String {
         "Rustvello(...)".to_string()
+    }
+}
+
+fn trace_carrier(
+    traceparent: Option<String>,
+    tracestate: Option<String>,
+) -> Option<TraceContextCarrier> {
+    if traceparent.is_none() && tracestate.is_none() {
+        None
+    } else {
+        Some(TraceContextCarrier {
+            traceparent,
+            tracestate,
+        })
     }
 }
 
@@ -350,7 +480,7 @@ mod tests {
     fn submit_unknown_task_returns_error() {
         Python::with_gil(|py| {
             let app = PyRustvello::new(None).unwrap();
-            let result = app.submit(py, "unknown_module", "unknown_func", None);
+            let result = app.submit(py, "unknown_module", "unknown_func", None, None, None);
             assert!(result.is_err());
         });
     }

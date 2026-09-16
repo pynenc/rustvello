@@ -23,6 +23,9 @@ impl PostgresBroker {
 
 #[async_trait]
 impl Broker for PostgresBroker {
+    fn publication_domain(&self) -> Option<rustvello_core::publication::PublicationDomain> {
+        Some(Arc::clone(&self.db.domain))
+    }
     async fn route_invocation_with_options(
         &self,
         invocation_id: &InvocationId,
@@ -31,16 +34,21 @@ impl Broker for PostgresBroker {
         priority: f64,
     ) -> RustvelloResult<()> {
         validate_routing(queue_name, priority)?;
-        let client = self.db.conn().await?;
+        let mut client = self.db.conn().await?;
+        let tx = client.transaction().await?;
         let task_id = task_id.map(ToString::to_string);
-        client
-            .execute(
-                "INSERT INTO broker_queue (invocation_id, task_id, queue_name, priority) \
-                 VALUES ($1, $2, $3, $4)",
-                &[&invocation_id.as_str(), &task_id, &queue_name, &priority],
-            )
-            .await
-            .map_err(pg_err)?;
+        crate::publication::publish(
+            &tx,
+            invocation_id.as_str(),
+            task_id.as_deref(),
+            &rustvello_core::publication::PublicationRoute {
+                queue: queue_name.into(),
+                priority,
+            },
+            self.db.options.max_queue_rows,
+        )
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -70,30 +78,34 @@ impl Broker for PostgresBroker {
                 let task_id = task_id.to_string();
                 client
                     .query_opt(
-                        "DELETE FROM broker_queue WHERE id = (\
+                        "UPDATE broker_queue SET reserved_until=clock_timestamp() + $3 * interval '1 millisecond' WHERE id = (\
                            SELECT id FROM broker_queue \
-                           WHERE queue_name = $1 AND task_id = $2 \
+                           WHERE queue_name = $1 AND task_id = $2 AND (reserved_until IS NULL OR reserved_until <= clock_timestamp()) \
                            ORDER BY priority DESC, id ASC LIMIT 1 \
                            FOR UPDATE SKIP LOCKED\
                          ) RETURNING invocation_id",
-                        &[&queue_name, &task_id],
+                        &[&queue_name, &task_id, &(self.db.options.delivery_lease_ms as f64)],
                     )
                     .await
                     .map_err(pg_err)?
             }
             None => client
                 .query_opt(
-                    "DELETE FROM broker_queue WHERE id = (\
-                       SELECT id FROM broker_queue WHERE queue_name = $1 \
+                    "UPDATE broker_queue SET reserved_until=clock_timestamp() + $2 * interval '1 millisecond' WHERE id = (\
+                       SELECT id FROM broker_queue WHERE queue_name = $1 AND (reserved_until IS NULL OR reserved_until <= clock_timestamp()) \
                        ORDER BY priority DESC, id ASC LIMIT 1 \
                        FOR UPDATE SKIP LOCKED\
                      ) RETURNING invocation_id",
-                    &[&queue_name],
+                    &[&queue_name, &(self.db.options.delivery_lease_ms as f64)],
                 )
                 .await
                 .map_err(pg_err)?,
         };
-        Ok(row.map(|row| InvocationId::from_string(row.get::<_, String>(0))))
+        let id = row.map(|row| InvocationId::from_string(row.get::<_, String>(0)));
+        if let Some(id) = &id {
+            crate::failpoints::boundary("delivery.after_commit", id.as_str()).await?;
+        }
+        Ok(id)
     }
 
     async fn retrieve_invocation(
@@ -115,18 +127,22 @@ impl Broker for PostgresBroker {
         let prefix = format!("{language}::%");
         let row = client
             .query_opt(
-                "DELETE FROM broker_queue WHERE id = (\
+                "UPDATE broker_queue SET reserved_until=clock_timestamp() + $4 * interval '1 millisecond' WHERE id = (\
                    SELECT id FROM broker_queue \
-                   WHERE queue_name = $1 \
+                   WHERE queue_name = $1 AND (reserved_until IS NULL OR reserved_until <= clock_timestamp()) \
                      AND ((task_id IS NULL AND $2 = 'rust') OR task_id LIKE $3) \
                    ORDER BY priority DESC, id ASC LIMIT 1 \
                    FOR UPDATE SKIP LOCKED\
                  ) RETURNING invocation_id",
-                &[&queue_name, &language, &prefix],
+                &[&queue_name, &language, &prefix, &(self.db.options.delivery_lease_ms as f64)],
             )
             .await
             .map_err(pg_err)?;
-        Ok(row.map(|row| InvocationId::from_string(row.get::<_, String>(0))))
+        let id = row.map(|row| InvocationId::from_string(row.get::<_, String>(0)));
+        if let Some(id) = &id {
+            crate::failpoints::boundary("delivery.after_commit", id.as_str()).await?;
+        }
+        Ok(id)
     }
 
     async fn retrieve_invocation_for_language(
@@ -152,13 +168,13 @@ impl Broker for PostgresBroker {
             let row = match task_id {
                 Some(task_id) => client
                     .query_one(
-                        "SELECT COUNT(*) FROM broker_queue WHERE task_id = $1",
+                        "SELECT COUNT(*) FROM broker_queue WHERE task_id = $1 AND (reserved_until IS NULL OR reserved_until <= clock_timestamp())",
                         &[&task_id],
                     )
                     .await
                     .map_err(pg_err)?,
                 None => client
-                    .query_one("SELECT COUNT(*) FROM broker_queue", &[])
+                    .query_one("SELECT COUNT(*) FROM broker_queue WHERE reserved_until IS NULL OR reserved_until <= clock_timestamp()", &[])
                     .await
                     .map_err(pg_err)?,
             };
@@ -169,14 +185,14 @@ impl Broker for PostgresBroker {
                     Some(task_id) => client
                         .query_one(
                             "SELECT COUNT(*) FROM broker_queue \
-                             WHERE queue_name = $1 AND task_id = $2",
+                             WHERE queue_name = $1 AND task_id = $2 AND (reserved_until IS NULL OR reserved_until <= clock_timestamp())",
                             &[queue_name, task_id],
                         )
                         .await
                         .map_err(pg_err)?,
                     None => client
                         .query_one(
-                            "SELECT COUNT(*) FROM broker_queue WHERE queue_name = $1",
+                            "SELECT COUNT(*) FROM broker_queue WHERE queue_name = $1 AND (reserved_until IS NULL OR reserved_until <= clock_timestamp())",
                             &[queue_name],
                         )
                         .await

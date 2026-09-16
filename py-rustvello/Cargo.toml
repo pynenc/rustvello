@@ -11,7 +11,7 @@ name = "rustvello"
 crate-type = ["cdylib"]
 
 [dependencies]
-rustvello-python = { workspace = true, features = ["all-backends"] }
+rustvello-python = { workspace = true, features = ["all-backends", "monitoring"] }
 pyo3 = { workspace = true, features = ["extension-module"] }
 
 [package.metadata.maturin]

@@ -1,5 +1,9 @@
 use rustvello_core::context::{get_or_create_runner_context, with_invocation_context};
 use rustvello_core::error::{RustvelloError, RustvelloResult};
+use rustvello_core::observability::{
+    capture_w3c_trace_context, is_valid_w3c_trace_context, TaskAttemptContext, TaskLifecycleEvent,
+    TraceContextCarrier, WorkerTelemetryContext,
+};
 use rustvello_core::state_backend::StoredRunnerContext;
 use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::config::AppConfig;
@@ -85,6 +89,33 @@ impl Orchestrator {
         task_catalog: &TaskCatalog,
         call: CallDTO,
     ) -> RustvelloResult<InvocationId> {
+        self.submit_with_trace_context(app_config, task_catalog, call, None)
+            .await
+    }
+
+    pub(crate) async fn submit_with_trace_context(
+        &self,
+        app_config: &AppConfig,
+        task_catalog: &TaskCatalog,
+        call: CallDTO,
+        explicit_trace_context: Option<TraceContextCarrier>,
+    ) -> RustvelloResult<InvocationId> {
+        self.submit_with_id(app_config, task_catalog, call, explicit_trace_context, None)
+            .await
+    }
+
+    pub(crate) async fn submit_with_id(
+        &self,
+        app_config: &AppConfig,
+        task_catalog: &TaskCatalog,
+        call: CallDTO,
+        explicit_trace_context: Option<TraceContextCarrier>,
+        requested_id: Option<InvocationId>,
+    ) -> RustvelloResult<InvocationId> {
+        let publication = self.publication()?;
+        if requested_id.is_some() {
+            self.require_crash_consistent_publication()?;
+        }
         let task =
             task_catalog
                 .get(&call.task_id)
@@ -93,65 +124,122 @@ impl Orchestrator {
                 })?;
         let task_config = task_catalog.resolve_config(app_config, &call.task_id, task.config());
 
-        // Registering control state establishes the invocation ID and is the
-        // authoritative first step. All following writes are idempotent except
-        // broker publication, which recovery can repeat using the same ID.
-        let invocation_id = self
-            .backends
-            .invocation_control
-            .register_invocation(&call)
-            .await?;
+        let invocation_id = requested_id.unwrap_or_default();
         let (parent_id, workflow) =
             Self::resolve_workflow(&invocation_id, &call.task_id, task_config.is_workflow_task);
+        let trace_context = Self::resolve_trace_context(explicit_trace_context)?;
         let invocation = Self::invocation_dto(
             invocation_id.clone(),
             call.task_id.clone(),
             call.call_id.clone(),
             parent_id,
             workflow.clone(),
-        );
+        )
+        .with_trace_context(trace_context.clone());
 
-        self.backends
-            .state_backend
-            .upsert_invocation(&invocation, &call)
-            .await?;
-        if task_config.is_workflow_task {
-            if let Some(workflow) = workflow.as_ref() {
-                self.backends
-                    .state_backend
-                    .store_workflow_run(workflow)
-                    .await?;
+        let mut caller = get_or_create_runner_context();
+        if caller.app_id.as_ref() != app_config.app_id {
+            caller = rustvello_core::context::RunnerContext::external();
+            caller.app_id = app_config.app_id.clone().into();
+        }
+        let created = if let Some(publication) = publication {
+            publication
+                .submit(rustvello_core::publication::SubmissionPublication {
+                    invocation: invocation.clone(),
+                    call: call.clone(),
+                    runner_id: caller.runner_id.clone(),
+                    runner_context: Some(StoredRunnerContext::from_runtime(&caller)),
+                    workflow_root: task_config.is_workflow_task,
+                    cc_arguments: None,
+                    route: rustvello_core::publication::PublicationRoute {
+                        queue: task_config.queue.clone(),
+                        priority: task_config.priority,
+                    },
+                })
+                .await?
+        } else {
+            self.backends
+                .invocation_control
+                .register_invocation_with_id(&invocation_id, &call, Some(&caller.runner_id))
+                .await?;
+
+            self.backends
+                .state_backend
+                .upsert_invocation(&invocation, &call)
+                .await?;
+            if task_config.is_workflow_task {
+                if let Some(workflow) = workflow.as_ref() {
+                    self.backends
+                        .state_backend
+                        .store_workflow_run(workflow)
+                        .await?;
+                }
             }
+
+            self.ensure_runner_context_stored(&caller).await?;
+            let runner_id = caller.runner_id.clone();
+            self.backends
+                .state_backend
+                .add_history(
+                    &InvocationHistory::new(
+                        invocation_id.clone(),
+                        InvocationStatusRecord::new(
+                            InvocationStatus::Registered,
+                            Some(runner_id.clone()),
+                        ),
+                        None,
+                    )
+                    .with_runner(runner_id),
+                )
+                .await?;
+
+            self.backends
+                .broker
+                .route_invocation_with_options(
+                    &invocation_id,
+                    Some(&call.task_id),
+                    &task_config.queue,
+                    task_config.priority,
+                )
+                .await?;
+
+            true
+        };
+        if !created {
+            return Ok(invocation_id);
         }
 
-        let caller = get_or_create_runner_context();
-        self.ensure_runner_context_stored(&caller).await?;
-        let runner_id = caller.runner_id.clone();
-        self.backends
-            .state_backend
-            .add_history(
-                &InvocationHistory::new(
-                    invocation_id.clone(),
-                    InvocationStatusRecord::new(
-                        InvocationStatus::Registered,
-                        Some(runner_id.clone()),
-                    ),
-                    None,
-                )
-                .with_runner(runner_id),
-            )
-            .await?;
-
-        self.backends
-            .broker
-            .route_invocation_with_options(
-                &invocation_id,
-                Some(&call.task_id),
-                &task_config.queue,
-                task_config.priority,
-            )
-            .await?;
+        let telemetry_context = TaskAttemptContext::new(
+            app_config.app_id.clone(),
+            call.task_id,
+            invocation_id.clone(),
+            0,
+            task_config.queue,
+            invocation.parent_invocation_id,
+            invocation.workflow,
+            WorkerTelemetryContext::from(&caller),
+            trace_context,
+        );
+        self.event_emitter
+            .on_task_lifecycle(&TaskLifecycleEvent::submitted(telemetry_context));
         Ok(invocation_id)
+    }
+
+    fn resolve_trace_context(
+        explicit: Option<TraceContextCarrier>,
+    ) -> RustvelloResult<TraceContextCarrier> {
+        let inherited = with_invocation_context(|context| context.trace_context.clone());
+        let active = capture_w3c_trace_context();
+        let carrier = explicit
+            .or_else(|| (!active.is_empty()).then_some(active))
+            .or(inherited)
+            .unwrap_or_default();
+        if !is_valid_w3c_trace_context(&carrier) {
+            return Err(RustvelloError::Configuration {
+                message: "invalid W3C traceparent or tracestate".to_string(),
+            });
+        }
+        Ok(carrier)
     }
 
     fn resolve_workflow(

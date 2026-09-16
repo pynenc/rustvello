@@ -13,7 +13,9 @@ use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::identifiers::{
     CallId, ExecutorKind, InvocationId, RunnerId, TaskId, TaskLanguage,
 };
-use rustvello_proto::invocation::{InvocationDTO, InvocationHistory, WorkflowIdentity};
+use rustvello_proto::invocation::{
+    InvocationDTO, InvocationHistory, TraceContextCarrier, WorkflowIdentity,
+};
 use rustvello_proto::status::InvocationStatusRecord;
 
 use crate::db::{parse_status, pg_err, Database};
@@ -31,6 +33,9 @@ impl PostgresStateBackend {
 
 #[async_trait]
 impl StateBackendCore for PostgresStateBackend {
+    fn publication_domain(&self) -> Option<rustvello_core::publication::PublicationDomain> {
+        Some(Arc::clone(&self.db.domain))
+    }
     async fn upsert_invocation(
         &self,
         invocation: &InvocationDTO,
@@ -69,11 +74,12 @@ impl StateBackendCore for PostgresStateBackend {
         tx
             .execute(
                 "INSERT INTO invocations (invocation_id, task_id, call_id, status, created_at, updated_at,
-                    parent_invocation_id, workflow_id, workflow_type, workflow_depth)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    parent_invocation_id, workflow_id, workflow_type, workflow_depth, traceparent, tracestate, workflow_parent_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                  ON CONFLICT (invocation_id) DO UPDATE SET
                     task_id = $2, call_id = $3, status = $4, updated_at = $6,
-                    parent_invocation_id = $7, workflow_id = $8, workflow_type = $9, workflow_depth = $10",
+                    parent_invocation_id = $7, workflow_id = $8, workflow_type = $9, workflow_depth = $10,
+                    traceparent = $11, tracestate = $12, workflow_parent_id = $13",
                 &[
                     &invocation.invocation_id.as_str(),
                     &invocation.task_id.to_string(),
@@ -85,6 +91,9 @@ impl StateBackendCore for PostgresStateBackend {
                     &wf_id as &(dyn tokio_postgres::types::ToSql + Sync),
                     &wf_type as &(dyn tokio_postgres::types::ToSql + Sync),
                     &wf_depth as &(dyn tokio_postgres::types::ToSql + Sync),
+                    &invocation.trace_context.traceparent as &(dyn tokio_postgres::types::ToSql + Sync),
+                    &invocation.trace_context.tracestate as &(dyn tokio_postgres::types::ToSql + Sync),
+                    &invocation.workflow.as_ref().and_then(|w| w.parent_id.as_ref()).map(InvocationId::as_str),
                 ],
             )
             .await
@@ -113,7 +122,7 @@ impl StateBackendCore for PostgresStateBackend {
         let row = client
             .query_opt(
                 "SELECT task_id, call_id, status, created_at, updated_at,
-                        parent_invocation_id, workflow_id, workflow_type, workflow_depth
+                        parent_invocation_id, workflow_id, workflow_type, workflow_depth, traceparent, tracestate, workflow_parent_id
                  FROM invocations WHERE invocation_id = $1",
                 &[&invocation_id.as_str()],
             )
@@ -132,6 +141,8 @@ impl StateBackendCore for PostgresStateBackend {
         let wf_id: Option<String> = row.get(6);
         let wf_type: Option<String> = row.get(7);
         let wf_depth: Option<i32> = row.get(8);
+        let traceparent: Option<String> = row.get(9);
+        let tracestate: Option<String> = row.get(10);
 
         let task_id: TaskId = task_id_str.parse().map_err(|e| {
             RustvelloError::state_backend(format!("invalid task_id in database: {e}"))
@@ -153,7 +164,9 @@ impl StateBackendCore for PostgresStateBackend {
                 Some(WorkflowIdentity {
                     workflow_id: InvocationId::from_string(wf_id_str),
                     workflow_type: wf_task_id,
-                    parent_id: None,
+                    parent_id: row
+                        .get::<_, Option<String>>(11)
+                        .map(InvocationId::from_string),
                     depth: u32::try_from(wf_depth.unwrap_or(0)).unwrap_or(0),
                 })
             }
@@ -169,6 +182,10 @@ impl StateBackendCore for PostgresStateBackend {
             updated_at,
             parent_invocation_id,
             workflow,
+            trace_context: TraceContextCarrier {
+                traceparent,
+                tracestate,
+            },
         })
     }
 
@@ -223,6 +240,44 @@ impl StateBackendCore for PostgresStateBackend {
             .await
             .map_err(pg_err)?;
         Ok(())
+    }
+
+    async fn store_result_for_runner(
+        &self,
+        invocation_id: &InvocationId,
+        result: &str,
+        runner_id: &RunnerId,
+    ) -> RustvelloResult<()> {
+        let mut client = self.db.conn().await?;
+        let tx = client.transaction().await?;
+        assert_owned(&tx, invocation_id, runner_id).await?;
+        if result.len() > self.db.options.max_payload_bytes as usize {
+            return Err(RustvelloError::state_backend(
+                "result exceeds payload limit",
+            ));
+        }
+        tx.execute("INSERT INTO results (invocation_id,result) VALUES ($1,$2) ON CONFLICT (invocation_id) DO UPDATE SET result=$2", &[&invocation_id.as_str(),&result]).await?;
+        tx.commit().await
+    }
+
+    async fn store_error_for_runner(
+        &self,
+        invocation_id: &InvocationId,
+        error: &TaskError,
+        runner_id: &RunnerId,
+    ) -> RustvelloResult<()> {
+        let mut client = self.db.conn().await?;
+        let tx = client.transaction().await?;
+        assert_owned(&tx, invocation_id, runner_id).await?;
+        if error.message.len()
+            + error.error_type.len()
+            + error.traceback.as_ref().map_or(0, String::len)
+            > self.db.options.max_payload_bytes as usize
+        {
+            return Err(RustvelloError::state_backend("error exceeds payload limit"));
+        }
+        tx.execute("INSERT INTO errors (invocation_id,error_type,message,traceback) VALUES ($1,$2,$3,$4) ON CONFLICT (invocation_id) DO UPDATE SET error_type=$2,message=$3,traceback=$4", &[&invocation_id.as_str(),&error.error_type,&error.message,&error.traceback]).await?;
+        tx.commit().await
     }
 
     async fn get_result(&self, invocation_id: &InvocationId) -> RustvelloResult<Option<String>> {
@@ -345,7 +400,8 @@ impl StateBackendCore for PostgresStateBackend {
         let client = self.db.conn().await?;
         client
             .batch_execute(
-                "DELETE FROM invocations;
+                "UPDATE submission_publications SET identity_json='';
+                 DELETE FROM invocations;
                  DELETE FROM calls;
                  DELETE FROM results;
                  DELETE FROM errors;
@@ -367,6 +423,55 @@ impl StateBackendCore for PostgresStateBackend {
 
 #[async_trait]
 impl StateBackendQuery for PostgresStateBackend {
+    async fn get_workflow_run_offset(
+        &self,
+        workflow_type: &TaskId,
+        workflow_id: &InvocationId,
+    ) -> RustvelloResult<Option<usize>> {
+        let client = self.db.conn().await?;
+        let type_key = workflow_type.to_string();
+        let exists: bool = client.query_one("SELECT EXISTS(SELECT 1 FROM workflow_runs WHERE workflow_type = $1 AND workflow_id = $2)", &[&type_key, &workflow_id.as_str()]).await.map_err(pg_err)?.get(0);
+        if !exists {
+            return Ok(None);
+        }
+        let count: i64 = client
+            .query_one(
+                "SELECT COUNT(*) FROM workflow_runs WHERE workflow_type = $1 AND workflow_id > $2",
+                &[&type_key, &workflow_id.as_str()],
+            )
+            .await
+            .map_err(pg_err)?
+            .get(0);
+        Ok(Some(count as usize))
+    }
+
+    async fn get_workflow_invocations_page(
+        &self,
+        workflow_id: &InvocationId,
+        limit: usize,
+        offset: usize,
+    ) -> RustvelloResult<(Vec<InvocationId>, usize)> {
+        let client = self.db.conn().await?;
+        let total: i64 = client
+            .query_one(
+                "SELECT COUNT(*) FROM invocations WHERE workflow_id = $1",
+                &[&workflow_id.as_str()],
+            )
+            .await
+            .map_err(pg_err)?
+            .get(0);
+        let rows = client.query(
+            "SELECT invocation_id FROM invocations WHERE workflow_id = $1 ORDER BY invocation_id LIMIT $2 OFFSET $3",
+            &[&workflow_id.as_str(), &i64::try_from(limit).unwrap_or(i64::MAX), &i64::try_from(offset).unwrap_or(i64::MAX)],
+        ).await.map_err(pg_err)?;
+        Ok((
+            rows.iter()
+                .map(|row| InvocationId::from_string(row.get::<_, String>(0)))
+                .collect(),
+            usize::try_from(total).unwrap_or(usize::MAX),
+        ))
+    }
+
     async fn get_workflow_invocations(
         &self,
         workflow_id: &InvocationId,
@@ -858,6 +963,22 @@ impl StateBackendRunner for PostgresStateBackend {
             .map_err(pg_err)?;
         Ok(rows.iter().map(parse_pg_runner_row).collect())
     }
+}
+
+async fn assert_owned(
+    tx: &crate::bounded::Transaction<'_>,
+    id: &InvocationId,
+    runner: &RunnerId,
+) -> RustvelloResult<()> {
+    let current = crate::publication::current(tx, id).await?;
+    if current.status != rustvello_proto::status::InvocationStatus::Running
+        || current.runner_id.as_ref() != Some(runner)
+    {
+        return Err(RustvelloError::state_backend(
+            "payload write requires current Running ownership",
+        ));
+    }
+    Ok(())
 }
 
 fn parse_pg_runner_row(row: &tokio_postgres::Row) -> StoredRunnerContext {

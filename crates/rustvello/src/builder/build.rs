@@ -186,8 +186,16 @@ impl RustvelloBuilder {
                 trigger_store: Arc::new(rustvello_mem::trigger::MemTriggerStore::new()),
             })),
             #[cfg(feature = "sqlite")]
-            super::BackendPreset::Sqlite { path, app_id } => {
-                let db = Arc::new(rustvello_sqlite::db::Database::open(path, app_id)?);
+            super::BackendPreset::Sqlite {
+                path,
+                app_id,
+                options,
+            } => {
+                let db = Arc::new(rustvello_sqlite::db::Database::open_with_options(
+                    path,
+                    app_id,
+                    options.clone(),
+                )?);
                 Ok(Some(ResolvedBackends {
                     broker: Arc::new(rustvello_sqlite::broker::SqliteBroker::new(Arc::clone(&db))),
                     orchestrator: Arc::new(
@@ -205,8 +213,28 @@ impl RustvelloBuilder {
                 }))
             }
             #[cfg(feature = "redis")]
-            super::BackendPreset::Redis { uri, app_id } => {
-                let pool = Arc::new(rustvello_redis::prelude::RedisPool::new(uri, app_id)?);
+            super::BackendPreset::Redis {
+                uri,
+                app_id,
+                options,
+                tls,
+            } => {
+                let pool = Arc::new(match tls {
+                    Some(tls) => rustvello_redis::prelude::RedisPool::new_tls_with_options(
+                        uri,
+                        app_id,
+                        options.clone(),
+                        tls.clone(),
+                    )?,
+                    None => rustvello_redis::prelude::RedisPool::new_with_options(
+                        uri,
+                        app_id,
+                        options.clone(),
+                    )?,
+                });
+                if options.require_durable_server {
+                    pool.verify_server_policy().await?;
+                }
                 Ok(Some(ResolvedBackends {
                     broker: Arc::new(rustvello_redis::prelude::RedisBroker::new(Arc::clone(
                         &pool,
@@ -227,10 +255,15 @@ impl RustvelloBuilder {
             super::BackendPreset::Postgres {
                 connection_string,
                 app_id,
+                options,
             } => {
                 let db = Arc::new(
-                    rustvello_postgres::prelude::Database::connect(connection_string, app_id)
-                        .await?,
+                    rustvello_postgres::prelude::Database::connect_with_options(
+                        connection_string,
+                        app_id,
+                        options.clone(),
+                    )
+                    .await?,
                 );
                 Ok(Some(ResolvedBackends {
                     broker: Arc::new(rustvello_postgres::prelude::PostgresBroker::new(
@@ -254,11 +287,29 @@ impl RustvelloBuilder {
             super::BackendPreset::PostgresTls {
                 connection_string,
                 app_id,
+                options,
+                tls,
             } => {
-                let db = Arc::new(
-                    rustvello_postgres::prelude::Database::connect_tls(connection_string, app_id)
-                        .await?,
-                );
+                let database = match tls {
+                    Some(tls) => {
+                        rustvello_postgres::prelude::Database::connect_tls_with_options(
+                            connection_string,
+                            app_id,
+                            options.clone(),
+                            tls.clone(),
+                        )
+                        .await?
+                    }
+                    None => {
+                        rustvello_postgres::prelude::Database::connect_tls_with_pool_size(
+                            connection_string,
+                            app_id,
+                            Some(options.max_pool_size),
+                        )
+                        .await?
+                    }
+                };
+                let db = Arc::new(database);
                 Ok(Some(ResolvedBackends {
                     broker: Arc::new(rustvello_postgres::prelude::PostgresBroker::new(
                         Arc::clone(&db),

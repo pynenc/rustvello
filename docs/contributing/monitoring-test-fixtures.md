@@ -8,6 +8,32 @@ changes are under review. Most tests shut the server down automatically; add
 from the test. It does not hide logs. `RUST_LOG` decides which tracing events
 are emitted.
 
+## Workflow Comparison Fixture
+
+Seed 32 completed runs with different durations, task counts, and worker counts:
+
+```bash
+KEEP_ALIVE=1 cargo test -p rustvello-monitoring --test monitoring_dashboard \
+  test_workflow_comparison_pages -- --nocapture
+```
+
+Open the printed `/workflows/rust::test.process_order` URL. The fixture spans
+multiple pages and supports selection, timeline drilldown, and invocation lists.
+
+For automated desktop/mobile browser validation, install Playwright in a
+temporary tooling directory (no frontend build dependency is required):
+
+```bash
+npm install --prefix /tmp/rustvello-browser playwright
+/tmp/rustvello-browser/node_modules/.bin/playwright install chromium
+PLAYWRIGHT_MODULE=/tmp/rustvello-browser/node_modules/playwright \
+  node scripts/monitoring_workflows_browser.cjs http://127.0.0.1:PORT
+```
+
+The script checks selection, pagination, empty selection after reload, chart
+rendering, mobile page overflow, and main navigation. Screenshots are written to
+`/tmp/rustvello-workflows-desktop.png` and `/tmp/rustvello-workflows-mobile.png`.
+
 ## Cross-Language Timeline Fixture
 
 Small fixture for validating task language, runner language, executor badges,
@@ -19,7 +45,7 @@ KEEP_ALIVE=1 RUST_LOG=rustvello=debug,rustvello_monitoring=debug \
   test_timeline_renders_complete_invocation_history -- --nocapture
 ```
 
-Open the printed `/invocations/timeline` URL for the SVG timeline and `/logs`
+Open the printed `/invocations/timeline` URL for the SVG timeline and `/log-explorer`
 for the Log Explorer.
 
 ## Large Cross-Language Load Fixture

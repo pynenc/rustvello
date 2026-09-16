@@ -56,6 +56,12 @@ test-docker: ## Run ignored Docker backend compliance suites
 test-stress: ## Run fast in-memory contention tests
 	@cargo test -p rustvello --test concurrency_stress_tests
 
+.PHONY: test-local-cluster-capture
+test-local-cluster-capture: develop ## Verify native Rust/Python retry propagation
+	@cargo test -p rustvello test_retry_on_failure -- --nocapture
+	@uv sync --extra telemetry
+	@uv run python -m pytest py-rustvello/tests/test_trace_context.py -q
+
 .PHONY: test-soak
 test-soak: ## Run ignored high-volume and SQLite contention tests
 	@cargo test -p rustvello --test concurrency_stress_tests -- --ignored --test-threads=1
@@ -101,7 +107,7 @@ publish-rust: ## Publish Rust crates to crates.io (in dependency order)
 	cargo publish -p rustvello-postgres
 	cargo publish -p rustvello-mongo
 	cargo publish -p rustvello-rabbitmq
-	cargo publish -p rustvello-prometheus
+	cargo publish -p rustvello-otel
 	sleep 30
 	cargo publish -p rustvello
 	cargo publish -p rustvello-monitoring

@@ -173,6 +173,34 @@ impl Orchestrator {
             call_dto.call_id.clone(),
         );
 
+        if let Some(publication) = self.publication()? {
+            let created = publication
+                .submit(rustvello_core::publication::SubmissionPublication {
+                    invocation: inv_dto,
+                    call: call_dto.clone(),
+                    runner_id: runner_id.clone(),
+                    runner_context: None,
+                    workflow_root: false,
+                    cc_arguments: if index_cc { cc_args.cloned() } else { None },
+                    route: rustvello_core::publication::PublicationRoute {
+                        queue: queue_name.into(),
+                        priority,
+                    },
+                })
+                .await?;
+            if created {
+                self.report_published_status(
+                    invocation_id,
+                    runner_id,
+                    InvocationStatus::Registered,
+                    &call_dto.task_id,
+                    call_dto.serialized_arguments.0.clone(),
+                )
+                .await?;
+            }
+            return Ok(invocation_id.clone());
+        }
+
         self.backends
             .state_backend
             .upsert_invocation(&inv_dto, call_dto)
@@ -229,6 +257,30 @@ impl Orchestrator {
         routes: &HashMap<InvocationId, (String, f64)>,
     ) -> RustvelloResult<()> {
         for inv_id in invocation_ids {
+            if let Some(publication) = self.publication()? {
+                let (queue, priority) =
+                    routes.get(inv_id).ok_or_else(|| RustvelloError::Internal {
+                        message: format!("missing routing for invocation {inv_id}"),
+                    })?;
+                match publication
+                    .change(
+                        inv_id,
+                        runner_id,
+                        rustvello_core::publication::PublicationChange::Reroute(
+                            rustvello_core::publication::PublicationRoute {
+                                queue: queue.clone(),
+                                priority: *priority,
+                            },
+                        ),
+                        false,
+                    )
+                    .await
+                {
+                    Ok(_) | Err(RustvelloError::InvalidStatusTransition { .. }) => {}
+                    Err(error) => return Err(error),
+                }
+                continue;
+            }
             match self
                 .backends
                 .invocation_control

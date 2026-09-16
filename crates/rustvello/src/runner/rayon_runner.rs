@@ -9,7 +9,8 @@ use rustvello_core::error::RustvelloError;
 use rustvello_core::error::RustvelloResult;
 use rustvello_core::middleware::TaskMiddleware;
 use rustvello_core::observability::{
-    CompositeEmitter, EventEmitter, EventLevel, NoopEmitter, WorkerState,
+    CompositeEmitter, EventEmitter, EventLevel, NoopEmitter, WorkerLifecycleEvent, WorkerState,
+    WorkerTelemetryContext,
 };
 use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::runner::Runner;
@@ -23,7 +24,6 @@ use tracing::Instrument;
 use super::control_plane::RunnerControlPlane;
 use super::executor::RayonExecutor;
 use super::executor_common::{execute_invocation_common, ExecutionDeps};
-use super::PrevEmitterWrapper;
 
 /// A runner that executes tasks on a rayon thread pool.
 ///
@@ -159,7 +159,7 @@ impl RayonRunner {
     ) -> Self {
         let mut composite = CompositeEmitter::new();
         let prev = std::mem::replace(&mut self.emitter, Arc::new(NoopEmitter));
-        composite.add_sink(EventLevel::DistributedTracing, PrevEmitterWrapper(prev));
+        composite.add_shared_sink(EventLevel::DistributedTracing, prev);
         composite.add_sink(level, emitter);
         self.emitter = Arc::new(composite);
         self
@@ -223,6 +223,7 @@ impl RayonRunner {
             emitter: Arc::clone(&self.emitter),
             middlewares: self.middlewares.clone(),
             task_catalog: Arc::clone(&self.control_plane.task_catalog),
+            app_config: self.control_plane.config.clone(),
             worker_states: None,
         };
 
@@ -276,8 +277,6 @@ impl Runner for RayonRunner {
                 self.control_plane.app_id,
                 std::process::id()
             );
-            self.emitter.on_worker_started(&self.runner_id);
-
             let runner_ctx =
                 rustvello_core::state_backend::StoredRunnerContext::current_with_runtime(
                     self.runner_id.to_string(),
@@ -319,6 +318,18 @@ impl Runner for RayonRunner {
                 self.control_plane.runner_language,
                 self.control_plane.executor_kind,
             );
+            self.emitter
+                .on_worker_lifecycle(&WorkerLifecycleEvent::started(
+                    WorkerTelemetryContext::from(&main_ctx),
+                ));
+            for worker_runner_id in self.worker_slot_ids() {
+                self.emitter
+                    .on_worker_lifecycle(&WorkerLifecycleEvent::started(
+                        WorkerTelemetryContext::from(
+                            &main_ctx.new_child_with_cls(worker_runner_id, "RayonWorker"),
+                        ),
+                    ));
+            }
             let semaphore = Arc::new(tokio::sync::Semaphore::new(self.num_threads));
             let mut handles = tokio::task::JoinSet::new();
 
@@ -364,7 +375,8 @@ impl Runner for RayonRunner {
                     drop(permit);
                     continue;
                 };
-                let worker_ctx = main_ctx.new_child(worker_runner_id.clone());
+                let worker_ctx =
+                    main_ctx.new_child_with_cls(worker_runner_id.clone(), "RayonWorker");
                 let runner = self.clone();
                 let w_id = worker_runner_id.clone();
 
@@ -419,7 +431,18 @@ impl Runner for RayonRunner {
             }
 
             tracing::info!("RayonRunner shutting down");
-            self.emitter.on_worker_shutdown(&self.runner_id);
+            for worker_runner_id in self.worker_slot_ids() {
+                self.emitter
+                    .on_worker_lifecycle(&WorkerLifecycleEvent::stopped(
+                        WorkerTelemetryContext::from(
+                            &main_ctx.new_child_with_cls(worker_runner_id, "RayonWorker"),
+                        ),
+                    ));
+            }
+            self.emitter
+                .on_worker_lifecycle(&WorkerLifecycleEvent::stopped(
+                    WorkerTelemetryContext::from(&main_ctx),
+                ));
             Ok(())
         }
         .instrument(runner_span)
@@ -437,16 +460,19 @@ impl Runner for RayonRunner {
         let Some(worker_runner_id) = self.acquire_worker_slot() else {
             return Ok(false);
         };
-        let worker_ctx = main_ctx.new_child(worker_runner_id.clone());
+        let worker_ctx = main_ctx.new_child_with_cls(worker_runner_id.clone(), "RayonWorker");
+        self.emitter
+            .on_worker_lifecycle(&WorkerLifecycleEvent::started(
+                WorkerTelemetryContext::from(&main_ctx),
+            ));
+        self.emitter
+            .on_worker_lifecycle(&WorkerLifecycleEvent::started(
+                WorkerTelemetryContext::from(&worker_ctx),
+            ));
 
         let result = async {
             let runner_ctx =
-                rustvello_core::state_backend::StoredRunnerContext::current_with_runtime(
-                    self.runner_id.to_string(),
-                    "RayonRunner",
-                    self.control_plane.runner_language,
-                    self.control_plane.executor_kind,
-                );
+                rustvello_core::state_backend::StoredRunnerContext::from_runtime(&main_ctx);
             if let Err(e) = self
                 .control_plane
                 .state_backend
@@ -455,7 +481,8 @@ impl Runner for RayonRunner {
             {
                 tracing::warn!("Failed to store runner context: {}", e);
             }
-            let worker_sb_ctx = runner_ctx.new_child(worker_runner_id.to_string(), "RayonWorker");
+            let worker_sb_ctx =
+                rustvello_core::state_backend::StoredRunnerContext::from_runtime(&worker_ctx);
             if let Err(e) = self
                 .control_plane
                 .state_backend
@@ -483,6 +510,14 @@ impl Runner for RayonRunner {
         }
         .await;
         self.release_worker_slot(worker_runner_id);
+        self.emitter
+            .on_worker_lifecycle(&WorkerLifecycleEvent::stopped(
+                WorkerTelemetryContext::from(&worker_ctx),
+            ));
+        self.emitter
+            .on_worker_lifecycle(&WorkerLifecycleEvent::stopped(
+                WorkerTelemetryContext::from(&main_ctx),
+            ));
         result
     }
 

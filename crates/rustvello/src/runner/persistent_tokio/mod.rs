@@ -6,7 +6,8 @@ use rustvello_core::context::RunnerContext;
 use rustvello_core::error::RustvelloResult;
 use rustvello_core::middleware::TaskMiddleware;
 use rustvello_core::observability::{
-    CompositeEmitter, EventEmitter, EventLevel, NoopEmitter, WorkerState,
+    CompositeEmitter, EventEmitter, EventLevel, NoopEmitter, WorkerLifecycleEvent, WorkerState,
+    WorkerTelemetryContext,
 };
 use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::runner::Runner;
@@ -19,8 +20,7 @@ use rustvello_proto::identifiers::{RunnerId, TaskLanguage};
 use tracing::Instrument;
 
 use super::control_plane::RunnerControlPlane;
-use super::executor::TokioExecutor;
-use super::PrevEmitterWrapper;
+use super::executor::{SubprocessExecutor, SubprocessSpec, TaskExecutor, TokioExecutor};
 use crate::task_catalog::TaskCatalog;
 
 mod execution;
@@ -46,7 +46,9 @@ pub struct PersistentTokioRunner {
     /// Main runner identity (parent of all workers).
     runner_id: RunnerId,
     control_plane: RunnerControlPlane,
-    executor: TokioExecutor,
+    executor: Arc<dyn TaskExecutor>,
+    /// Set when task code runs in worker processes instead of this process.
+    subprocess: Option<SubprocessSpec>,
     pub(crate) middlewares: Vec<Arc<dyn TaskMiddleware>>,
     pub(crate) emitter: Arc<dyn EventEmitter>,
     /// Per-worker state: maps worker RunnerId → WorkerState.
@@ -60,7 +62,8 @@ impl Clone for PersistentTokioRunner {
         Self {
             runner_id: self.runner_id.clone(),
             control_plane: self.control_plane.clone(),
-            executor: self.executor.clone(),
+            executor: Arc::clone(&self.executor),
+            subprocess: self.subprocess.clone(),
             middlewares: self.middlewares.clone(),
             emitter: Arc::clone(&self.emitter),
             worker_states: Arc::clone(&self.worker_states),
@@ -76,6 +79,10 @@ impl std::fmt::Debug for PersistentTokioRunner {
             .field("runner_id", &self.runner_id)
             .field("app_id", &self.control_plane.app_id)
             .field("num_workers", &self.num_workers)
+            .field(
+                "subprocess",
+                &self.subprocess.as_ref().map(|spec| &spec.command),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -154,7 +161,8 @@ impl PersistentTokioRunner {
         Self {
             runner_id: RunnerId::new(),
             control_plane,
-            executor: TokioExecutor::new(num_workers),
+            executor: Arc::new(TokioExecutor::new(num_workers)),
+            subprocess: None,
             middlewares: Vec::new(),
             emitter: Arc::new(NoopEmitter),
             worker_states: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -191,8 +199,28 @@ impl PersistentTokioRunner {
 
     pub fn with_num_workers(mut self, n: usize) -> Self {
         self.num_workers = n.max(1);
-        self.executor = TokioExecutor::new(self.num_workers);
+        self.executor = match &self.subprocess {
+            Some(spec) => Arc::new(SubprocessExecutor::new(spec.clone(), self.num_workers)),
+            None => Arc::new(TokioExecutor::new(self.num_workers)),
+        };
         self
+    }
+
+    /// Run task code in a pool of `num_workers` worker processes instead of this process.
+    ///
+    /// Each worker speaks the JSON-lines protocol of the subprocess executor; the control
+    /// plane, heartbeats and recovery stay here. For Python this gives one interpreter, and
+    /// therefore one GIL, per worker.
+    pub fn with_subprocess_executor(mut self, spec: SubprocessSpec) -> Self {
+        self.control_plane.executor_kind = spec.kind;
+        self.executor = Arc::new(SubprocessExecutor::new(spec.clone(), self.num_workers));
+        self.subprocess = Some(spec);
+        self
+    }
+
+    /// Whether task code runs in worker processes.
+    pub fn uses_subprocess_executor(&self) -> bool {
+        self.subprocess.is_some()
     }
 
     pub fn num_workers(&self) -> usize {
@@ -211,9 +239,14 @@ impl PersistentTokioRunner {
     ) -> Self {
         let mut composite = CompositeEmitter::new();
         let prev = std::mem::replace(&mut self.emitter, Arc::new(NoopEmitter));
-        composite.add_sink(EventLevel::DistributedTracing, PrevEmitterWrapper(prev));
+        composite.add_shared_sink(EventLevel::DistributedTracing, prev);
         composite.add_sink(level, emitter);
         self.emitter = Arc::new(composite);
+        self
+    }
+
+    pub(crate) fn with_shared_event_emitter(mut self, emitter: Arc<dyn EventEmitter>) -> Self {
+        self.emitter = emitter;
         self
     }
 
@@ -285,7 +318,7 @@ impl Runner for PersistentTokioRunner {
         self.run_impl().instrument(runner_span).await
     }
 
-    /// Run one invocation using the main runner_id (for backward compatibility).
+    /// Enter a temporary worker session, poll once, and stop on empty, success or error.
     async fn run_one(&self) -> RustvelloResult<bool> {
         let ctx = RunnerContext::new_with_runtime(
             self.runner_id.clone(),
@@ -295,12 +328,7 @@ impl Runner for PersistentTokioRunner {
             self.control_plane.executor_kind,
         );
 
-        let runner_ctx = rustvello_core::state_backend::StoredRunnerContext::current_with_runtime(
-            self.runner_id.to_string(),
-            "PersistentTokioRunner",
-            self.control_plane.runner_language,
-            self.control_plane.executor_kind,
-        );
+        let runner_ctx = rustvello_core::state_backend::StoredRunnerContext::from_runtime(&ctx);
         if let Err(e) = self
             .control_plane
             .state_backend
@@ -310,8 +338,9 @@ impl Runner for PersistentTokioRunner {
             tracing::warn!("Failed to store runner context: {}", e);
         }
         let worker_runner_id = RunnerId::new();
+        let worker_ctx = ctx.new_child_with_cls(worker_runner_id.clone(), "PersistentTokioWorker");
         let worker_sb_ctx =
-            runner_ctx.new_child(worker_runner_id.to_string(), "PersistentTokioWorker");
+            rustvello_core::state_backend::StoredRunnerContext::from_runtime(&worker_ctx);
         if let Err(e) = self
             .control_plane
             .state_backend
@@ -324,7 +353,6 @@ impl Runner for PersistentTokioRunner {
                 e
             );
         }
-        let worker_ctx = ctx.new_child(worker_runner_id.clone());
 
         {
             let mut states = self
@@ -344,24 +372,38 @@ impl Runner for PersistentTokioRunner {
             tracing::warn!("run_one: worker heartbeat failed: {}", e);
         }
 
-        match self.control_plane.claim_next().await? {
-            Some(inv_id) => {
-                let result = self
-                    .execute_invocation(&inv_id, &worker_runner_id, &worker_ctx)
-                    .await;
-                if let Ok(mut states) = self.worker_states.lock() {
-                    states.remove(&worker_runner_id);
+        self.emitter
+            .on_worker_lifecycle(&WorkerLifecycleEvent::started(
+                WorkerTelemetryContext::from(&ctx),
+            ));
+        self.emitter
+            .on_worker_lifecycle(&WorkerLifecycleEvent::started(
+                WorkerTelemetryContext::from(&worker_ctx),
+            ));
+        let result = async {
+            match self.control_plane.claim_next().await? {
+                Some(inv_id) => {
+                    self.execute_invocation(&inv_id, &worker_runner_id, &worker_ctx)
+                        .await?;
+                    Ok(true)
                 }
-                result?;
-                Ok(true)
-            }
-            None => {
-                if let Ok(mut states) = self.worker_states.lock() {
-                    states.remove(&worker_runner_id);
-                }
-                Ok(false)
+                None => Ok(false),
             }
         }
+        .await;
+        self.worker_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&worker_runner_id);
+        self.emitter
+            .on_worker_lifecycle(&WorkerLifecycleEvent::stopped(
+                WorkerTelemetryContext::from(&worker_ctx),
+            ));
+        self.emitter
+            .on_worker_lifecycle(&WorkerLifecycleEvent::stopped(
+                WorkerTelemetryContext::from(&ctx),
+            ));
+        result
     }
 
     async fn shutdown(&self) -> RustvelloResult<()> {

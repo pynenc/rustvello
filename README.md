@@ -51,7 +51,7 @@ This is a **multi-crate Rust workspace** with Python bindings:
 | [`rustvello-mongo`](crates/rustvello-mongo/)           | MongoDB backend implementations (driver v3)                                                                                    |
 | [`rustvello-mongo3`](crates/rustvello-mongo3/)         | MongoDB backend implementations (driver v2 — legacy)                                                                           |
 | [`rustvello-rabbitmq`](crates/rustvello-rabbitmq/)     | RabbitMQ broker implementation                                                                                                 |
-| [`rustvello-prometheus`](crates/rustvello-prometheus/) | Prometheus metrics exporter                                                                                                    |
+| [`rustvello-otel`](crates/rustvello-otel/)             | Bounded OTLP lifecycle exporter                                                                                                |
 | [`rustvello-macros`](crates/rustvello-macros/)         | `#[rustvello::task]` proc-macro with 8 configuration attributes                                                                |
 | [`rustvello`](crates/rustvello/)                       | Main library — app builder, task runner, trigger builder, auto-discovery                                                       |
 | [`rustvello-cli`](crates/rustvello-cli/)               | CLI tool for running workers, inspecting status, and purging data                                                              |
@@ -96,13 +96,12 @@ Feature flags:
 - `mongodb` — MongoDB backends
 - `mongodb3` — MongoDB backends (legacy driver v2)
 - `rabbitmq` — RabbitMQ backends
-- `prometheus` — Prometheus metrics
 - `postgres` — PostgreSQL backends
 - `full` — all backends
 
 ```toml
 [dependencies]
-rustvello = { version = "0.5.0", features = ["full"] }
+rustvello = { version = "0.5.1", features = ["full"] }
 ```
 
 ### Python

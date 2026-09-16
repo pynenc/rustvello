@@ -1425,6 +1425,7 @@ async fn workflow_child_inherits_parent_workflow() {
         state_backend: Some(app.state_backend()),
         parent_invocation_id: None,
         num_retries: 0,
+        trace_context: Default::default(),
     };
 
     // Submit a child task from within the parent's context
@@ -1488,6 +1489,7 @@ async fn workflow_chain_shares_identity() {
         state_backend: Some(app.state_backend()),
         parent_invocation_id: None,
         num_retries: 0,
+        trace_context: Default::default(),
     };
 
     let inv1 = INVOCATION_CTX
@@ -1513,6 +1515,7 @@ async fn workflow_chain_shares_identity() {
         state_backend: Some(app.state_backend()),
         parent_invocation_id: Some(inv0.clone()),
         num_retries: 0,
+        trace_context: Default::default(),
     };
 
     let inv2 = INVOCATION_CTX
@@ -1582,6 +1585,7 @@ async fn explicit_child_workflow_creates_sub_workflow() {
         state_backend: Some(app.state_backend()),
         parent_invocation_id: None,
         num_retries: 0,
+        trace_context: Default::default(),
     };
 
     let child_inv_id = INVOCATION_CTX

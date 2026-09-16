@@ -265,6 +265,43 @@ impl StateBackendCore for MemStateBackend {
 
 #[async_trait]
 impl StateBackendQuery for MemStateBackend {
+    async fn get_workflow_run_offset(
+        &self,
+        workflow_type: &TaskId,
+        workflow_id: &InvocationId,
+    ) -> RustvelloResult<Option<usize>> {
+        let state = self.state.lock().await;
+        let Some(runs) = state.workflow_runs.get(&workflow_type.to_string()) else {
+            return Ok(None);
+        };
+        if !runs.iter().any(|run| run.workflow_id == *workflow_id) {
+            return Ok(None);
+        }
+        Ok(Some(
+            runs.iter()
+                .filter(|run| run.workflow_id.as_str() > workflow_id.as_str())
+                .count(),
+        ))
+    }
+
+    async fn get_workflow_invocations_page(
+        &self,
+        workflow_id: &InvocationId,
+        limit: usize,
+        offset: usize,
+    ) -> RustvelloResult<(Vec<InvocationId>, usize)> {
+        let state = self.state.lock().await;
+        let Some(members) = state.workflow_members.get(workflow_id.as_str()) else {
+            return Ok((Vec::new(), 0));
+        };
+        let mut ids = members.iter().collect::<Vec<_>>();
+        ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        Ok((
+            ids.into_iter().skip(offset).take(limit).cloned().collect(),
+            members.len(),
+        ))
+    }
+
     async fn get_workflow_invocations(
         &self,
         workflow_id: &InvocationId,

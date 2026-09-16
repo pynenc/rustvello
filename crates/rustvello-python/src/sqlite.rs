@@ -25,11 +25,39 @@ impl PySqliteDatabase {
     ///
     /// The `app_id` is embedded in the filename for per-application isolation.
     #[new]
-    fn new(path: &str, app_id: &str) -> PyResult<Self> {
-        let db = Database::open(path, app_id).map_err(to_py_err)?;
+    #[pyo3(signature = (path, app_id, *, synchronous="FULL", busy_timeout_ms=5000))]
+    fn new(path: &str, app_id: &str, synchronous: &str, busy_timeout_ms: u64) -> PyResult<Self> {
+        use rustvello_sqlite::db::{SqliteOptions, SqliteSynchronous};
+        let synchronous = match synchronous {
+            "FULL" => SqliteSynchronous::Full,
+            "NORMAL" => SqliteSynchronous::Normal,
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "SQLite synchronous must be FULL or NORMAL",
+                ))
+            }
+        };
+        let db = Database::open_with_options(
+            path,
+            app_id,
+            SqliteOptions {
+                synchronous,
+                busy_timeout: std::time::Duration::from_millis(busy_timeout_ms),
+            },
+        )
+        .map_err(to_py_err)?;
         Ok(Self {
             inner: Arc::new(db),
         })
+    }
+
+    fn synchronization(&self) -> PyResult<(String, u32, u32)> {
+        self.inner.synchronization().map_err(to_py_err)
+    }
+
+    #[staticmethod]
+    fn fault_injection_enabled() -> bool {
+        rustvello_sqlite::failpoints::enabled()
     }
 
     /// Create an in-memory SQLite database (useful for testing).

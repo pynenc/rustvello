@@ -195,8 +195,8 @@ Two options:
    app. Browse to `http://your-host:8000` for timelines, log explorer, and tables.
    See {doc}`monitoring/index`.
 
-2. **Prometheus** (`rustvello-prometheus`): Enable the `prometheus` feature and scrape
-   `/metrics`. Standard counters for invocation counts, status transitions, and durations.
+2. **OpenTelemetry** (`rustvello-otel`): Attach a bounded lifecycle emitter and
+   export OTLP/HTTP-Protobuf traces, logs, and low-cardinality completion metrics.
 
 ---
 

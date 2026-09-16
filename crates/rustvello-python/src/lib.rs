@@ -31,11 +31,14 @@ pub mod error;
 pub mod identifiers;
 pub mod invocation;
 pub mod logging;
+#[cfg(feature = "monitoring")]
+pub mod monitoring;
 pub mod orchestrator;
 pub mod runner;
 pub mod runtime;
 pub mod state_backend;
 pub mod status;
+mod telemetry;
 pub mod trigger;
 pub mod utils;
 pub mod workflow;

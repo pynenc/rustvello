@@ -91,6 +91,12 @@ impl<
 /// (purge / auto-purge).
 #[async_trait]
 pub trait OrchestratorStatus: Send + Sync {
+    fn runtime_publication(
+        &self,
+    ) -> Option<std::sync::Arc<dyn crate::publication::RuntimePublication>> {
+        None
+    }
+
     // --- Invocation registration ---
 
     /// Register a new invocation for the given call.

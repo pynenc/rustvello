@@ -53,7 +53,7 @@
           <th>Invocation ID</th>
           <th>Task</th>
           <th>Status</th>
-          <th>Children</th>
+          <th>Members</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -66,7 +66,7 @@
               class="text-decoration-none"
             >
               <code class="text-primary" title="{{ run.invocation_id }}"
-                >{{ run.short_id }}</code
+                >{{ run.invocation_id }}</code
               >
             </a>
           </td>
@@ -79,54 +79,30 @@
             <span class="badge {{ run.status_class }}">{{ run.status }}</span>
           </td>
           <td>
-            {% if run.child_count > 0 %}
-            <button
-              class="btn btn-sm btn-link p-0 text-info"
-              hx-get="/workflows/children/{{ run.invocation_id }}"
-              hx-target="#children-{{ run.short_id }}"
-              hx-swap="innerHTML"
-              onclick="this.closest('tr').nextElementSibling.classList.toggle('d-none'); this.innerHTML = this.innerHTML.includes('▶') ? '▼ {{ run.child_count }}' : '▶ {{ run.child_count }}'"
-            >
-              ▶ {{ run.child_count }}
-            </button>
-            {% else %}
-            <span class="badge bg-info">0</span>
-            {% endif %}
+            {{ run.member_count }}
           </td>
           <td>
             <a
-              href="/invocations/{{ run.invocation_id }}"
+              href="/workflows/{{ run.task_id }}/{{ run.invocation_id }}"
               class="btn btn-sm btn-outline-primary"
               >View</a
             >
             <a
-              href="/invocations?status=&task_id={{ run.task_id }}"
+              href="{{ run.invocations_url }}"
               class="btn btn-sm btn-outline-info"
               >Invocations</a
             >
+            <a href="{{ run.timeline_url }}" class="btn btn-sm btn-outline-success" title="Workflow timeline" aria-label="Workflow timeline"><span class="material-icons" style="font-size:16px">timeline</span></a>
           </td>
         </tr>
-        {% if run.child_count > 0 %}
-        <tr class="d-none" id="children-row-{{ run.short_id }}">
-          <td colspan="5" class="p-0">
-            <table class="table table-sm mb-0">
-              <tbody id="children-{{ run.short_id }}">
-                <tr>
-                  <td class="text-muted small ps-4">Loading...</td>
-                </tr>
-              </tbody>
-            </table>
-          </td>
-        </tr>
-        {% endif %} {% endfor %}
+        {% endfor %}
       </tbody>
     </table>
   </div>
   {% include "components/pagination.html" %}
   {% else %}
   <p class="text-muted small mb-0">
-    No workflow runs found. Workflow runs appear when invocations have child
-    invocations.
+    No workflow runs recorded.
   </p>
   {% endif %}
 </div>

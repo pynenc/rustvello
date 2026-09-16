@@ -125,6 +125,28 @@ impl Orchestrator {
                 let reroute = config_for_task(&inv_dto.task_id).is_some_and(|c| c.reroute_on_cc);
 
                 if reroute {
+                    if let Some(publication) = self.publication()? {
+                        let config =
+                            config_for_task(&inv_dto.task_id).expect("reroute config was resolved");
+                        match publication
+                            .change(
+                                &inv_id,
+                                runner_id,
+                                rustvello_core::publication::PublicationChange::ConcurrencyReroute(
+                                    rustvello_core::publication::PublicationRoute {
+                                        queue: config.queue.clone(),
+                                        priority: config.priority,
+                                    },
+                                ),
+                                false,
+                            )
+                            .await
+                        {
+                            Ok(_) | Err(RustvelloError::InvalidStatusTransition { .. }) => {}
+                            Err(error) => return Err(error),
+                        }
+                        continue;
+                    }
                     match self
                         .backends
                         .invocation_control

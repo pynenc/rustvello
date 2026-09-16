@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.5.1 - 2026-09-15
+
+- PostgreSQL TLS (`rustvello-postgres` feature `tls`, part of the wheel's
+  `all-backends`) now uses rustls (`tokio-postgres-rustls`, system roots through
+  `rustls-native-certs`) instead of native-tls/OpenSSL, so manylinux and
+  cross-compiled wheels build without a system OpenSSL. The `PostgresTlsOptions`
+  API is unchanged.
+- Fixed CI: the traced-replay Python test skips without `opentelemetry` (now also in
+  the dev group) and the OTLP remaining-budget test uses margins that hold on
+  slow runners.
+
+- Process-pool executor for Python task code (`SubprocessExecutor`,
+  `ExecutorKind::Python`): `App.run(num_processes=N, queues=[...])` and the
+  `python -m rustvello.worker module:app` launcher run one interpreter per worker
+  under the Rust control plane.
+- Standalone `App`: `backend="mongo3"`, `broker="rabbitmq"`, Mongo connection
+  parts, `retry_for`, `AppConfig.from_env()/from_file()` with settable fields,
+  runtime `dev_mode_force_sync`, `purge()`, `queue_depth()`, `get_task()`,
+  `current_invocation()`, `wait_results()`, `start_monitor()`, `config`.
+- Bindings: `start_monitor`/`MonitorServer`, `set_current_invocation_context`,
+  `clear_current_invocation_context`, `get_current_task_key`,
+  `TaskConfig.retry_for_errors`, `Rustvello.set_dev_mode_force_sync`, and the
+  queue-aware broker methods (`route_invocation_to_queue`, ...).
+- Failed invocations report `ErrorType: message` from the stored error.
+- Added SQLite atomic publication and idempotent Rust/Python submission,
+  explicit FULL/NORMAL synchronization, owner-fenced execution identity, and
+  native Python recovery configuration.
+- Preserved Python named-queue/priority routing through retries, rejected removed
+  ID reuse, and fenced stale-worker concurrency cleanup. Extended crash coverage
+  to permanent errors, terminal cleanup and original-carrier submission replay.
+- Persisted execution identities and known retry links across Rust/Python worker
+  processes; children inherit their parent's actual execution span.
+- Bounded OTLP request bytes and exporter teardown, and added adverse per-signal
+  delivery accounting tests.
+- Added SQLite delivery reservations/atomic claim acknowledgement, stale-owner
+  payload protection, strict app IDs and bounded runner shutdown.
+- Added bounded native lifecycle capture and `rustvello-otel` OTLP telemetry module.
+- Removed the former Prometheus crate, feature, dependencies, and release surface.
+
 ## 0.5.0 - 2026-09-04
 
 - Made task language a closed Rust enum and a structural part of `TaskId`, with

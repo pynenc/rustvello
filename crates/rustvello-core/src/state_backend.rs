@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use rustvello_proto::call::CallDTO;
-use rustvello_proto::identifiers::{CallId, ExecutorKind, InvocationId, TaskLanguage};
+use rustvello_proto::identifiers::{CallId, ExecutorKind, InvocationId, RunnerId, TaskLanguage};
 use rustvello_proto::invocation::{InvocationDTO, InvocationHistory};
 
 use crate::context::RunnerContext;
@@ -147,6 +147,10 @@ impl<T: StateBackendCore + StateBackendQuery + StateBackendRunner> StateBackend 
 /// All methods in this sub-trait are required (no defaults).
 #[async_trait]
 pub trait StateBackendCore: Send + Sync {
+    fn publication_domain(&self) -> Option<crate::publication::PublicationDomain> {
+        None
+    }
+
     // --- Invocation storage ---
 
     /// Store or update an invocation and its associated call.
@@ -168,6 +172,19 @@ pub trait StateBackendCore: Send + Sync {
     async fn store_result(&self, invocation_id: &InvocationId, result: &str)
         -> RustvelloResult<()>;
 
+    /// Store runner completion data, with backend-specific ownership fencing.
+    ///
+    /// The default preserves legacy storage behavior. The SQLite preset
+    /// overrides this to check Running ownership in the same write transaction.
+    async fn store_result_for_runner(
+        &self,
+        invocation_id: &InvocationId,
+        result: &str,
+        _runner_id: &RunnerId,
+    ) -> RustvelloResult<()> {
+        self.store_result(invocation_id, result).await
+    }
+
     /// Retrieve the result of a completed invocation.
     async fn get_result(&self, invocation_id: &InvocationId) -> RustvelloResult<Option<String>>;
 
@@ -177,6 +194,16 @@ pub trait StateBackendCore: Send + Sync {
         invocation_id: &InvocationId,
         error: &TaskError,
     ) -> RustvelloResult<()>;
+
+    /// Failure equivalent of `store_result_for_runner`; defaults to legacy storage.
+    async fn store_error_for_runner(
+        &self,
+        invocation_id: &InvocationId,
+        error: &TaskError,
+        _runner_id: &RunnerId,
+    ) -> RustvelloResult<()> {
+        self.store_error(invocation_id, error).await
+    }
 
     /// Retrieve error information for a failed invocation.
     async fn get_error(&self, invocation_id: &InvocationId) -> RustvelloResult<Option<TaskError>>;
@@ -222,6 +249,20 @@ pub trait StateBackendQuery: Send + Sync {
         &self,
         workflow_id: &InvocationId,
     ) -> RustvelloResult<Vec<InvocationId>>;
+
+    /// Read a bounded page of workflow members and their total count.
+    /// Backends should override this compatibility implementation to page in storage.
+    async fn get_workflow_invocations_page(
+        &self,
+        workflow_id: &InvocationId,
+        limit: usize,
+        offset: usize,
+    ) -> RustvelloResult<(Vec<InvocationId>, usize)> {
+        let mut ids = self.get_workflow_invocations(workflow_id).await?;
+        ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        let total = ids.len();
+        Ok((ids.into_iter().skip(offset).take(limit).collect(), total))
+    }
 
     /// Get direct child invocations of a parent invocation.
     async fn get_child_invocations(
@@ -269,6 +310,23 @@ pub trait StateBackendQuery: Send + Sync {
         let mut runs = self.get_workflow_runs(workflow_type).await?;
         runs.sort_by(|left, right| right.workflow_id.as_str().cmp(left.workflow_id.as_str()));
         Ok(runs.into_iter().skip(offset).take(limit).collect())
+    }
+
+    /// Offset of a run in the stable descending-ID run order, for deep links.
+    async fn get_workflow_run_offset(
+        &self,
+        workflow_type: &rustvello_proto::identifiers::TaskId,
+        workflow_id: &InvocationId,
+    ) -> RustvelloResult<Option<usize>> {
+        let runs = self.get_workflow_runs(workflow_type).await?;
+        if !runs.iter().any(|run| run.workflow_id == *workflow_id) {
+            return Ok(None);
+        }
+        Ok(Some(
+            runs.iter()
+                .filter(|run| run.workflow_id.as_str() > workflow_id.as_str())
+                .count(),
+        ))
     }
 
     // --- Workflow data (key-value store scoped to a workflow) ---

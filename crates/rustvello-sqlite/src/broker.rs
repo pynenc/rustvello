@@ -1,9 +1,11 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
+use rusqlite::OptionalExtension;
 
 use rustvello_core::broker::{validate_routing, Broker, DEFAULT_QUEUE};
-use rustvello_core::error::RustvelloResult;
+use rustvello_core::error::{RustvelloError, RustvelloResult};
 use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
 
 use crate::db::{blocking, lock_err, sql_err, Database};
@@ -11,16 +13,107 @@ use crate::db::{blocking, lock_err, sql_err, Database};
 /// SQLite-backed broker with atomic named-queue priority retrieval.
 pub struct SqliteBroker {
     db: Arc<Database>,
+    reservation_lease: Duration,
 }
 
 impl SqliteBroker {
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self {
+            db,
+            reservation_lease: Duration::from_secs(60),
+        }
+    }
+
+    /// Set the durable dequeue lease (100ms..=1h; default 60s).
+    ///
+    /// All consumers should use the same setting. The SQLite orchestrator
+    /// acknowledges delivery atomically when Pending commits. Without that
+    /// acknowledgment, a later broker poll redelivers after this wall-clock
+    /// lease expires. Lease expiry never changes invocation status or owner.
+    pub fn with_reservation_lease(mut self, lease: Duration) -> RustvelloResult<Self> {
+        if !(Duration::from_millis(100)..=Duration::from_secs(3600)).contains(&lease) {
+            return Err(RustvelloError::Configuration {
+                message: "SQLite reservation lease must be between 100ms and 1h".into(),
+            });
+        }
+        self.reservation_lease = lease;
+        Ok(self)
+    }
+
+    async fn reserve(
+        &self,
+        queue: &str,
+        task: Option<&TaskId>,
+        language: Option<TaskLanguage>,
+    ) -> RustvelloResult<Option<InvocationId>> {
+        validate_routing(queue, 0.0)?;
+        let db = Arc::clone(&self.db);
+        let queue = queue.to_owned();
+        let task = task.map(ToString::to_string);
+        let language = language.map(|l| l.to_string());
+        let lease_ms = self.reservation_lease.as_millis() as i64;
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let tx = rusqlite::Transaction::new_unchecked(
+                &conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )
+            .map_err(sql_err)?;
+            // Bound cleanup per poll. A duplicate publication for an owned or
+            // terminal invocation must not redeliver forever after lease expiry.
+            tx.execute(
+                "DELETE FROM broker_queue WHERE id IN (
+                    SELECT q.id FROM broker_queue q JOIN status_records s
+                        ON s.invocation_id = q.invocation_id
+                    WHERE q.queue_name = ?1
+                      AND s.status NOT IN ('REGISTERED', 'RETRY', 'REROUTED')
+                    LIMIT 128)",
+                [&queue],
+            )
+            .map_err(sql_err)?;
+            let now = chrono::Utc::now().timestamp_millis();
+            let row: Option<(i64, String)> = tx
+                .query_row(
+                    "SELECT q.id, q.invocation_id FROM broker_queue q
+                 LEFT JOIN broker_reservations r ON r.queue_id = q.id
+                 WHERE q.queue_name = ?1
+                   AND (?2 IS NULL OR q.task_id = ?2)
+                   AND (?3 IS NULL OR (q.task_id IS NULL AND ?3 = 'rust')
+                        OR q.task_id LIKE ?3 || '::%')
+                   AND (r.queue_id IS NULL OR r.expires_at_ms <= ?4)
+                   AND NOT EXISTS (SELECT 1 FROM status_records s
+                        WHERE s.invocation_id = q.invocation_id
+                          AND s.status NOT IN ('REGISTERED', 'RETRY', 'REROUTED'))
+                 ORDER BY q.priority DESC, q.id ASC LIMIT 1",
+                    rusqlite::params![queue, task, language, now],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(sql_err)?;
+            if let Some((row_id, invocation_id)) = row {
+                tx.execute(
+                    "INSERT INTO broker_reservations (queue_id, expires_at_ms) VALUES (?1, ?2)
+                     ON CONFLICT(queue_id) DO UPDATE SET expires_at_ms = excluded.expires_at_ms",
+                    rusqlite::params![row_id, now + lease_ms],
+                )
+                .map_err(sql_err)?;
+                tx.commit().map_err(sql_err)?;
+                Ok(Some(InvocationId::from_string(invocation_id)))
+            } else {
+                tx.commit().map_err(sql_err)?;
+                Ok(None)
+            }
+        })
+        .await
     }
 }
 
 #[async_trait]
 impl Broker for SqliteBroker {
+    fn publication_domain(&self) -> Option<rustvello_core::publication::PublicationDomain> {
+        Some(Arc::clone(&self.db.domain))
+    }
+
     async fn route_invocation_with_options(
         &self,
         invocation_id: &InvocationId,
@@ -65,43 +158,7 @@ impl Broker for SqliteBroker {
         queue_name: &str,
         task_id: Option<&TaskId>,
     ) -> RustvelloResult<Option<InvocationId>> {
-        validate_routing(queue_name, 0.0)?;
-        let db = Arc::clone(&self.db);
-        let queue_name = queue_name.to_owned();
-        let task_id = task_id.map(ToString::to_string);
-        blocking(move || {
-            let conn = db.conn.lock().map_err(lock_err)?;
-            let tx = conn.unchecked_transaction().map_err(sql_err)?;
-            let row: Option<(i64, String)> = match task_id {
-                Some(task_id) => tx
-                    .query_row(
-                        "SELECT id, invocation_id FROM broker_queue \
-                         WHERE queue_name = ?1 AND task_id = ?2 \
-                         ORDER BY priority DESC, id ASC LIMIT 1",
-                        rusqlite::params![queue_name, task_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .ok(),
-                None => tx
-                    .query_row(
-                        "SELECT id, invocation_id FROM broker_queue \
-                         WHERE queue_name = ?1 \
-                         ORDER BY priority DESC, id ASC LIMIT 1",
-                        [queue_name],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .ok(),
-            };
-            if let Some((row_id, invocation_id)) = row {
-                tx.execute("DELETE FROM broker_queue WHERE id = ?1", [row_id])
-                    .map_err(sql_err)?;
-                tx.commit().map_err(sql_err)?;
-                Ok(Some(InvocationId::from_string(invocation_id)))
-            } else {
-                Ok(None)
-            }
-        })
-        .await
+        self.reserve(queue_name, task_id, None).await
     }
 
     async fn retrieve_invocation(
@@ -117,34 +174,7 @@ impl Broker for SqliteBroker {
         language: TaskLanguage,
         queue_name: &str,
     ) -> RustvelloResult<Option<InvocationId>> {
-        validate_routing(queue_name, 0.0)?;
-        let db = Arc::clone(&self.db);
-        let language = language.to_string();
-        let queue_name = queue_name.to_owned();
-        blocking(move || {
-            let conn = db.conn.lock().map_err(lock_err)?;
-            let tx = conn.unchecked_transaction().map_err(sql_err)?;
-            let prefix = format!("{language}::%");
-            let row: Option<(i64, String)> = tx
-                .query_row(
-                    "SELECT id, invocation_id FROM broker_queue \
-                     WHERE queue_name = ?1 \
-                       AND ((task_id IS NULL AND ?2 = 'rust') OR task_id LIKE ?3) \
-                     ORDER BY priority DESC, id ASC LIMIT 1",
-                    rusqlite::params![queue_name, language, prefix],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok();
-            if let Some((row_id, invocation_id)) = row {
-                tx.execute("DELETE FROM broker_queue WHERE id = ?1", [row_id])
-                    .map_err(sql_err)?;
-                tx.commit().map_err(sql_err)?;
-                Ok(Some(InvocationId::from_string(invocation_id)))
-            } else {
-                Ok(None)
-            }
-        })
-        .await
+        self.reserve(queue_name, None, Some(language)).await
     }
 
     async fn retrieve_invocation_for_language(
@@ -168,41 +198,29 @@ impl Broker for SqliteBroker {
         let task_id = task_id.map(ToString::to_string);
         blocking(move || {
             let conn = db.conn.lock().map_err(lock_err)?;
-            let count: i64 = match (queue_names.is_empty(), task_id) {
-                (true, None) => conn
-                    .query_row("SELECT COUNT(*) FROM broker_queue", [], |row| row.get(0))
-                    .map_err(sql_err)?,
-                (true, Some(task_id)) => conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM broker_queue WHERE task_id = ?1",
-                        [task_id],
-                        |row| row.get(0),
-                    )
-                    .map_err(sql_err)?,
-                (false, task_id) => {
-                    let mut count = 0i64;
-                    for queue_name in queue_names {
-                        count += match &task_id {
-                            Some(task_id) => conn
-                                .query_row(
-                                    "SELECT COUNT(*) FROM broker_queue \
-                                     WHERE queue_name = ?1 AND task_id = ?2",
-                                    rusqlite::params![queue_name, task_id],
-                                    |row| row.get::<_, i64>(0),
-                                )
-                                .map_err(sql_err)?,
-                            None => conn
-                                .query_row(
-                                    "SELECT COUNT(*) FROM broker_queue WHERE queue_name = ?1",
-                                    [queue_name],
-                                    |row| row.get::<_, i64>(0),
-                                )
-                                .map_err(sql_err)?,
-                        };
-                    }
-                    count
-                }
+            let queues = if queue_names.is_empty() {
+                vec![None]
+            } else {
+                queue_names.into_iter().map(Some).collect()
             };
+            let now = chrono::Utc::now().timestamp_millis();
+            let mut count = 0i64;
+            for queue in queues {
+                count += conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM broker_queue q
+                     LEFT JOIN broker_reservations r ON r.queue_id = q.id
+                     WHERE (?1 IS NULL OR q.queue_name = ?1)
+                       AND (?2 IS NULL OR q.task_id = ?2)
+                       AND (r.queue_id IS NULL OR r.expires_at_ms <= ?3)
+                       AND NOT EXISTS (SELECT 1 FROM status_records s
+                            WHERE s.invocation_id = q.invocation_id
+                              AND s.status NOT IN ('REGISTERED', 'RETRY', 'REROUTED'))",
+                        rusqlite::params![queue, task_id, now],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(sql_err)?;
+            }
             Ok(count as usize)
         })
         .await
@@ -259,5 +277,55 @@ mod tests {
         broker.route_invocation(&InvocationId::new()).await.unwrap();
         broker.purge(None).await.unwrap();
         assert_eq!(broker.count_invocations(None).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn file_lock_errors_are_visible_and_app_local() {
+        let dir = std::env::temp_dir().join(format!("sqlite-lock-{}", InvocationId::new()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("backend.db");
+        let locked = Database::open(&path, "a").unwrap();
+        let same_app = Arc::new(Database::open(&path, "a").unwrap());
+        let other_app = Arc::new(Database::open(&path, "b").unwrap());
+        same_app
+            .conn
+            .lock()
+            .unwrap()
+            .busy_timeout(std::time::Duration::from_millis(20))
+            .unwrap();
+        locked
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch("BEGIN IMMEDIATE")
+            .unwrap();
+
+        let same = SqliteBroker::new(Arc::clone(&same_app));
+        let other = SqliteBroker::new(Arc::clone(&other_app));
+        let id = InvocationId::new();
+        let task = TaskId::new("locked", "task");
+        assert!(same.route_invocation(&id).await.is_err());
+        assert!(same.retrieve_invocation(None).await.is_err());
+        assert!(same.retrieve_invocation(Some(&task)).await.is_err());
+        assert!(same
+            .retrieve_invocation_for_language(TaskLanguage::Rust)
+            .await
+            .is_err());
+        other.route_invocation(&id).await.unwrap();
+        assert_eq!(
+            other.retrieve_invocation(None).await.unwrap(),
+            Some(id.clone())
+        );
+
+        locked
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch("ROLLBACK")
+            .unwrap();
+        same.route_invocation(&id).await.unwrap();
+        assert_eq!(same.retrieve_invocation(None).await.unwrap(), Some(id));
+        drop((same, other, same_app, other_app, locked));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -76,7 +76,7 @@ publish:  ## Publish rustvello crates (in dependency order)
 	cargo publish -p rustvello-postgres
 	cargo publish -p rustvello-mongo
 	cargo publish -p rustvello-rabbitmq
-	cargo publish -p rustvello-prometheus
+	cargo publish -p rustvello-otel
 	sleep 30
 	cargo publish -p rustvello
 	cargo publish -p rustvello-monitoring

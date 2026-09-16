@@ -122,7 +122,7 @@ jobs:
           publish rustvello-mongo
           publish rustvello-mongo3
           publish rustvello-rabbitmq
-          publish rustvello-prometheus
+          publish rustvello-otel
 
           # Layer 3: depends on core + backends
           publish rustvello
