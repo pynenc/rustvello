@@ -5,10 +5,18 @@
 
 pub mod broker;
 pub mod client_data_store;
+mod completion;
 pub mod db;
+pub mod failpoints;
 pub mod orchestrator;
+mod publication;
+#[cfg(test)]
+mod publication_tests;
 pub mod state_backend;
 pub mod trigger;
+
+#[cfg(test)]
+mod reservation_tests;
 
 pub mod prelude {
     pub use crate::broker::SqliteBroker;

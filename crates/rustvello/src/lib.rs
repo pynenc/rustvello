@@ -54,10 +54,6 @@ pub use rustvello_mem as mem;
 #[cfg_attr(docsrs, doc(cfg(feature = "sqlite")))]
 pub use rustvello_sqlite as sqlite;
 
-#[cfg(feature = "prometheus")]
-#[cfg_attr(docsrs, doc(cfg(feature = "prometheus")))]
-pub use rustvello_prometheus as prometheus;
-
 #[cfg(feature = "postgres")]
 #[cfg_attr(docsrs, doc(cfg(feature = "postgres")))]
 pub use rustvello_postgres as postgres;

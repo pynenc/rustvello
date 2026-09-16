@@ -25,7 +25,9 @@ use std::sync::Arc;
 use rustvello_core::broker::Broker;
 use rustvello_core::client_data_store::ClientDataStoreManager;
 use rustvello_core::error::{RustvelloResult, TaskError};
+use rustvello_core::observability::{EventEmitter, NoopEmitter};
 use rustvello_core::orchestrator::InvocationControlBackend;
+use rustvello_core::publication::{PublicationChange, PublicationRoute, RuntimePublication};
 use rustvello_core::state_backend::StateBackend;
 use rustvello_core::trigger::TriggerManager;
 use rustvello_proto::call::CallDTO;
@@ -46,6 +48,7 @@ pub struct Orchestrator {
     backends: backends::RuntimeBackends,
     stored_runner_cache: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
     auto_purge_delay_secs: u64,
+    event_emitter: Arc<dyn EventEmitter>,
 }
 
 /// Named ports transferred from the application composition root to a runner.
@@ -54,6 +57,7 @@ pub(crate) struct RunnerPorts {
     pub(crate) invocation_control: Arc<dyn InvocationControlBackend>,
     pub(crate) state_backend: Arc<dyn StateBackend>,
     pub(crate) trigger_manager: Option<TriggerManager>,
+    pub(crate) event_emitter: Arc<dyn EventEmitter>,
 }
 
 /// Convert a purge duration in fractional hours to whole seconds.
@@ -82,6 +86,61 @@ fn hours_to_purge_secs(hours: f64) -> u64 {
 }
 
 impl Orchestrator {
+    pub(crate) async fn begin_execution(
+        &self,
+        id: &InvocationId,
+        runner: &RunnerId,
+        retries: u32,
+        incoming: &rustvello_proto::invocation::TraceContextCarrier,
+    ) -> RustvelloResult<rustvello_proto::invocation::ExecutionAttemptIdentity> {
+        if let Some(publication) = self.publication()? {
+            publication
+                .begin_execution(id, runner, retries, incoming)
+                .await
+        } else {
+            rustvello_core::execution::begin_execution(
+                self.backends.state_backend.as_ref(),
+                id,
+                retries,
+                incoming,
+            )
+            .await
+        }
+    }
+
+    fn publication(&self) -> RustvelloResult<Option<Arc<dyn RuntimePublication>>> {
+        let Some(publication) = self.backends.invocation_control.runtime_publication() else {
+            return Ok(None);
+        };
+        let domain = publication.domain();
+        if self
+            .backends
+            .broker
+            .publication_domain()
+            .is_none_or(|d| d != domain)
+            || self
+                .backends
+                .state_backend
+                .publication_domain()
+                .is_none_or(|d| d != domain)
+        {
+            return Err(rustvello_core::error::RustvelloError::Configuration {
+                message: "atomic publication requires broker, control and state ports from one Database transaction domain; mixed backends are not qualified".into(),
+            });
+        }
+        Ok(Some(publication))
+    }
+
+    /// Fail closed when a consumer requests the crash-consistent runtime API.
+    pub fn require_crash_consistent_publication(&self) -> RustvelloResult<()> {
+        self.publication()?.ok_or_else(|| {
+            rustvello_core::error::RustvelloError::Configuration {
+                message: "backend does not support crash-consistent runtime publication".into(),
+            }
+        })?;
+        Ok(())
+    }
+
     /// Create an orchestrator from shared backend references.
     pub fn new(
         orchestrator: Arc<dyn InvocationControlBackend>,
@@ -103,6 +162,7 @@ impl Orchestrator {
                 tokio::sync::Mutex::new(std::collections::HashSet::new()),
             ),
             auto_purge_delay_secs: hours_to_purge_secs(auto_purge_hours),
+            event_emitter: Arc::new(NoopEmitter),
         }
     }
 
@@ -124,6 +184,7 @@ impl Orchestrator {
                 tokio::sync::Mutex::new(std::collections::HashSet::new()),
             ),
             auto_purge_delay_secs: hours_to_purge_secs(auto_purge_hours),
+            event_emitter: Arc::new(NoopEmitter),
         }
     }
 
@@ -151,6 +212,14 @@ impl Orchestrator {
         self.backends.trigger_manager = Some(manager);
     }
 
+    pub(crate) fn event_emitter(&self) -> Arc<dyn EventEmitter> {
+        Arc::clone(&self.event_emitter)
+    }
+
+    pub(crate) fn set_event_emitter(&mut self, emitter: Arc<dyn EventEmitter>) {
+        self.event_emitter = emitter;
+    }
+
     pub(crate) async fn purge(&self) -> RustvelloResult<()> {
         self.backends.invocation_control.purge().await?;
         self.backends.broker.purge(None).await?;
@@ -167,6 +236,7 @@ impl Orchestrator {
             invocation_control: self.backends.invocation_control,
             state_backend: self.backends.state_backend,
             trigger_manager: self.backends.trigger_manager,
+            event_emitter: self.event_emitter,
         }
     }
 
@@ -181,10 +251,15 @@ impl Orchestrator {
             .await
     }
 
-    pub(crate) async fn release_concurrency_slot(
+    pub(crate) async fn release_nontransactional_concurrency_slot(
         &self,
         invocation_id: &InvocationId,
     ) -> RustvelloResult<()> {
+        // Transactional publication releases slots under the ownership fence.
+        // An executor-side delete could remove a replacement owner's slot.
+        if self.publication()?.is_some() {
+            return Ok(());
+        }
         self.backends
             .invocation_control
             .remove_from_concurrency_index(invocation_id)
@@ -258,6 +333,20 @@ impl Orchestrator {
         task_id: &TaskId,
         arguments: BTreeMap<String, String>,
     ) -> RustvelloResult<InvocationStatusRecord> {
+        if let Some(publication) = self.publication()? {
+            let record = publication
+                .change(
+                    invocation_id,
+                    runner_id,
+                    PublicationChange::Status(status),
+                    self.auto_purge_delay_secs > 0,
+                )
+                .await?
+                .expect("ordinary status publication always returns a record");
+            self.report_published_status(invocation_id, runner_id, status, task_id, arguments)
+                .await?;
+            return Ok(record);
+        }
         // 1. Atomic status transition
         let record = self
             .backends
@@ -319,6 +408,38 @@ impl Orchestrator {
             return Err(rustvello_core::error::RustvelloError::Internal {
                 message: "invocation and routing counts differ".to_owned(),
             });
+        }
+        if let Some(publication) = self.publication()? {
+            for ((invocation, call), (queue, priority)) in invocations.iter().zip(routes) {
+                let created = publication
+                    .submit(rustvello_core::publication::SubmissionPublication {
+                        invocation: invocation.clone(),
+                        call: call.clone(),
+                        runner_id: runner_id.clone(),
+                        runner_context: None,
+                        workflow_root: invocation
+                            .workflow
+                            .as_ref()
+                            .is_some_and(|w| w.workflow_id == invocation.invocation_id),
+                        cc_arguments: None,
+                        route: PublicationRoute {
+                            queue: queue.clone(),
+                            priority: *priority,
+                        },
+                    })
+                    .await?;
+                if created {
+                    self.report_published_status(
+                        &invocation.invocation_id,
+                        runner_id,
+                        InvocationStatus::Registered,
+                        &call.task_id,
+                        call.serialized_arguments.0.clone(),
+                    )
+                    .await?;
+                }
+            }
+            return Ok(());
         }
         for (inv_dto, call_dto) in invocations {
             self.backends
@@ -401,19 +522,38 @@ impl Orchestrator {
         task_id: &TaskId,
         arguments: BTreeMap<String, String>,
     ) -> RustvelloResult<()> {
-        self.backends
-            .state_backend
-            .store_result(invocation_id, result)
+        if let Some(publication) = self.publication()? {
+            publication
+                .change(
+                    invocation_id,
+                    runner_id,
+                    PublicationChange::Success(result.to_owned()),
+                    self.auto_purge_delay_secs > 0,
+                )
+                .await?;
+            self.report_published_status(
+                invocation_id,
+                runner_id,
+                InvocationStatus::Success,
+                task_id,
+                arguments.clone(),
+            )
             .await?;
+        } else {
+            self.backends
+                .state_backend
+                .store_result_for_runner(invocation_id, result, runner_id)
+                .await?;
 
-        self.set_invocation_status_with_context(
-            invocation_id,
-            InvocationStatus::Success,
-            runner_id,
-            task_id,
-            arguments.clone(),
-        )
-        .await?;
+            self.set_invocation_status_with_context(
+                invocation_id,
+                InvocationStatus::Success,
+                runner_id,
+                task_id,
+                arguments.clone(),
+            )
+            .await?;
+        }
 
         // Trigger result notification
         if let Some(ref tm) = self.backends.trigger_manager {
@@ -484,19 +624,38 @@ impl Orchestrator {
             message: error_message.to_owned(),
             traceback: None,
         };
-        self.backends
-            .state_backend
-            .store_error(invocation_id, &task_error)
+        if let Some(publication) = self.publication()? {
+            publication
+                .change(
+                    invocation_id,
+                    runner_id,
+                    PublicationChange::Failure(task_error),
+                    self.auto_purge_delay_secs > 0,
+                )
+                .await?;
+            self.report_published_status(
+                invocation_id,
+                runner_id,
+                InvocationStatus::Failed,
+                task_id,
+                arguments.clone(),
+            )
             .await?;
+        } else {
+            self.backends
+                .state_backend
+                .store_error_for_runner(invocation_id, &task_error, runner_id)
+                .await?;
 
-        self.set_invocation_status_with_context(
-            invocation_id,
-            InvocationStatus::Failed,
-            runner_id,
-            task_id,
-            arguments.clone(),
-        )
-        .await?;
+            self.set_invocation_status_with_context(
+                invocation_id,
+                InvocationStatus::Failed,
+                runner_id,
+                task_id,
+                arguments.clone(),
+            )
+            .await?;
+        }
 
         if let Some(ref tm) = self.backends.trigger_manager {
             let ctx = rustvello_proto::trigger::ExceptionContext {
@@ -556,6 +715,28 @@ impl Orchestrator {
         queue_name: &str,
         priority: f64,
     ) -> RustvelloResult<()> {
+        if let Some(publication) = self.publication()? {
+            publication
+                .change(
+                    invocation_id,
+                    runner_id,
+                    PublicationChange::Retry(PublicationRoute {
+                        queue: queue_name.into(),
+                        priority,
+                    }),
+                    false,
+                )
+                .await?;
+            return self
+                .report_published_status(
+                    invocation_id,
+                    runner_id,
+                    InvocationStatus::Retry,
+                    task_id,
+                    arguments,
+                )
+                .await;
+        }
         self.set_invocation_status_with_context(
             invocation_id,
             InvocationStatus::Retry,
@@ -620,5 +801,24 @@ impl Orchestrator {
             Err(_) => BTreeMap::new(),
         };
         (inv_dto.task_id, args)
+    }
+    async fn report_published_status(
+        &self,
+        invocation_id: &InvocationId,
+        _runner_id: &RunnerId,
+        status: InvocationStatus,
+        task_id: &TaskId,
+        arguments: BTreeMap<String, String>,
+    ) -> RustvelloResult<()> {
+        if let Some(tm) = &self.backends.trigger_manager {
+            tm.report_status_change(&rustvello_proto::trigger::StatusContext {
+                invocation_id: invocation_id.clone(),
+                task_id: task_id.clone(),
+                status,
+                arguments,
+            })
+            .await?;
+        }
+        Ok(())
     }
 }

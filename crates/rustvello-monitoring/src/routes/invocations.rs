@@ -430,8 +430,8 @@ async fn list(
     Query(query): Query<InvocationListQuery>,
 ) -> AppResult<impl IntoResponse> {
     let app = get_active_app(&state)?;
-    let page = query.page.unwrap_or(1);
-    let limit = query.limit.unwrap_or(50).min(200);
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let history_status_mode = query.status_mode.as_deref() == Some("history");
     let requested_ids = parse_invocation_scope(query.inv_ids.as_deref());
     let time_window = if query.time_range.as_deref() == Some("custom") {
@@ -486,6 +486,14 @@ async fn list(
         .task_id
         .as_deref()
         .is_none_or(|value| value.is_empty() || task_ids.len() == 1);
+    let workflow_paginated = requested_ids.is_none()
+        && time_window.is_none()
+        && query
+            .workflow_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
+        && query.task_id.as_deref().is_none_or(str::is_empty)
+        && !has_requested_status;
     let backend_paginated = requested_ids.is_none()
         && time_window.is_none()
         && !has_workflow_filter
@@ -494,7 +502,38 @@ async fn list(
         && (!has_requested_status || !selected_status_values.is_empty());
     let mut exact_total = None;
 
-    if backend_paginated {
+    if workflow_paginated {
+        let workflow_id = rustvello_proto::identifiers::InvocationId::from_string(
+            query.workflow_id.clone().unwrap_or_default(),
+        );
+        let (mut ids, mut total) = app
+            .state_backend
+            .get_workflow_invocations_page(
+                &workflow_id,
+                limit,
+                page.saturating_sub(1).saturating_mul(limit),
+            )
+            .await
+            .map_err(|error| {
+                crate::util::view_helpers::render_error(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    &error.to_string(),
+                )
+            })?;
+        if let Some(workflow_type) = query
+            .workflow_type
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            let root = app.state_backend.get_invocation(&workflow_id).await.ok();
+            if root.is_none_or(|root| root.task_id.to_string() != workflow_type) {
+                ids.clear();
+                total = 0;
+            }
+        }
+        exact_total = Some(total);
+        invocations = load_invocation_rows(&app, ids, list_scope(&query, Vec::new())).await;
+    } else if backend_paginated {
         let task_filter = (task_ids.len() == 1).then_some(&task_ids[0]);
         let statuses =
             (!selected_status_values.is_empty()).then_some(selected_status_values.as_slice());
@@ -512,7 +551,7 @@ async fn list(
             load_invocation_rows(&app, invocation_ids, list_scope(&query, Vec::new())).await;
     }
 
-    'outer: for tid in if backend_paginated {
+    'outer: for tid in if backend_paginated || workflow_paginated {
         &[]
     } else {
         task_ids.as_slice()
@@ -644,7 +683,7 @@ async fn list(
 
     // Paginate
     let start = (page - 1) * limit;
-    let paginated: Vec<InvocationRowView> = if backend_paginated {
+    let paginated: Vec<InvocationRowView> = if backend_paginated || workflow_paginated {
         invocations
     } else {
         invocations.into_iter().skip(start).take(limit).collect()

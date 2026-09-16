@@ -209,6 +209,7 @@ fn workflow_context(
         state_backend: Some(sb),
         parent_invocation_id: None,
         num_retries: 0,
+        trace_context: Default::default(),
     }
 }
 
@@ -359,6 +360,7 @@ async fn workflow_root_rejects_ordinary_task() {
         state_backend: Some(sb),
         parent_invocation_id: None,
         num_retries: 0,
+        trace_context: Default::default(),
     };
 
     let error = INVOCATION_CTX

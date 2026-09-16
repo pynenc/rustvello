@@ -14,6 +14,14 @@ use crate::connection::redis_err;
 
 #[async_trait]
 impl OrchestratorStatus for RedisOrchestrator {
+    fn runtime_publication(
+        &self,
+    ) -> Option<std::sync::Arc<dyn rustvello_core::publication::RuntimePublication>> {
+        Some(std::sync::Arc::new(
+            crate::publication::RedisPublication::new(std::sync::Arc::clone(&self.pool)),
+        ))
+    }
+
     async fn register_invocation(&self, call: &CallDTO) -> RustvelloResult<InvocationId> {
         let inv_id = InvocationId::new();
         let record = InvocationStatusRecord {

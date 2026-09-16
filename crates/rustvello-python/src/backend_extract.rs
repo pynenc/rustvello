@@ -102,6 +102,10 @@ pub fn extract_broker(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn Broker>> {
     if let Ok(r) = obj.extract::<PyRef<'_, crate::mongo3::PyMongo3Broker>>() {
         return Ok(Arc::clone(&r.inner) as Arc<dyn Broker>);
     }
+    #[cfg(feature = "rabbitmq")]
+    if let Ok(r) = obj.extract::<PyRef<'_, crate::rabbitmq::PyRabbitmqBroker>>() {
+        return Ok(Arc::clone(&r.inner) as Arc<dyn Broker>);
+    }
     Err(pyo3::exceptions::PyTypeError::new_err(
         "unsupported broker backend type",
     ))

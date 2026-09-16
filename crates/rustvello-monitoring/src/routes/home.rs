@@ -68,28 +68,23 @@ async fn index(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
     ];
 
     let mut invocation_counts = Vec::new();
-    let mut total_invocations: usize = 0;
-    let mut runner_count: usize = 0;
+    let total_invocations = app
+        .orchestrator
+        .count_invocations(None, None)
+        .await
+        .unwrap_or(0);
+    let runner_count = app
+        .orchestrator
+        .get_active_runners(app.config.runner_dead_after_seconds, None)
+        .await
+        .unwrap_or_default()
+        .len();
     for status in &statuses {
-        let ids = app
+        let count = app
             .orchestrator
-            .get_invocations_by_status(*status, None)
+            .count_invocations(None, Some(std::slice::from_ref(status)))
             .await
-            .unwrap_or_default();
-        let count = ids.len();
-        if *status == InvocationStatus::Running {
-            // Count unique runners from running invocations
-            let mut runner_set = std::collections::HashSet::new();
-            for inv_id in &ids {
-                if let Ok(record) = app.orchestrator.get_invocation_status(inv_id).await {
-                    if let Some(ref rid) = record.runner_id {
-                        runner_set.insert(rid.to_string());
-                    }
-                }
-            }
-            runner_count = runner_set.len();
-        }
-        total_invocations += count;
+            .unwrap_or(0);
         let color = status_colors::hex_color(status);
         invocation_counts.push((format!("{status:?}"), count, color.to_owned()));
     }

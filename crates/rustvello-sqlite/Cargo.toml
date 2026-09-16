@@ -9,6 +9,9 @@ repository.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+fault-injection = []
+
 [dependencies]
 rustvello-core = { workspace = true }
 rustvello-proto = { workspace = true }

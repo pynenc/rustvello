@@ -16,6 +16,7 @@ use rustvello_python::mongo3::{
     PyMongo3Broker, PyMongo3ClientDataStore, PyMongo3Orchestrator, PyMongo3Pool,
     PyMongo3StateBackend, PyMongo3TriggerStore,
 };
+use rustvello_python::monitoring::{start_monitor, PyMonitorServer};
 use rustvello_python::orchestrator::PyMemOrchestrator;
 use rustvello_python::postgres::{
     PyPostgresBroker, PyPostgresClientDataStore, PyPostgresDatabase, PyPostgresOrchestrator,
@@ -36,6 +37,9 @@ use rustvello_python::status::{
     status_from_serde, status_to_serde, PyConcurrencyControlType, PyInvocationStatus,
 };
 use rustvello_python::trigger::PyMemTriggerStore;
+use rustvello_python::utils::{
+    clear_current_invocation_context, get_current_task_key, set_current_invocation_context,
+};
 use rustvello_python::workflow::PyWorkflowRoot;
 
 #[pymodule]
@@ -119,6 +123,11 @@ fn rustvello(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
 
     // Workflow
     m.add_class::<PyWorkflowRoot>()?;
+    m.add_class::<PyMonitorServer>()?;
+    m.add_function(wrap_pyfunction!(start_monitor, m)?)?;
+    m.add_function(wrap_pyfunction!(get_current_task_key, m)?)?;
+    m.add_function(wrap_pyfunction!(set_current_invocation_context, m)?)?;
+    m.add_function(wrap_pyfunction!(clear_current_invocation_context, m)?)?;
 
     #[pyfunction]
     fn get_version() -> &'static str {
@@ -133,6 +142,11 @@ fn rustvello(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(
         rustvello_python::utils::get_current_num_retries,
+        m
+    )?)?;
+
+    m.add_function(wrap_pyfunction!(
+        rustvello_python::utils::get_current_trace_context,
         m
     )?)?;
 

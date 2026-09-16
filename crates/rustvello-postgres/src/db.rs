@@ -1,6 +1,9 @@
 //! PostgreSQL database wrapper with connection pooling and schema initialization.
 
+use crate::bounded::Client;
 use deadpool_postgres::Pool;
+use std::{fmt, sync::Arc, time::Duration};
+use tokio::time::{timeout_at, Instant};
 use tokio_postgres::NoTls;
 
 use rustvello_core::error::{RustvelloError, RustvelloResult};
@@ -10,24 +13,147 @@ use rustvello_core::error::{RustvelloError, RustvelloResult};
 /// `tokio_postgres::Error::Display` only writes the kind string (e.g. `"db error"`)
 /// and does NOT include the server message. This helper extracts the `DbError`
 /// fields so we get actionable diagnostics.
-fn fmt_pg(e: &tokio_postgres::Error) -> String {
-    if let Some(db) = e.as_db_error() {
-        use std::fmt::Write;
-        let mut msg = format!(
-            "{}: {} (code: {})",
-            db.severity(),
-            db.message(),
-            db.code().code()
-        );
-        if let Some(detail) = db.detail() {
-            let _ = write!(msg, " detail={detail}");
+fn configuration(message: &str) -> RustvelloError {
+    RustvelloError::Configuration {
+        message: message.into(),
+    }
+}
+
+/// Finite per-checkout budgets; admission policy is persisted and must match all workers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PostgresOptions {
+    pub max_pool_size: usize,
+    pub operation_timeout_ms: u64,
+    pub delivery_lease_ms: u64,
+    pub max_queue_rows: u32,
+    pub max_payload_bytes: u32,
+}
+
+/// Verified TLS policy for PostgreSQL connections.
+///
+/// The expected hostname is matched against every configured TCP host and is
+/// then passed to the platform TLS verifier. Private trust roots are process
+/// local and never added to the host trust store.
+#[cfg(feature = "tls")]
+#[derive(Clone)]
+pub struct PostgresTlsOptions {
+    expected_hostname: String,
+    private_ca_pem: Option<Arc<[u8]>>,
+}
+
+#[cfg(feature = "tls")]
+impl fmt::Debug for PostgresTlsOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PostgresTlsOptions")
+            .field("expected_hostname", &self.expected_hostname)
+            .field(
+                "trust",
+                &if self.private_ca_pem.is_some() {
+                    "private-ca"
+                } else {
+                    "system-roots"
+                },
+            )
+            .finish()
+    }
+}
+
+#[cfg(feature = "tls")]
+impl PostgresTlsOptions {
+    /// Verify `expected_hostname` using the operating system trust roots.
+    pub fn system_roots(expected_hostname: impl Into<String>) -> RustvelloResult<Self> {
+        Self::new(expected_hostname.into(), None)
+    }
+
+    /// Verify `expected_hostname` exclusively using the supplied PEM CA.
+    pub fn private_ca_pem(
+        expected_hostname: impl Into<String>,
+        ca_pem: impl Into<Vec<u8>>,
+    ) -> RustvelloResult<Self> {
+        Self::new(expected_hostname.into(), Some(Arc::from(ca_pem.into())))
+    }
+
+    fn new(expected_hostname: String, private_ca_pem: Option<Arc<[u8]>>) -> RustvelloResult<Self> {
+        if expected_hostname.is_empty()
+            || expected_hostname.len() > 253
+            || expected_hostname.bytes().any(|byte| {
+                byte.is_ascii_whitespace() || byte == 0 || byte == b'/' || byte == b'\\'
+            })
+        {
+            return Err(configuration("invalid PostgreSQL TLS hostname"));
         }
-        if let Some(hint) = db.hint() {
-            let _ = write!(msg, " hint={hint}");
+        if private_ca_pem
+            .as_ref()
+            .is_some_and(|pem| pem.is_empty() || pem.len() > 1_048_576)
+        {
+            return Err(configuration("PostgreSQL private CA exceeds bounds"));
         }
-        msg
-    } else {
-        e.to_string()
+        Ok(Self {
+            expected_hostname,
+            private_ca_pem,
+        })
+    }
+
+    /// Certificate name required by this connection policy.
+    pub fn expected_hostname(&self) -> &str {
+        &self.expected_hostname
+    }
+
+    /// Whether this policy isolates trust to a caller-supplied private CA.
+    pub fn uses_private_ca(&self) -> bool {
+        self.private_ca_pem.is_some()
+    }
+
+    fn validate_hosts(&self, config: &tokio_postgres::Config) -> RustvelloResult<()> {
+        if config.get_hosts().is_empty()
+            || config.get_hosts().iter().any(|host| {
+                !matches!(host, tokio_postgres::config::Host::Tcp(host) if host == &self.expected_hostname)
+            })
+        {
+            return Err(configuration(
+                "PostgreSQL TLS hostname must match every configured TCP host",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for PostgresOptions {
+    fn default() -> Self {
+        Self {
+            max_pool_size: 4,
+            operation_timeout_ms: 5_000,
+            delivery_lease_ms: 60_000,
+            max_queue_rows: 100_000,
+            max_payload_bytes: 1_048_576,
+        }
+    }
+}
+
+impl PostgresOptions {
+    fn validate(&self, app_id: &str) -> RustvelloResult<()> {
+        if app_id.is_empty()
+            || app_id.len() > 63
+            || !app_id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+        {
+            return Err(configuration(
+                "Postgres app ID must be 1-63 lowercase ASCII letters/digits/_/-",
+            ));
+        }
+        if !(1..=64).contains(&self.max_pool_size)
+            || !(100..=60_000).contains(&self.operation_timeout_ms)
+            || !(100..=3_600_000).contains(&self.delivery_lease_ms)
+            || !(1..=1_000_000).contains(&self.max_queue_rows)
+            || !(1..=4_194_304).contains(&self.max_payload_bytes)
+        {
+            return Err(configuration(
+                "Postgres options exceed finite profile bounds",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -39,8 +165,10 @@ fn fmt_pg(e: &tokio_postgres::Error) -> String {
 /// schema.  Two `Database` instances with different `app_id` values
 /// sharing the same physical database will not see each other's tables.
 pub struct Database {
-    pub(crate) pool: Pool,
+    pool: Pool,
     app_id: String,
+    pub(crate) options: PostgresOptions,
+    pub(crate) domain: rustvello_core::publication::PublicationDomain,
 }
 
 impl Database {
@@ -64,34 +192,46 @@ impl Database {
 
     /// Like [`connect()`](Self::connect) but with a configurable maximum pool size.
     ///
-    /// When `max_size` is `None`, deadpool's default (CPU count × 4) is used.
+    /// When `max_size` is `None`, the bounded four-connection default is used.
     pub async fn connect_with_pool_size(
         connection_string: &str,
         app_id: &str,
         max_size: Option<usize>,
     ) -> RustvelloResult<Self> {
-        let pg_config: tokio_postgres::Config =
-            connection_string
-                .parse()
-                .map_err(|e: tokio_postgres::Error| {
-                    RustvelloError::state_backend(format!("invalid Postgres config: {e}"))
-                })?;
+        Self::connect_with_options(
+            connection_string,
+            app_id,
+            PostgresOptions {
+                max_pool_size: max_size.unwrap_or(4),
+                ..PostgresOptions::default()
+            },
+        )
+        .await
+    }
 
-        let mgr = deadpool_postgres::Manager::new(pg_config, NoTls);
-        let mut builder = Pool::builder(mgr);
-        if let Some(size) = max_size {
-            builder = builder.max_size(size);
+    /// Plaintext is deliberately restricted to explicit loopback hosts.
+    pub async fn connect_with_options(
+        connection_string: &str,
+        app_id: &str,
+        options: PostgresOptions,
+    ) -> RustvelloResult<Self> {
+        options.validate(app_id)?;
+        let mut pg_config: tokio_postgres::Config = connection_string
+            .parse()
+            .map_err(|_| configuration("invalid private Postgres configuration"))?;
+        if pg_config.get_hosts().is_empty() || pg_config.get_hosts().iter().any(|host| {
+            !matches!(host, tokio_postgres::config::Host::Tcp(host) if host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()))
+        }) || pg_config.get_hostaddrs().iter().any(|ip| !ip.is_loopback()) {
+            return Err(configuration("plaintext PostgreSQL requires explicit loopback hosts; use TLS for remote hosts"));
         }
-        let pool = builder
+        pg_config.connect_timeout(Duration::from_millis(options.operation_timeout_ms));
+        let mgr = deadpool_postgres::Manager::new(pg_config, NoTls);
+        let pool = Pool::builder(mgr)
+            .max_size(options.max_pool_size)
             .build()
             .map_err(|e| RustvelloError::state_backend(format!("failed to create pool: {e}")))?;
 
-        let db = Self {
-            pool,
-            app_id: app_id.to_string(),
-        };
-        db.initialize_schema().await?;
-        Ok(db)
+        Self::initialize(pool, app_id, options).await
     }
 
     /// Create a new database with TLS encryption from a connection string.
@@ -116,40 +256,86 @@ impl Database {
         app_id: &str,
         max_size: Option<usize>,
     ) -> RustvelloResult<Self> {
-        let pg_config: tokio_postgres::Config =
-            connection_string
-                .parse()
-                .map_err(|e: tokio_postgres::Error| {
-                    RustvelloError::state_backend(format!("invalid Postgres config: {e}"))
-                })?;
+        let options = PostgresOptions {
+            max_pool_size: max_size.unwrap_or(4),
+            ..PostgresOptions::default()
+        };
+        let config: tokio_postgres::Config = connection_string
+            .parse()
+            .map_err(|_| configuration("invalid private Postgres configuration"))?;
+        let expected_hostname = config
+            .get_hosts()
+            .first()
+            .and_then(|host| match host {
+                tokio_postgres::config::Host::Tcp(host) => Some(host.clone()),
+                #[allow(unreachable_patterns)]
+                _ => None,
+            })
+            .ok_or_else(|| configuration("PostgreSQL TLS requires an explicit TCP hostname"))?;
+        Self::connect_tls_with_options(
+            connection_string,
+            app_id,
+            options,
+            PostgresTlsOptions::system_roots(expected_hostname)?,
+        )
+        .await
+    }
 
-        let tls_connector = native_tls::TlsConnector::new().map_err(|e| {
+    /// Connect with verified TLS and the complete bounded PostgreSQL profile.
+    #[cfg(feature = "tls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tls")))]
+    pub async fn connect_tls_with_options(
+        connection_string: &str,
+        app_id: &str,
+        options: PostgresOptions,
+        tls: PostgresTlsOptions,
+    ) -> RustvelloResult<Self> {
+        options.validate(app_id)?;
+        let mut pg_config: tokio_postgres::Config = connection_string
+            .parse()
+            .map_err(|_| configuration("invalid private Postgres configuration"))?;
+        tls.validate_hosts(&pg_config)?;
+        pg_config.ssl_mode(tokio_postgres::config::SslMode::Require);
+        pg_config.connect_timeout(Duration::from_millis(options.operation_timeout_ms));
+
+        let mut connector = native_tls::TlsConnector::builder();
+        if let Some(ca_pem) = &tls.private_ca_pem {
+            connector.disable_built_in_roots(true);
+            connector.add_root_certificate(
+                native_tls::Certificate::from_pem(ca_pem)
+                    .map_err(|_| configuration("invalid PostgreSQL private CA certificate"))?,
+            );
+        }
+        let tls_connector = connector.build().map_err(|e| {
             RustvelloError::state_backend(format!("failed to create TLS connector: {e}"))
         })?;
         let pg_tls = postgres_native_tls::MakeTlsConnector::new(tls_connector);
 
         let mgr = deadpool_postgres::Manager::new(pg_config, pg_tls);
-        let mut builder = Pool::builder(mgr);
-        if let Some(size) = max_size {
-            builder = builder.max_size(size);
-        }
-        let pool = builder
+        let pool = Pool::builder(mgr)
+            .max_size(options.max_pool_size)
             .build()
             .map_err(|e| RustvelloError::state_backend(format!("failed to create pool: {e}")))?;
 
-        let db = Self {
-            pool,
-            app_id: app_id.to_string(),
-        };
-        db.initialize_schema().await?;
-        Ok(db)
+        Self::initialize(pool, app_id, options).await
     }
 
     /// Create a database from an existing deadpool pool.
     pub async fn from_pool(pool: Pool, app_id: &str) -> RustvelloResult<Self> {
+        Self::initialize(pool, app_id, PostgresOptions::default()).await
+    }
+
+    async fn initialize(
+        pool: Pool,
+        app_id: &str,
+        options: PostgresOptions,
+    ) -> RustvelloResult<Self> {
+        options.validate(app_id)?;
         let db = Self {
             pool,
             app_id: app_id.to_string(),
+            options,
+            domain: Arc::from(rustvello_proto::identifiers::RunnerId::new().to_string()),
         };
         db.initialize_schema().await?;
         Ok(db)
@@ -159,31 +345,48 @@ impl Database {
     ///
     /// Every connection has its `search_path` set to the app-specific
     /// schema so that all subsequent SQL operates in the correct namespace.
-    pub(crate) async fn conn(&self) -> RustvelloResult<deadpool_postgres::Client> {
-        let client = self
-            .pool
-            .get()
+    async fn raw_conn(&self) -> RustvelloResult<Client> {
+        let deadline = Instant::now() + Duration::from_millis(self.options.operation_timeout_ms);
+        let client = timeout_at(deadline, self.pool.get())
             .await
-            .map_err(|e| RustvelloError::state_backend(format!("pool error: {e}")))?;
+            .map_err(|_| {
+                RustvelloError::state_backend("Postgres pool/connection deadline exceeded")
+            })?
+            .map_err(|_| {
+                RustvelloError::state_backend("Postgres connection/authentication failed")
+            })?;
+        let client = Client::new(client, deadline);
+        client.batch_execute(&format!("SET synchronous_commit=on; SET statement_timeout={}; SET lock_timeout={}; SET idle_in_transaction_session_timeout={};",
+            self.options.operation_timeout_ms, self.options.operation_timeout_ms / 2, self.options.operation_timeout_ms)).await?;
+        Ok(client)
+    }
+
+    pub(crate) async fn conn(&self) -> RustvelloResult<Client> {
+        let client = self.raw_conn().await?;
         // Double-quote escaping prevents SQL injection in identifiers.
         let escaped = self.app_id.replace('"', "\"\"");
         client
             .execute(&format!("SET search_path TO \"{escaped}\""), &[])
             .await
-            .map_err(|e| {
-                RustvelloError::state_backend(format!("SET search_path failed: {}", fmt_pg(&e)))
-            })?;
+            .map_err(pg_err)?;
         Ok(client)
     }
 
     async fn initialize_schema(&self) -> RustvelloResult<()> {
         // Use a raw pool connection (without SET search_path) so we can
         // bootstrap the schema itself.
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| RustvelloError::state_backend(format!("pool error: {e}")))?;
+        let mut connection = self.raw_conn().await?;
+        let durable: String = connection.query_one("SHOW fsync", &[]).await?.get(0);
+        if durable != "on" {
+            return Err(configuration("Postgres runtime requires server fsync=on"));
+        }
+        let client = connection.transaction().await?;
+        client
+            .query_one(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                &[&format!("rustvello-schema:{}", self.app_id)],
+            )
+            .await?;
 
         // Create the app-specific schema and switch to it.
         let escaped = self.app_id.replace('"', "\"\"");
@@ -192,9 +395,7 @@ impl Database {
                 "CREATE SCHEMA IF NOT EXISTS \"{escaped}\"; SET search_path TO \"{escaped}\";"
             ))
             .await
-            .map_err(|e| {
-                RustvelloError::state_backend(format!("schema creation failed: {}", fmt_pg(&e)))
-            })?;
+            .map_err(pg_err)?;
 
         client
             .batch_execute(
@@ -224,7 +425,9 @@ impl Database {
                 parent_invocation_id TEXT,
                 workflow_id TEXT,
                 workflow_type TEXT,
-                workflow_depth INTEGER
+                workflow_depth INTEGER,
+                traceparent TEXT,
+                tracestate TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_invocations_task
                 ON invocations(task_id);
@@ -234,6 +437,8 @@ impl Database {
                 ON invocations(status);
             CREATE INDEX IF NOT EXISTS idx_invocations_workflow
                 ON invocations(workflow_id);
+            CREATE INDEX IF NOT EXISTS idx_invocations_workflow_page
+                ON invocations(workflow_id, invocation_id);
             CREATE INDEX IF NOT EXISTS idx_invocations_parent
                 ON invocations(parent_invocation_id);
 
@@ -310,6 +515,7 @@ impl Database {
                 runner_id TEXT PRIMARY KEY,
                 last_heartbeat TIMESTAMPTZ NOT NULL
             );
+            ALTER TABLE runner_heartbeats ADD COLUMN IF NOT EXISTS can_run_atomic_service BOOLEAN NOT NULL DEFAULT FALSE;
 
             -- Bounded atomic-service execution history for monitoring
             CREATE TABLE IF NOT EXISTS atomic_service_timeline (
@@ -438,6 +644,8 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_workflow_runs_type
                 ON workflow_runs(workflow_type);
+            CREATE INDEX IF NOT EXISTS idx_workflow_runs_page
+                ON workflow_runs(workflow_type, workflow_id);
 
             -- Workflow key-value data store
             CREATE TABLE IF NOT EXISTS workflow_data (
@@ -480,24 +688,93 @@ impl Database {
             ALTER TABLE history ADD COLUMN IF NOT EXISTS history_timestamp TIMESTAMPTZ;
             ALTER TABLE runner_contexts ADD COLUMN IF NOT EXISTS runner_language TEXT NOT NULL DEFAULT 'rust';
             ALTER TABLE runner_contexts ADD COLUMN IF NOT EXISTS executor_kind TEXT NOT NULL DEFAULT 'tokio';
+            ALTER TABLE invocations ADD COLUMN IF NOT EXISTS traceparent TEXT;
+            ALTER TABLE invocations ADD COLUMN IF NOT EXISTS tracestate TEXT;
+            ALTER TABLE invocations ADD COLUMN IF NOT EXISTS workflow_parent_id TEXT;
+            ALTER TABLE broker_queue ADD COLUMN IF NOT EXISTS reserved_until TIMESTAMPTZ;
+            CREATE TABLE IF NOT EXISTS submission_publications (
+                invocation_id TEXT PRIMARY KEY, identity_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS runtime_profile (
+                singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+                version INTEGER NOT NULL, lease_ms BIGINT NOT NULL,
+                max_queue_rows BIGINT NOT NULL, max_payload_bytes BIGINT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_history_runner
                 ON history(runner_id);
             ",
             )
             .await
-            .map_err(|e| {
-                RustvelloError::state_backend(format!("schema init failed: {}", fmt_pg(&e)))
-            })?;
-
+            .map_err(pg_err)?;
+        client.execute("INSERT INTO runtime_profile (version,lease_ms,max_queue_rows,max_payload_bytes) VALUES (1,$1,$2,$3) ON CONFLICT DO NOTHING",
+            &[&(self.options.delivery_lease_ms as i64), &i64::from(self.options.max_queue_rows), &i64::from(self.options.max_payload_bytes)]).await?;
+        let profile = client
+            .query_one(
+                "SELECT version,lease_ms,max_queue_rows,max_payload_bytes FROM runtime_profile",
+                &[],
+            )
+            .await?;
+        if profile.get::<_, i32>(0) != 1
+            || profile.get::<_, i64>(1) != self.options.delivery_lease_ms as i64
+            || profile.get::<_, i64>(2) != i64::from(self.options.max_queue_rows)
+            || profile.get::<_, i64>(3) != i64::from(self.options.max_payload_bytes)
+        {
+            return Err(configuration(
+                "Postgres persisted runtime admission/lease profile differs",
+            ));
+        }
+        client.commit().await?;
         Ok(())
     }
 }
 
-pub(crate) fn pg_err(e: tokio_postgres::Error) -> RustvelloError {
-    RustvelloError::state_backend(format!("Postgres error: {}", fmt_pg(&e)))
+pub(crate) fn pg_err(e: RustvelloError) -> RustvelloError {
+    e
 }
 
 pub(crate) fn parse_status(s: &str) -> RustvelloResult<rustvello_proto::status::InvocationStatus> {
     s.parse::<rustvello_proto::status::InvocationStatus>()
         .map_err(RustvelloError::state_backend)
+}
+
+#[cfg(all(test, feature = "tls"))]
+mod tls_tests {
+    use super::*;
+
+    #[test]
+    fn private_tls_policy_is_bounded_redacted_and_host_bound() {
+        let tls =
+            PostgresTlsOptions::private_ca_pem("database.internal", b"SECRET-CA-CONTENT".to_vec())
+                .unwrap();
+        assert_eq!(tls.expected_hostname(), "database.internal");
+        assert!(tls.uses_private_ca());
+        assert!(!format!("{tls:?}").contains("SECRET-CA-CONTENT"));
+
+        let matching: tokio_postgres::Config =
+            "host=database.internal hostaddr=127.0.0.1 user=test"
+                .parse()
+                .unwrap();
+        tls.validate_hosts(&matching).unwrap();
+        let wrong: tokio_postgres::Config = "host=other.internal user=test".parse().unwrap();
+        assert!(tls.validate_hosts(&wrong).is_err());
+        assert!(PostgresTlsOptions::private_ca_pem("database.internal", Vec::new()).is_err());
+        assert!(PostgresTlsOptions::system_roots("bad host").is_err());
+    }
+
+    #[test]
+    fn runtime_options_keep_complete_tls_parity() {
+        let options = PostgresOptions {
+            max_pool_size: 7,
+            operation_timeout_ms: 321,
+            delivery_lease_ms: 654,
+            max_queue_rows: 987,
+            max_payload_bytes: 12_345,
+        };
+        options.validate("tls_profile").unwrap();
+        assert_eq!(options.max_pool_size, 7);
+        assert_eq!(options.operation_timeout_ms, 321);
+        assert_eq!(options.delivery_lease_ms, 654);
+        assert_eq!(options.max_queue_rows, 987);
+        assert_eq!(options.max_payload_bytes, 12_345);
+    }
 }

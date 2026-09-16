@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use rustvello_core::context::RunnerContext;
 use rustvello_core::error::RustvelloResult;
-use rustvello_core::observability::WorkerState;
+use rustvello_core::observability::{WorkerLifecycleEvent, WorkerState, WorkerTelemetryContext};
 use rustvello_core::runner::Runner;
 use rustvello_core::trigger::TriggerManager;
 use rustvello_proto::identifiers::RunnerId;
@@ -20,8 +20,6 @@ impl PersistentTokioRunner {
             self.control_plane.app_id,
             std::process::id()
         );
-        self.emitter.on_worker_started(&self.runner_id);
-
         // Store main runner context for monitoring
         let runner_ctx = rustvello_core::state_backend::StoredRunnerContext::current_with_runtime(
             self.runner_id.to_string(),
@@ -51,6 +49,10 @@ impl PersistentTokioRunner {
             self.control_plane.runner_language,
             self.control_plane.executor_kind,
         );
+        self.emitter
+            .on_worker_lifecycle(&WorkerLifecycleEvent::started(
+                WorkerTelemetryContext::from(&main_ctx),
+            ));
 
         let cancel = self.control_plane.cancellation_token();
 
@@ -58,7 +60,8 @@ impl PersistentTokioRunner {
         let mut worker_handles = tokio::task::JoinSet::new();
         for worker_idx in 0..self.num_workers {
             let worker_runner_id = RunnerId::new();
-            let worker_ctx = main_ctx.new_child(worker_runner_id.clone());
+            let worker_ctx =
+                main_ctx.new_child_with_cls(worker_runner_id.clone(), "PersistentTokioWorker");
 
             // Register per-worker state
             {
@@ -88,7 +91,10 @@ impl PersistentTokioRunner {
                 );
             }
 
-            self.emitter.on_worker_started(&worker_runner_id);
+            self.emitter
+                .on_worker_lifecycle(&WorkerLifecycleEvent::started(
+                    WorkerTelemetryContext::from(&worker_ctx),
+                ));
 
             let worker = self.clone();
             let w_id = worker_runner_id.clone();
@@ -123,7 +129,10 @@ impl PersistentTokioRunner {
         }
 
         tracing::info!("PersistentTokioRunner shutting down");
-        self.emitter.on_worker_shutdown(&self.runner_id);
+        self.emitter
+            .on_worker_lifecycle(&WorkerLifecycleEvent::stopped(
+                WorkerTelemetryContext::from(&main_ctx),
+            ));
         mgmt_result
     }
 
@@ -135,18 +144,76 @@ impl PersistentTokioRunner {
         worker_ctx: &RunnerContext,
         cancel: &CancellationToken,
     ) -> RustvelloResult<()> {
+        let mut worker_ctx = worker_ctx.clone();
+        let mut worker_runner_id = worker_runner_id.clone();
+        let mut consecutive_errors = 0u32;
         tracing::debug!("Worker {} ({}) started", worker_idx, worker_runner_id);
         while !self.is_shutdown() {
-            let did_work = self.run_one_as_worker(worker_runner_id, worker_ctx).await?;
+            let did_work = match self.run_one_as_worker(&worker_runner_id, &worker_ctx).await {
+                Ok(did_work) => {
+                    consecutive_errors = 0;
+                    did_work
+                }
+                Err(error) => {
+                    // Retire the owner, not the polling task. Continuing its heartbeat
+                    // could pin an ambiguously completed Running invocation forever.
+                    tracing::warn!(worker_id = %worker_runner_id, %error, "Worker operation failed; retiring ownership and reconnecting");
+                    self.emitter
+                        .on_worker_lifecycle(&WorkerLifecycleEvent::stopped(
+                            WorkerTelemetryContext::from(&worker_ctx),
+                        ));
+                    {
+                        let mut states = self
+                            .worker_states
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        states.remove(&worker_runner_id);
+                        worker_runner_id = RunnerId::new();
+                        states.insert(
+                            worker_runner_id.clone(),
+                            WorkerState::new(worker_runner_id.clone()),
+                        );
+                    }
+                    worker_ctx.runner_id = worker_runner_id.clone();
+                    self.emitter
+                        .on_worker_lifecycle(&WorkerLifecycleEvent::started(
+                            WorkerTelemetryContext::from(&worker_ctx),
+                        ));
+                    consecutive_errors = consecutive_errors.saturating_add(1).min(6);
+                    let backoff = Duration::from_millis((100u64 << consecutive_errors).min(5_000));
+                    tokio::select! { _ = tokio::time::sleep(backoff) => {}, _ = cancel.cancelled() => break }
+                    let mut context =
+                        rustvello_core::state_backend::StoredRunnerContext::current_with_runtime(
+                            worker_runner_id.to_string(),
+                            "PersistentTokioWorker",
+                            worker_ctx.runner_language,
+                            worker_ctx.executor_kind,
+                        );
+                    context.parent_runner_id = Some(self.runner_id.to_string());
+                    context.parent_runner_cls = Some("PersistentTokioRunner".into());
+                    if let Err(error) = self
+                        .control_plane
+                        .state_backend
+                        .store_runner_context(&context)
+                        .await
+                    {
+                        tracing::warn!(%error, "Reconnected worker context is not yet persisted");
+                    }
+                    continue;
+                }
+            };
             if !did_work && !self.control_plane.broker.wait_for_work(cancel).await {
                 break;
             }
         }
         tracing::debug!("Worker {} ({}) stopped", worker_idx, worker_runner_id);
-        self.emitter.on_worker_shutdown(worker_runner_id);
+        self.emitter
+            .on_worker_lifecycle(&WorkerLifecycleEvent::stopped(
+                WorkerTelemetryContext::from(&worker_ctx),
+            ));
         // Remove worker state on shutdown
         if let Ok(mut states) = self.worker_states.lock() {
-            states.remove(worker_runner_id);
+            states.remove(&worker_runner_id);
         }
         Ok(())
     }
@@ -170,6 +237,8 @@ impl PersistentTokioRunner {
     pub(super) async fn management_loop(&self) -> RustvelloResult<()> {
         let heartbeat_interval =
             Duration::from_secs(self.control_plane.config.heartbeat_interval_seconds);
+        let recovery_interval =
+            Duration::from_secs(self.control_plane.config.recovery_check_interval_seconds);
         let atomic_check_interval = Duration::from_secs_f64(
             self.control_plane
                 .config
@@ -178,6 +247,7 @@ impl PersistentTokioRunner {
         );
         let trigger_interval = Duration::from_secs(5);
         let mut last_heartbeat = Instant::now();
+        let mut last_recovery_check = Instant::now();
         let mut last_atomic_check = Instant::now();
         let mut last_trigger_eval = Instant::now();
 
@@ -215,15 +285,17 @@ impl PersistentTokioRunner {
                 last_heartbeat = Instant::now();
             }
 
+            if last_recovery_check.elapsed() >= recovery_interval {
+                if let Err(e) = self.recover_stale_invocations().await {
+                    tracing::error!("Recovery cycle failed: {}", e);
+                }
+                last_recovery_check = Instant::now();
+            }
+
             if last_atomic_check.elapsed() >= atomic_check_interval {
                 if self.should_run_atomic_service().await {
-                    tracing::debug!(
-                        "Atomic service: this runner's time slot — running recovery & triggers"
-                    );
+                    tracing::debug!("Atomic service: this runner's time slot — running triggers");
                     let svc_start = chrono::Utc::now();
-                    if let Err(e) = self.recover_stale_invocations().await {
-                        tracing::error!("Recovery cycle failed: {}", e);
-                    }
                     if let Some(ref tm) = self.control_plane.trigger_manager {
                         if let Err(e) = self.evaluate_triggers(tm).await {
                             tracing::error!("Trigger evaluation cycle failed: {}", e);

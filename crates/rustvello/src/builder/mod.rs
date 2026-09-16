@@ -27,21 +27,27 @@ pub(super) enum BackendPreset {
     Sqlite {
         path: String,
         app_id: String,
+        options: rustvello_sqlite::db::SqliteOptions,
     },
     #[cfg(feature = "redis")]
     Redis {
         uri: String,
         app_id: String,
+        options: rustvello_redis::prelude::RedisOptions,
+        tls: Option<rustvello_redis::prelude::RedisTlsOptions>,
     },
     #[cfg(feature = "postgres")]
     Postgres {
         connection_string: String,
         app_id: String,
+        options: rustvello_postgres::db::PostgresOptions,
     },
     #[cfg(all(feature = "postgres", feature = "tls"))]
     PostgresTls {
         connection_string: String,
         app_id: String,
+        options: rustvello_postgres::db::PostgresOptions,
+        tls: Option<rustvello_postgres::db::PostgresTlsOptions>,
     },
     #[cfg(feature = "mongodb")]
     MongoDB {

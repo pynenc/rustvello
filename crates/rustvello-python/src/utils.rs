@@ -1,9 +1,13 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::PyResult;
-use rustvello_core::context::get_invocation_context;
+use rustvello_core::context::{
+    clear_thread_invocation_context, get_invocation_context, set_thread_invocation_context,
+    InvocationContext,
+};
 use rustvello_proto::call::SerializedArguments;
 use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
+use rustvello_proto::invocation::TraceContextCarrier;
 use std::collections::BTreeMap;
 
 /// Parse `s` as an invocation ID and return an `InvocationId`.
@@ -28,6 +32,59 @@ pub fn parse_task_id(language: &str, module: &str, name: &str) -> PyResult<TaskI
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
+/// Build the optional task identity used by queue-aware routing; module and name come together.
+pub fn optional_task_id(
+    language: &str,
+    module: Option<&str>,
+    name: Option<&str>,
+) -> PyResult<Option<TaskId>> {
+    match (module, name) {
+        (Some(module), Some(name)) => parse_task_id(language, module, name).map(Some),
+        (None, None) => Ok(None),
+        _ => Err(PyValueError::new_err(
+            "task_module and task_name must be given together",
+        )),
+    }
+}
+
+/// Install the invocation context in this thread, as a worker process does before it
+/// runs task code it received from the subprocess executor.
+#[pyfunction]
+#[pyo3(signature = (invocation_id, task_module, task_name, num_retries=0, language="python", parent_invocation_id=None, traceparent=None, tracestate=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn set_current_invocation_context(
+    invocation_id: &str,
+    task_module: &str,
+    task_name: &str,
+    num_retries: u32,
+    language: &str,
+    parent_invocation_id: Option<&str>,
+    traceparent: Option<String>,
+    tracestate: Option<String>,
+) -> PyResult<()> {
+    let task_id = parse_task_id(language, task_module, task_name)?;
+    set_thread_invocation_context(InvocationContext {
+        invocation_id: parse_invocation_id(invocation_id)?,
+        task_id,
+        workflow: None,
+        is_workflow_defining: false,
+        state_backend: None,
+        parent_invocation_id: parent_invocation_id.map(InvocationId::from_string),
+        num_retries,
+        trace_context: TraceContextCarrier {
+            traceparent,
+            tracestate,
+        },
+    });
+    Ok(())
+}
+
+/// Remove the invocation context installed with `set_current_invocation_context`.
+#[pyfunction]
+pub fn clear_current_invocation_context() {
+    clear_thread_invocation_context();
+}
+
 /// Return the invocation ID from Rust's thread-local context if set.
 ///
 /// The Rust executor calls ``set_thread_invocation_context`` in the
@@ -37,6 +94,15 @@ pub fn parse_task_id(language: &str, module: &str, name: &str) -> PyResult<TaskI
 #[pyfunction]
 pub fn get_current_invocation_id() -> Option<String> {
     get_invocation_context().map(|ctx| ctx.invocation_id.to_string())
+}
+
+/// Return the running task as `module.name` from Rust's thread-local invocation context.
+///
+/// Log formatters and monitoring hooks use this together with
+/// ``get_current_invocation_id`` without holding a reference to the task handle.
+#[pyfunction]
+pub fn get_current_task_key() -> Option<String> {
+    get_invocation_context().map(|ctx| format!("{}.{}", ctx.task_id.module(), ctx.task_id.name()))
 }
 
 /// Return the retry count from Rust's thread-local invocation context, if set.
@@ -49,6 +115,13 @@ pub fn get_current_invocation_id() -> Option<String> {
 #[pyfunction]
 pub fn get_current_num_retries() -> Option<u32> {
     get_invocation_context().map(|ctx| ctx.num_retries)
+}
+
+/// Return the persisted execution span carrier for the running task attempt.
+#[pyfunction]
+pub fn get_current_trace_context() -> Option<(Option<String>, Option<String>)> {
+    get_invocation_context()
+        .map(|ctx| (ctx.trace_context.traceparent, ctx.trace_context.tracestate))
 }
 
 /// Return workflow identity fields from Rust's thread-local invocation context.

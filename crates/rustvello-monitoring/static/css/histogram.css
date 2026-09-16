@@ -202,6 +202,128 @@
   z-index: 1090;
 }
 
+.workflow-heading,
+.workflow-summary,
+.workflow-toolbar,
+.workflow-chart-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+.workflow-heading {
+  justify-content: space-between;
+}
+.workflow-heading h2 {
+  overflow-wrap: anywhere;
+  margin: 0.25rem 0;
+}
+.workflow-summary {
+  border-bottom: 1px solid #dfe4ea;
+  padding: 0.7rem 0;
+  gap: 1.5rem;
+  color: #59636c;
+}
+.workflow-toolbar {
+  padding: 0.7rem 0;
+}
+.workflow-toolbar h3 {
+  margin-right: auto;
+}
+.workflow-toolbar select {
+  background: white;
+  border: 1px solid #cdd4db;
+  border-radius: 4px;
+  padding: 0.2rem;
+}
+.workflow-run-list {
+  max-height: 310px;
+}
+.workflow-run-list thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f8f9fa;
+}
+.workflow-run-row {
+  cursor: pointer;
+}
+.workflow-run-row:focus-visible {
+  outline: 2px solid #13875b;
+  outline-offset: -2px;
+}
+.workflow-detail-page .material-icons {
+  font-size: 16px;
+  vertical-align: middle;
+}
+.workflow-comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.workflow-comparison-grid[data-columns="1"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.workflow-comparison-run {
+  min-width: 0;
+  border: 1px solid #dfe4ea;
+  border-radius: 6px;
+  background: white;
+}
+.workflow-chart-header {
+  padding: 0.5rem 0.65rem;
+  border-bottom: 1px solid #edf0f3;
+  font-size: 12px;
+}
+.workflow-chart-header > span {
+  margin-right: auto;
+}
+.workflow-chart-header code {
+  overflow-wrap: anywhere;
+}
+.workflow-run-list .pynmon-table td {
+  padding-block: 0.3rem;
+}
+.workflow-run-list .btn {
+  padding-block: 0.15rem;
+}
+.workflow-run-list td:first-child {
+  min-width: 280px;
+  white-space: nowrap;
+}
+.workflow-run-list td:first-child code {
+  white-space: nowrap;
+}
+.workflow-comparison-run .histogram-panel {
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+}
+.workflow-comparison-run .histogram-svg-container svg {
+  min-width: 760px;
+}
+.workflow-comparison-run .histogram-legend {
+  position: static;
+  width: 100%;
+  border: 0;
+  max-height: 160px;
+}
+.workflow-comparison-run .histogram-layout {
+  display: flex;
+  flex-direction: column-reverse;
+}
+.workflow-hide-legends .histogram-legend {
+  display: none;
+}
+.workflow-detail-page[aria-busy="true"] .workflow-toolbar {
+  opacity: 0.65;
+}
+@media (max-width: 1200px) {
+  .workflow-comparison-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 1100px) {
   .histogram-panel {
     --histogram-label-rail: 21%;

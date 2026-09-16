@@ -149,12 +149,8 @@ impl OrchestratorConcurrency for PostgresOrchestrator {
             return Ok(true);
         }
 
-        let Some(args) = cc_args else {
-            // Task-level CC: no per-pair index, just check invocations directly
-            return self
-                .check_running_concurrency(task_id, task_config, cc_args)
-                .await;
-        };
+        let empty_args = SerializedArguments::default();
+        let args = cc_args.unwrap_or(&empty_args);
 
         let mut client = self.db.conn().await?;
         let tx = client.transaction().await.map_err(pg_err)?;
@@ -165,7 +161,7 @@ impl OrchestratorConcurrency for PostgresOrchestrator {
 
         // Serialize reservations for a task. The pair-level predicate below
         // still decides whether unrelated argument keys may proceed.
-        tx.query_one("SELECT pg_advisory_xact_lock(hashtext($1))", &[&task_key])
+        tx.query_one("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':admission:' || $1, 0))", &[&task_key])
             .await
             .map_err(pg_err)?;
 
@@ -190,10 +186,13 @@ impl OrchestratorConcurrency for PostgresOrchestrator {
         let where_pairs = pair_conds.join(" OR ");
         let limit_p = format!("${idx}");
         params.push(Box::new(limit));
+        idx += 1;
+        let invocation_p = format!("${idx}");
+        params.push(Box::new(invocation_id.to_string()));
         let check_sql = format!(
             "SELECT (SELECT COUNT(*) FROM (
                  SELECT cp.invocation_id FROM cc_arg_pairs cp
-                 WHERE cp.task_id = {task_p} AND ({where_pairs})
+                 WHERE cp.task_id = {task_p} AND cp.invocation_id <> {invocation_p} AND ({where_pairs})
                  GROUP BY cp.invocation_id
                  HAVING COUNT(*) = {n_pairs}
              ) sub) < {limit_p}"

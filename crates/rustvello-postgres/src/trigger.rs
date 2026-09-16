@@ -757,7 +757,7 @@ impl TriggerStore for PostgresTriggerStore {
 impl PostgresTriggerStore {
     async fn get_condition_ids_for_trigger(
         &self,
-        client: &deadpool_postgres::Client,
+        client: &crate::bounded::Client,
         trigger_id: &str,
     ) -> RustvelloResult<Vec<ConditionId>> {
         let rows = client
@@ -777,7 +777,7 @@ impl PostgresTriggerStore {
     /// Batch-fetch condition IDs for multiple triggers in a single query.
     async fn get_condition_ids_for_triggers(
         &self,
-        client: &deadpool_postgres::Client,
+        client: &crate::bounded::Client,
         trigger_ids: &[String],
     ) -> RustvelloResult<HashMap<String, Vec<ConditionId>>> {
         if trigger_ids.is_empty() {

@@ -8,6 +8,7 @@ use rustvello_core::context::{
     set_thread_runner_context, InvocationContext, RunnerContext, INVOCATION_CTX, RUNNER_CTX,
 };
 use rustvello_core::error::{RustvelloError, RustvelloResult};
+use rustvello_core::observability::extract_w3c_trace_context;
 use rustvello_core::task::DynTask;
 use rustvello_proto::call::SerializedArguments;
 use rustvello_proto::identifiers::ExecutorKind;
@@ -61,6 +62,12 @@ impl TaskExecutor for TokioExecutor {
                             let _permit = permit;
                             set_thread_runner_context(thread_runner);
                             set_thread_invocation_context(thread_invocation);
+                            let _trace_guard = extract_w3c_trace_context(
+                                &rustvello_core::context::get_invocation_context()
+                                    .expect("invocation context set")
+                                    .trace_context,
+                            )
+                            .attach();
                             let result =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     task.execute(&args)
@@ -88,6 +95,12 @@ impl TaskExecutor for TokioExecutor {
                 RUNNER_CTX.scope(runner_context, async move {
                     set_thread_runner_context(thread_runner);
                     set_thread_invocation_context(thread_invocation);
+                    let _trace_guard = extract_w3c_trace_context(
+                        &rustvello_core::context::get_invocation_context()
+                            .expect("invocation context set")
+                            .trace_context,
+                    )
+                    .attach();
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         task.execute(&args)
                     }));
@@ -110,6 +123,7 @@ mod tests {
     use rustvello_core::task::{TaskDefinition, TaskRegistry};
     use rustvello_proto::config::TaskConfig;
     use rustvello_proto::identifiers::{InvocationId, RunnerId, TaskId};
+    use rustvello_proto::invocation::TraceContextCarrier;
 
     use super::*;
 
@@ -163,6 +177,48 @@ mod tests {
         assert_eq!(peak.load(Ordering::SeqCst), 2);
     }
 
+    #[tokio::test]
+    async fn worker_attaches_persisted_w3c_context_while_task_runs() {
+        let captured = Arc::new(std::sync::Mutex::new(None));
+        let task_id = TaskId::new("executor", "trace_context");
+        let mut registry = TaskRegistry::new();
+        registry
+            .register(TaskDefinition::new(
+                task_id.clone(),
+                TaskConfig::default(),
+                Arc::new({
+                    let captured = Arc::clone(&captured);
+                    move |_| {
+                        *captured.lock().unwrap() =
+                            Some(rustvello_core::observability::capture_w3c_trace_context());
+                        Ok("null".to_string())
+                    }
+                }),
+            ))
+            .unwrap();
+        let trace_context = TraceContextCarrier {
+            traceparent: Some(
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
+            ),
+            tracestate: Some("ih=worker".to_string()),
+        };
+        let mut invocation = invocation_context();
+        invocation.task_id = task_id.clone();
+        invocation.trace_context = trace_context.clone();
+
+        TokioExecutor::new(1)
+            .execute(
+                registry.get_dyn(&task_id).unwrap(),
+                SerializedArguments::new(),
+                invocation,
+                runner_context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(captured.lock().unwrap().clone(), Some(trace_context));
+    }
+
     fn invocation_context() -> InvocationContext {
         InvocationContext {
             invocation_id: InvocationId::new(),
@@ -172,6 +228,7 @@ mod tests {
             state_backend: None,
             parent_invocation_id: None,
             num_retries: 0,
+            trace_context: Default::default(),
         }
     }
 

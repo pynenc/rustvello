@@ -192,11 +192,8 @@ fn visible_tasks(data: &HistogramData) -> Vec<VisibleTask> {
     let (visible_task_ids, has_other) = task_series(data);
     let mut tasks = visible_task_ids
         .into_iter()
-        .enumerate()
-        .map(|(index, task_id)| VisibleTask {
-            // Rank assignment avoids hash collisions and gives the most
-            // prominent series the strongest Tableau colors.
-            color: TASK_PALETTE[index % TASK_PALETTE.len()],
+        .map(|task_id| VisibleTask {
+            color: task_color(&task_id),
             label: task_id.clone(),
             id: task_id,
         })
@@ -340,6 +337,17 @@ pub struct HistogramData {
     pub selected: BTreeSet<HistogramCategory>,
     pub max_count: usize,
     pub empty_reason: Option<&'static str>,
+}
+
+impl HistogramData {
+    pub fn peak_worker_count(&self) -> usize {
+        self.buckets
+            .iter()
+            .flat_map(|bucket| bucket.runner_ids_by_runtime.values())
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 pub fn bucket_size_for_window(duration: Duration) -> Duration {
@@ -604,6 +612,7 @@ pub struct HistogramPanel {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HistogramPanelOptions {
     pub y_axis_max: Option<usize>,
+    pub worker_axis_max: Option<usize>,
     pub plot_left: Option<f64>,
     pub plot_right: Option<f64>,
     pub relative_time: bool,
@@ -680,6 +689,7 @@ impl HistogramPanel {
                 link_path,
                 compact,
                 y_axis_max: options.y_axis_max,
+                worker_axis_max: options.worker_axis_max,
                 plot_left: options.plot_left,
                 plot_right: options.plot_right,
                 relative_time: options.relative_time,
@@ -992,6 +1002,7 @@ fn render_svg_with_y_axis(
         link_path,
         compact,
         y_axis_max,
+        worker_axis_max: None,
         plot_left: None,
         plot_right: None,
         relative_time: false,
@@ -1006,6 +1017,7 @@ struct SvgRenderRequest<'a> {
     link_path: &'a str,
     compact: bool,
     y_axis_max: Option<usize>,
+    worker_axis_max: Option<usize>,
     plot_left: Option<f64>,
     plot_right: Option<f64>,
     relative_time: bool,
@@ -1021,6 +1033,7 @@ fn render_svg_with_y_axis_and_plot_bounds(request: SvgRenderRequest<'_>) -> Stri
         link_path,
         compact,
         y_axis_max,
+        worker_axis_max,
         plot_left,
         plot_right,
         relative_time,
@@ -1031,10 +1044,16 @@ fn render_svg_with_y_axis_and_plot_bounds(request: SvgRenderRequest<'_>) -> Stri
     if data.buckets.is_empty() || data.max_count == 0 || groups.is_empty() {
         return String::new();
     }
-    let width = 2000.0;
-    let left = plot_left.unwrap_or(420.0);
-    let right = plot_right.unwrap_or(1956.0);
-    let chart_height = if compact { 96.0 } else { 138.0 };
+    let width = if relative_time { 1200.0 } else { 2000.0 };
+    let left = plot_left.unwrap_or(if relative_time { 48.0 } else { 420.0 });
+    let right = plot_right.unwrap_or(width - 44.0);
+    let chart_height = if compact {
+        96.0
+    } else if relative_time {
+        180.0
+    } else {
+        138.0
+    };
     let chart_gap = if compact { 10.0 } else { 14.0 };
     let top_margin = 6.0;
     let plot_header_height = if compact { 20.0 } else { 24.0 };
@@ -1072,6 +1091,7 @@ fn render_svg_with_y_axis_and_plot_bounds(request: SvgRenderRequest<'_>) -> Stri
         .map(|runtime| peak_workers(data, runtime))
         .max()
         .unwrap_or_default()
+        .max(worker_axis_max.unwrap_or_default())
         .max(1);
     let selected_names = data
         .selected
@@ -1323,7 +1343,7 @@ fn render_svg_with_y_axis_and_plot_bounds(request: SvgRenderRequest<'_>) -> Stri
         if let Some(points) = worker_line_points {
             let _ = write!(
                 out,
-                r##"<line x1="{right}" y1="{plot_top:.2}" x2="{right}" y2="{plot_bottom:.2}" stroke="{runtime_color}" stroke-width="0.8" opacity="0.45"/><text x="{}" y="{:.2}" font-size="9" fill="{runtime_color}" text-anchor="start">{runtime_peak_workers}</text><text x="{}" y="{:.2}" font-size="9" fill="{runtime_color}" text-anchor="start">0</text><polyline points="{}" fill="none" stroke="{runtime_color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9" class="histogram-worker-line" data-runtime="{}"/><text x="{}" y="{:.2}" font-size="9" fill="{runtime_color}" text-anchor="end">workers</text>"##,
+                r##"<line x1="{right}" y1="{plot_top:.2}" x2="{right}" y2="{plot_bottom:.2}" stroke="{runtime_color}" stroke-width="0.8" opacity="0.45"/><text x="{}" y="{:.2}" font-size="9" fill="{runtime_color}" text-anchor="start">{worker_scale_max}</text><text x="{}" y="{:.2}" font-size="9" fill="{runtime_color}" text-anchor="start">0</text><polyline points="{}" fill="none" stroke="{runtime_color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9" class="histogram-worker-line" data-runtime="{}"/><text x="{}" y="{:.2}" font-size="9" fill="{runtime_color}" text-anchor="end">workers</text>"##,
                 right + 5.0,
                 plot_top + 3.0,
                 right + 5.0,
@@ -1732,6 +1752,57 @@ mod tests {
     #[test]
     fn other_uses_neutral_color() {
         assert_eq!(task_color("__other__"), "#cccccc");
+    }
+
+    #[test]
+    fn comparison_colors_do_not_depend_on_task_rank() {
+        let first = build_histogram(
+            &[
+                entry("a", 0, InvocationStatus::Running, "alpha"),
+                entry("b", 9, InvocationStatus::Running, "beta"),
+            ],
+            start(),
+            start() + Duration::seconds(10),
+            all(),
+            None,
+        );
+        let second = build_histogram(
+            &[
+                entry("a", 9, InvocationStatus::Running, "alpha"),
+                entry("b", 0, InvocationStatus::Running, "beta"),
+            ],
+            start(),
+            start() + Duration::seconds(10),
+            all(),
+            None,
+        );
+        for task in visible_tasks(&first) {
+            assert_eq!(
+                task.color,
+                visible_tasks(&second)
+                    .iter()
+                    .find(|other| other.id == task.id)
+                    .unwrap()
+                    .color
+            );
+        }
+        let panel = HistogramPanel::from_data_with_options(
+            &first,
+            &[],
+            "",
+            false,
+            HistogramPanelOptions {
+                worker_axis_max: Some(40),
+                y_axis_max: Some(80),
+                relative_time: true,
+                ..Default::default()
+            },
+        );
+        assert!(
+            panel.svg.contains(">40</text>"),
+            "shared worker axis must be rendered even for a smaller run"
+        );
+        assert!(panel.svg.contains("max 80 tasks"));
     }
 
     #[test]

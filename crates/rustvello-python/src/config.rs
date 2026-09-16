@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+use cistell_core::Resolver;
+
 use rustvello_core::broker::validate_routing;
 use rustvello_proto::config::{AppConfig, BrokerPriorityRule, QueueSelectionStrategy, TaskConfig};
 use rustvello_proto::status::ConcurrencyControlType;
@@ -14,7 +16,8 @@ pub struct PyTaskConfig {
 #[pymethods]
 impl PyTaskConfig {
     #[new]
-    #[pyo3(signature = (max_retries=0, concurrency_control="unlimited", running_concurrency=None, cache_results=false, queue="default", priority=0.0, is_workflow_task=false))]
+    #[pyo3(signature = (max_retries=0, concurrency_control="unlimited", running_concurrency=None, cache_results=false, queue="default", priority=0.0, is_workflow_task=false, retry_for_errors=vec![]))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         max_retries: u32,
         concurrency_control: &str,
@@ -23,6 +26,7 @@ impl PyTaskConfig {
         queue: &str,
         priority: f64,
         is_workflow_task: bool,
+        retry_for_errors: Vec<String>,
     ) -> PyResult<Self> {
         validate_routing(queue, priority)
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
@@ -46,12 +50,19 @@ impl PyTaskConfig {
         inner.queue = queue.to_owned();
         inner.priority = priority;
         inner.is_workflow_task = is_workflow_task;
+        inner.retry_for_errors = retry_for_errors;
         Ok(Self { inner })
     }
 
     #[getter]
     fn max_retries(&self) -> u32 {
         self.inner.max_retries
+    }
+
+    /// Exception type names that trigger a retry; empty means every error retries.
+    #[getter]
+    fn retry_for_errors(&self) -> Vec<String> {
+        self.inner.retry_for_errors.clone()
     }
 
     #[getter]
@@ -100,6 +111,32 @@ pub struct PyAppConfig {
 
 #[pymethods]
 impl PyAppConfig {
+    /// Configure the native recovery/trigger scheduler, in minutes.
+    #[pyo3(signature = (*, interval_minutes, check_interval_minutes, spread_margin_minutes=0.0))]
+    fn with_atomic_services(
+        mut slf: PyRefMut<'_, Self>,
+        interval_minutes: f64,
+        check_interval_minutes: f64,
+        spread_margin_minutes: f64,
+    ) -> PyResult<PyRefMut<'_, Self>> {
+        if !interval_minutes.is_finite()
+            || !check_interval_minutes.is_finite()
+            || !spread_margin_minutes.is_finite()
+            || interval_minutes <= 0.0
+            || check_interval_minutes <= 0.0
+            || spread_margin_minutes < 0.0
+            || spread_margin_minutes >= interval_minutes
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "atomic service intervals must be positive and finite, with 0 <= margin < interval",
+            ));
+        }
+        slf.inner.atomic_service_interval_minutes = interval_minutes;
+        slf.inner.atomic_service_check_interval_minutes = check_interval_minutes;
+        slf.inner.atomic_service_spread_margin_minutes = spread_margin_minutes;
+        Ok(slf)
+    }
+
     #[new]
     #[pyo3(signature = (
         app_id = "rustvello",
@@ -193,14 +230,96 @@ impl PyAppConfig {
         Ok(Self { inner })
     }
 
+    /// Resolve the configuration like the Rust builder does: `RUSTVELLO__*` environment
+    /// variables, an optional TOML file, and `[tool.rustvello.app]` in `./pyproject.toml`,
+    /// over the defaults. Programmatic values set afterwards win.
+    #[staticmethod]
+    #[pyo3(signature = (file=None, app_id=None))]
+    fn from_env(file: Option<&str>, app_id: Option<&str>) -> PyResult<Self> {
+        let configuration = |error: String| pyo3::exceptions::PyValueError::new_err(error);
+        let mut builder = Resolver::builder().env();
+        if let Some(path) = file {
+            builder = builder
+                .file(path)
+                .map_err(|error| configuration(error.to_string()))?;
+        }
+        builder = builder
+            .pyproject_toml("rustvello", "app")
+            .map_err(|error| configuration(error.to_string()))?;
+        let resolved = builder
+            .build()
+            .resolve::<AppConfig>()
+            .map_err(|error| configuration(error.to_string()))?;
+        let mut inner = resolved.value;
+        if let Some(app_id) = app_id {
+            inner.app_id = app_id.to_owned();
+        }
+        Ok(Self { inner })
+    }
+
+    /// Resolve the configuration from a TOML file (plus env and `pyproject.toml`).
+    #[staticmethod]
+    #[pyo3(signature = (path, app_id=None))]
+    fn from_file(path: &str, app_id: Option<&str>) -> PyResult<Self> {
+        Self::from_env(Some(path), app_id)
+    }
+
     #[getter]
     fn app_id(&self) -> &str {
         &self.inner.app_id
     }
 
+    #[setter]
+    fn set_app_id(&mut self, value: String) {
+        self.inner.app_id = value;
+    }
+
     #[getter]
     fn dev_mode_force_sync(&self) -> bool {
         self.inner.dev_mode_force_sync
+    }
+
+    #[setter]
+    fn set_dev_mode_force_sync(&mut self, value: bool) {
+        self.inner.dev_mode_force_sync = value;
+    }
+
+    #[getter]
+    fn logging_level(&self) -> &str {
+        &self.inner.logging_level
+    }
+
+    #[setter]
+    fn set_logging_level(&mut self, value: String) {
+        self.inner.logging_level = value;
+    }
+
+    #[setter]
+    fn set_broker_queues(&mut self, queues: Vec<String>) -> PyResult<()> {
+        for queue in &queues {
+            validate_routing(queue, 0.0)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        }
+        self.inner.broker_queues = queues;
+        Ok(())
+    }
+
+    #[setter]
+    fn set_runner_queues(&mut self, queues: Vec<String>) -> PyResult<()> {
+        for queue in &queues {
+            validate_routing(queue, 0.0)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        }
+        self.inner.runner_queues = queues;
+        Ok(())
+    }
+
+    #[setter]
+    fn set_queue_selection_strategy(&mut self, strategy: &str) -> PyResult<()> {
+        self.inner.queue_selection_strategy = strategy
+            .parse::<QueueSelectionStrategy>()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        Ok(())
     }
 
     #[getter]
@@ -287,8 +406,8 @@ mod tests {
     #[test]
     fn task_config_defaults() {
         Python::with_gil(|_py| {
-            let cfg =
-                PyTaskConfig::new(0, "unlimited", None, false, "default", 0.0, false).unwrap();
+            let cfg = PyTaskConfig::new(0, "unlimited", None, false, "default", 0.0, false, vec![])
+                .unwrap();
             assert_eq!(cfg.max_retries(), 0);
             assert!(!cfg.cache_results());
             assert_eq!(cfg.running_concurrency(), None);
@@ -299,7 +418,17 @@ mod tests {
     #[test]
     fn task_config_custom_values() {
         Python::with_gil(|_py| {
-            let cfg = PyTaskConfig::new(3, "task", Some(5), true, "critical", 12.5, true).unwrap();
+            let cfg = PyTaskConfig::new(
+                3,
+                "task",
+                Some(5),
+                true,
+                "critical",
+                12.5,
+                true,
+                vec!["ValueError".to_owned()],
+            )
+            .unwrap();
             assert_eq!(cfg.max_retries(), 3);
             assert!(cfg.cache_results());
             assert_eq!(cfg.running_concurrency(), Some(5));
@@ -313,7 +442,9 @@ mod tests {
     fn task_config_all_concurrency_types() {
         Python::with_gil(|_py| {
             for cc in &["unlimited", "task", "argument", "none"] {
-                assert!(PyTaskConfig::new(0, cc, None, false, "default", 0.0, false).is_ok());
+                assert!(
+                    PyTaskConfig::new(0, cc, None, false, "default", 0.0, false, vec![]).is_ok()
+                );
             }
         });
     }
@@ -321,7 +452,8 @@ mod tests {
     #[test]
     fn task_config_invalid_concurrency_type() {
         Python::with_gil(|_py| {
-            let result = PyTaskConfig::new(0, "invalid", None, false, "default", 0.0, false);
+            let result =
+                PyTaskConfig::new(0, "invalid", None, false, "default", 0.0, false, vec![]);
             assert!(result.is_err());
         });
     }
@@ -329,7 +461,8 @@ mod tests {
     #[test]
     fn task_config_repr() {
         Python::with_gil(|_py| {
-            let cfg = PyTaskConfig::new(2, "unlimited", None, true, "default", 0.0, true).unwrap();
+            let cfg = PyTaskConfig::new(2, "unlimited", None, true, "default", 0.0, true, vec![])
+                .unwrap();
             let repr = cfg.__repr__();
             assert!(repr.contains("max_retries=2"));
             assert!(repr.contains("cache_results=true"));

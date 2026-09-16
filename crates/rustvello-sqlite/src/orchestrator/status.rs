@@ -15,6 +15,14 @@ use super::SqliteOrchestrator;
 
 #[async_trait]
 impl OrchestratorStatus for SqliteOrchestrator {
+    fn runtime_publication(
+        &self,
+    ) -> Option<Arc<dyn rustvello_core::publication::RuntimePublication>> {
+        Some(Arc::new(crate::publication::SqlitePublication::new(
+            Arc::clone(&self.db),
+        )))
+    }
+
     async fn register_invocation(&self, call: &CallDTO) -> RustvelloResult<InvocationId> {
         let invocation_id = InvocationId::new();
         self.register_invocation_with_id(&invocation_id, call, None)
@@ -130,6 +138,15 @@ impl OrchestratorStatus for SqliteOrchestrator {
             let conn = db.conn.lock().map_err(lock_err)?;
             let tx = conn.unchecked_transaction().map_err(sql_err)?;
             let id = invocation_id.as_str();
+            tx.execute(
+                "INSERT INTO submission_publications (invocation_id, identity_json)
+                 SELECT invocation_id, '' FROM invocations WHERE invocation_id = ?1
+                 ON CONFLICT(invocation_id) DO UPDATE SET identity_json = ''",
+                [id],
+            )
+            .map_err(sql_err)?;
+            tx.execute("DELETE FROM broker_queue WHERE invocation_id = ?1", [id])
+                .map_err(sql_err)?;
             tx.execute("DELETE FROM status_records WHERE invocation_id = ?1", [id])
                 .map_err(sql_err)?;
             tx.execute("DELETE FROM cc_arg_pairs WHERE invocation_id = ?1", [id])
@@ -199,7 +216,11 @@ impl OrchestratorStatus for SqliteOrchestrator {
 
             let conn = db.conn.lock().map_err(lock_err)?;
 
-            let tx = conn.unchecked_transaction().map_err(sql_err)?;
+            // Reserve the writer before reading ownership; deferred upgrades can
+            // fail with SQLITE_BUSY_SNAPSHOT under independent process claims.
+            let tx = rusqlite::Transaction::new_unchecked(
+                &conn, rusqlite::TransactionBehavior::Immediate,
+            ).map_err(sql_err)?;
 
             let (current_status_str, current_runner_id_str, current_ts_str): (
                 String,
@@ -247,6 +268,13 @@ impl OrchestratorStatus for SqliteOrchestrator {
             )
             .map_err(sql_err)?;
 
+            if status == InvocationStatus::Pending {
+                // Ownership and delivery acknowledgment are one durable commit.
+                // The queue deletion trigger also removes each reservation.
+                tx.execute("DELETE FROM broker_queue WHERE invocation_id = ?1", [invocation_id.as_str()])
+                    .map_err(sql_err)?;
+            }
+
             tx.commit().map_err(sql_err)?;
 
             Ok(new_record)
@@ -259,8 +287,12 @@ impl OrchestratorStatus for SqliteOrchestrator {
         let db = Arc::clone(&self.db);
         blocking(move || {
             let conn = db.conn.lock().map_err(lock_err)?;
-            conn.execute_batch(
-                "DELETE FROM cc_arg_pairs;
+            let tx = conn.unchecked_transaction().map_err(sql_err)?;
+            tx.execute_batch(
+                "INSERT OR IGNORE INTO submission_publications (invocation_id, identity_json)
+                 SELECT invocation_id, '' FROM invocations;
+                 UPDATE submission_publications SET identity_json = '';
+                 DELETE FROM cc_arg_pairs;
                  DELETE FROM waiting_for;
                  DELETE FROM status_records;
                  DELETE FROM retries;
@@ -269,6 +301,7 @@ impl OrchestratorStatus for SqliteOrchestrator {
                  DELETE FROM invocations;",
             )
             .map_err(sql_err)?;
+            tx.commit().map_err(sql_err)?;
             Ok(())
         })
         .await

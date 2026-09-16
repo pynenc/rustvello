@@ -1,6 +1,7 @@
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use rustvello_core::error::{RustvelloError, RustvelloResult};
 
@@ -12,6 +13,31 @@ use rustvello_core::error::{RustvelloError, RustvelloResult};
 /// because each instance gets its own private database.
 pub struct Database {
     pub(crate) conn: Mutex<Connection>,
+    pub(crate) domain: Arc<str>,
+}
+
+/// WAL commit synchronization. FULL syncs each acknowledged commit; NORMAL can
+/// lose recent commits on machine power loss. Neither qualifies the filesystem.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SqliteSynchronous {
+    Normal,
+    #[default]
+    Full,
+}
+
+#[derive(Clone, Debug)]
+pub struct SqliteOptions {
+    pub synchronous: SqliteSynchronous,
+    pub busy_timeout: Duration,
+}
+
+impl Default for SqliteOptions {
+    fn default() -> Self {
+        Self {
+            synchronous: SqliteSynchronous::Full,
+            busy_timeout: Duration::from_secs(5),
+        }
+    }
 }
 
 /// Compute the effective file path by injecting `app_id` before the extension.
@@ -33,15 +59,51 @@ impl Database {
     ///
     /// The `app_id` is embedded in the filename so that different
     /// applications using the same base path get separate database files.
+    /// IDs must be 1..=64 bytes from `[a-z0-9_-]`; uppercase and separators
+    /// are rejected before opening a file to prevent filesystem aliases.
     pub fn open(path: impl AsRef<Path>, app_id: &str) -> RustvelloResult<Self> {
+        Self::open_with_options(path, app_id, SqliteOptions::default())
+    }
+
+    pub fn open_with_options(
+        path: impl AsRef<Path>,
+        app_id: &str,
+        options: SqliteOptions,
+    ) -> RustvelloResult<Self> {
+        if options.busy_timeout.is_zero() || options.busy_timeout > Duration::from_secs(60) {
+            return Err(RustvelloError::Configuration {
+                message: "SQLite busy timeout must be in (0, 60s]".into(),
+            });
+        }
+        // Lowercase avoids app aliases on case-insensitive local filesystems.
+        if app_id.is_empty()
+            || app_id.len() > 64
+            || !app_id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'-'))
+        {
+            return Err(RustvelloError::Configuration {
+                message:
+                    "SQLite app_id must contain 1..=64 lowercase ASCII letters, digits, '_' or '-'"
+                        .into(),
+            });
+        }
         let actual = effective_path(path, app_id);
         let conn = Connection::open(&actual).map_err(|e| {
             RustvelloError::state_backend(format!("failed to open SQLite database: {}", e))
         })?;
         let db = Self {
             conn: Mutex::new(conn),
+            domain: format!(
+                "file:{:?}:{:?}",
+                actual
+                    .canonicalize()
+                    .map_err(|e| RustvelloError::state_backend(e.to_string()))?,
+                options.synchronous
+            )
+            .into(),
         };
-        db.initialize_schema()?;
+        db.initialize_schema(&options)?;
         Ok(db)
     }
 
@@ -56,37 +118,54 @@ impl Database {
         })?;
         let db = Self {
             conn: Mutex::new(conn),
+            domain: {
+                static NEXT_MEMORY: std::sync::atomic::AtomicU64 =
+                    std::sync::atomic::AtomicU64::new(0);
+                format!(
+                    "memory:{}",
+                    NEXT_MEMORY.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                )
+                .into()
+            },
         };
-        db.initialize_schema()?;
+        db.initialize_schema(&SqliteOptions::default())?;
         Ok(db)
     }
 
-    fn initialize_schema(&self) -> RustvelloResult<()> {
+    /// Read back actual connection settings, not merely the requested preset.
+    pub fn synchronization(&self) -> RustvelloResult<(String, u32, u32)> {
+        let conn = self.conn.lock().map_err(lock_err)?;
+        Ok((
+            conn.pragma_query_value(None, "journal_mode", |r| r.get(0))
+                .map_err(sql_err)?,
+            conn.pragma_query_value(None, "synchronous", |r| r.get(0))
+                .map_err(sql_err)?,
+            conn.pragma_query_value(None, "busy_timeout", |r| r.get(0))
+                .map_err(sql_err)?,
+        ))
+    }
+
+    fn initialize_schema(&self, options: &SqliteOptions) -> RustvelloResult<()> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| RustvelloError::state_backend(format!("lock poisoned: {}", e)))?;
 
-        // PRAGMAs must be set BEFORE schema creation so that journal_mode and
-        // synchronous settings are active for the DDL statements.
-        //
-        // Durability trade-offs:
-        //  - `journal_mode=WAL`: enables concurrent readers & writers; produces
-        //    `-wal` / `-shm` side-car files alongside the `.db` file.
-        //  - `synchronous=NORMAL`: in WAL mode this means the WAL is fsynced on
-        //    checkpoints but not on every commit, so the last committed transaction
-        //    could be lost on a sudden power failure. For a task queue where
-        //    idempotent retry is the recovery mechanism this is an acceptable
-        //    trade-off (FULL sync is ~2-3× slower). Override by setting the PRAGMA
-        //    manually after `Database::open()` if stricter durability is required.
+        // These are connection-local and must precede every schema/data write.
+        conn.busy_timeout(options.busy_timeout).map_err(sql_err)?;
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| {
                 RustvelloError::state_backend(format!("PRAGMA journal_mode failed: {}", e))
             })?;
-        conn.pragma_update(None, "synchronous", "NORMAL")
-            .map_err(|e| {
-                RustvelloError::state_backend(format!("PRAGMA synchronous failed: {}", e))
-            })?;
+        conn.pragma_update(
+            None,
+            "synchronous",
+            match options.synchronous {
+                SqliteSynchronous::Normal => "NORMAL",
+                SqliteSynchronous::Full => "FULL",
+            },
+        )
+        .map_err(|e| RustvelloError::state_backend(format!("PRAGMA synchronous failed: {}", e)))?;
 
         conn.execute_batch(
             "
@@ -105,6 +184,19 @@ impl Database {
                 ON broker_queue(queue_name, priority DESC, id ASC);
             CREATE INDEX IF NOT EXISTS idx_broker_queue_task
                 ON broker_queue(queue_name, task_id, priority DESC, id ASC);
+            CREATE INDEX IF NOT EXISTS idx_broker_queue_invocation
+                ON broker_queue(invocation_id);
+
+            -- Dequeue leases retain the queue row until ownership commits.
+            CREATE TABLE IF NOT EXISTS broker_reservations (
+                queue_id INTEGER PRIMARY KEY,
+                expires_at_ms INTEGER NOT NULL
+            );
+            CREATE TRIGGER IF NOT EXISTS broker_queue_delete_reservation
+                AFTER DELETE ON broker_queue
+                BEGIN
+                    DELETE FROM broker_reservations WHERE queue_id = OLD.id;
+                END;
 
             -- Invocations
             CREATE TABLE IF NOT EXISTS invocations (
@@ -117,7 +209,10 @@ impl Database {
                 parent_invocation_id TEXT,
                 workflow_id TEXT,
                 workflow_type TEXT,
-                workflow_depth INTEGER
+                workflow_depth INTEGER,
+                workflow_parent_id TEXT,
+                traceparent TEXT,
+                tracestate TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_invocations_task
                 ON invocations(task_id);
@@ -127,8 +222,16 @@ impl Database {
                 ON invocations(status);
             CREATE INDEX IF NOT EXISTS idx_invocations_workflow
                 ON invocations(workflow_id);
+            CREATE INDEX IF NOT EXISTS idx_invocations_workflow_page
+                ON invocations(workflow_id, invocation_id);
             CREATE INDEX IF NOT EXISTS idx_invocations_parent
                 ON invocations(parent_invocation_id);
+
+            -- Calls (arguments)
+            CREATE TABLE IF NOT EXISTS submission_publications (
+                invocation_id TEXT PRIMARY KEY,
+                identity_json TEXT NOT NULL
+            );
 
             -- Calls (arguments)
             CREATE TABLE IF NOT EXISTS calls (
@@ -318,6 +421,8 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_workflow_runs_type
                 ON workflow_runs(workflow_type);
+            CREATE INDEX IF NOT EXISTS idx_workflow_runs_page
+                ON workflow_runs(workflow_type, workflow_id);
 
             -- Workflow key-value data store
             CREATE TABLE IF NOT EXISTS workflow_data (
@@ -388,6 +493,10 @@ impl Database {
         let _ = conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_broker_queue_task ON broker_queue(task_id, id)",
         );
+        let _ = conn.execute_batch("ALTER TABLE invocations ADD COLUMN traceparent TEXT");
+        let _ = conn.execute_batch("ALTER TABLE invocations ADD COLUMN tracestate TEXT");
+        // Additive: existing invocation/workflow data is never reset.
+        let _ = conn.execute_batch("ALTER TABLE invocations ADD COLUMN workflow_parent_id TEXT");
 
         Ok(())
     }

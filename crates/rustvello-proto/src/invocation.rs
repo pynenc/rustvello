@@ -4,6 +4,35 @@ use serde::{Deserialize, Serialize};
 use crate::identifiers::{CallId, InvocationId, RunnerId, TaskId};
 use crate::status::{InvocationStatus, InvocationStatusRecord};
 
+/// Opaque W3C Trace Context persisted with an invocation.
+///
+/// The runtime validates carriers and allocates execution identities; exporters
+/// project those identities. This layer preserves carriers across language and
+/// backend boundaries.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceContextCarrier {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traceparent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracestate: Option<String>,
+}
+
+impl TraceContextCarrier {
+    pub fn is_empty(&self) -> bool {
+        self.traceparent.is_none() && self.tracestate.is_none()
+    }
+}
+
+/// Durable identity of the latest execution, retained across worker relocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionAttemptIdentity {
+    /// Execution counter, including recoveries; distinct from failure-policy retries.
+    pub attempt: u32,
+    pub execution_trace_context: TraceContextCarrier,
+    #[serde(default)]
+    pub previous_attempt_trace_context: TraceContextCarrier,
+}
+
 /// Persistence DTO for an invocation.
 ///
 /// Contains identity and metadata but not the call arguments themselves
@@ -20,6 +49,9 @@ pub struct InvocationDTO {
     pub parent_invocation_id: Option<InvocationId>,
     /// Workflow identity — present for invocations that belong to a workflow.
     pub workflow: Option<WorkflowIdentity>,
+    /// W3C context inherited by workers and retries.
+    #[serde(default)]
+    pub trace_context: TraceContextCarrier,
 }
 
 impl InvocationDTO {
@@ -34,6 +66,7 @@ impl InvocationDTO {
             updated_at: now,
             parent_invocation_id: None,
             workflow: None,
+            trace_context: TraceContextCarrier::default(),
         }
     }
 
@@ -55,7 +88,14 @@ impl InvocationDTO {
             updated_at: now,
             parent_invocation_id,
             workflow: Some(workflow),
+            trace_context: TraceContextCarrier::default(),
         }
+    }
+
+    /// Attach a validated W3C carrier before persisting the invocation.
+    pub fn with_trace_context(mut self, trace_context: TraceContextCarrier) -> Self {
+        self.trace_context = trace_context;
+        self
     }
 
     /// Whether this invocation defines its workflow or sub-workflow identity.
@@ -113,7 +153,7 @@ impl InvocationHistory {
 ///
 /// Matches pynenc's `WorkflowIdentity`. Every workflow is rooted by a
 /// defining invocation; the `workflow_type` captures which task started it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkflowIdentity {
     /// The root workflow invocation ID
     pub workflow_id: InvocationId,
@@ -200,6 +240,29 @@ mod tests {
         let back: InvocationDTO = serde_json::from_str(&json).unwrap();
         assert_eq!(back.invocation_id, dto.invocation_id);
         assert_eq!(back.status, InvocationStatus::Registered);
+    }
+
+    #[test]
+    fn invocation_dto_preserves_trace_context_and_defaults_old_payloads() {
+        let task_id = TaskId::new("mod", "func");
+        let call_id = CallId::new(task_id.clone(), "hash123");
+        let dto = InvocationDTO::new(InvocationId::new(), task_id, call_id).with_trace_context(
+            TraceContextCarrier {
+                traceparent: Some(
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
+                ),
+                tracestate: Some("vendor=value".to_string()),
+            },
+        );
+
+        let json = serde_json::to_string(&dto).unwrap();
+        let back: InvocationDTO = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.trace_context, dto.trace_context);
+
+        let mut legacy: serde_json::Value = serde_json::from_str(&json).unwrap();
+        legacy.as_object_mut().unwrap().remove("trace_context");
+        let legacy: InvocationDTO = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.trace_context.is_empty());
     }
 
     #[test]

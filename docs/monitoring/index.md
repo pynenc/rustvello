@@ -40,10 +40,9 @@ invocations produced by a trigger. Event rows and details link into bounded
 timeline windows and expose JSON/trace endpoints for script or agent debugging.
 ::::
 
-::::{grid-item-card} Prometheus Metrics
-When `rustvello-prometheus` is active, the dashboard exposes `/metrics` in Prometheus
-text format. Counters and histograms cover invocation counts, status transitions,
-broker queue depth, and runner heartbeat timings.
+::::{grid-item-card} OpenTelemetry
+Attach `rustvello-otel` to export correlated task-attempt spans, lifecycle logs,
+worker resources, and low-cardinality completion metrics over OTLP/HTTP-Protobuf.
 ::::
 
 ::::{grid-item-card} Multi-App Support
@@ -170,7 +169,7 @@ Open a browser at `http://localhost:8000` to view the dashboard.
 
 ```toml
 [dependencies]
-rustvello-monitoring = "0.5.0"
+rustvello-monitoring = "0.5.1"
 ```
 
 The monitoring crate does **not** require `rustvello`'s feature flags — it depends
@@ -178,30 +177,22 @@ directly on `rustvello-core` traits and works with any backend combination.
 
 ---
 
-## Prometheus Metrics
+## OpenTelemetry Export
 
-Enable the `prometheus` feature on `rustvello` and add the `rustvello-prometheus` dependency
-to wire Prometheus metrics alongside the dashboard:
+Add `rustvello-otel` and attach its `BoundedAsyncEmitter` to the application and
+runner lifecycle. Python applications can pass `otlp_endpoint` and
+`otlp_bearer_token` to `App`.
 
 ```toml
 [dependencies]
-rustvello = { version = "0.5.0", features = ["prometheus"] }
-rustvello-prometheus = "0.5.0"
-rustvello-monitoring = "0.5.0"
+rustvello = "0.5.1"
+rustvello-otel = "0.5.1"
+rustvello-monitoring = "0.5.1"
 ```
 
-The dashboard automatically serves the `/metrics` endpoint when the Prometheus
-`EventEmitter` is registered with the app.
-
-Metrics exported include:
-
-| Metric                               | Type      | Description                            |
-| ------------------------------------ | --------- | -------------------------------------- |
-| `rustvello_invocations_total`        | Counter   | Invocations registered by task and app |
-| `rustvello_status_transitions_total` | Counter   | Status transitions by from/to state    |
-| `rustvello_task_duration_seconds`    | Histogram | Task execution time by task ID         |
-| `rustvello_broker_queue_depth`       | Gauge     | Current number of pending invocations  |
-| `rustvello_runner_heartbeats_total`  | Counter   | Heartbeat events per runner            |
+The exporter maps retries as sibling execution spans under the persisted W3C parent,
+logs survive unsampled or incomplete spans, and completion metrics exclude invocation,
+attempt, trace, span, and workflow IDs.
 
 ---
 

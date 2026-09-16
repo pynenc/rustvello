@@ -32,7 +32,7 @@
   <rect x="285" y="110" width="185" height="90" class="box" fill="#edf2f7" stroke="#60758a"/>
   <text x="378" y="144" text-anchor="middle" class="t">CLI</text><text x="378" y="168" text-anchor="middle" class="n">operator commands</text>
   <rect x="500" y="110" width="210" height="90" class="box" fill="#edf2f7" stroke="#60758a"/>
-  <text x="605" y="144" text-anchor="middle" class="t">Prometheus</text><text x="605" y="168" text-anchor="middle" class="n">event metrics</text>
+  <text x="605" y="144" text-anchor="middle" class="t">OTLP</text><text x="605" y="168" text-anchor="middle" class="n">lifecycle telemetry</text>
   <rect x="740" y="110" width="210" height="90" class="box" fill="#fff0f4" stroke="#a44e69"/>
   <text x="845" y="140" text-anchor="middle" class="t">rustvello-python</text><text x="845" y="164" text-anchor="middle" class="n">PyO3 wrappers</text>
   <rect x="980" y="110" width="175" height="90" class="box" fill="#fff0f4" stroke="#a44e69"/>

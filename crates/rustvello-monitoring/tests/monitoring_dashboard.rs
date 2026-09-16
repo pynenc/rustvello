@@ -960,6 +960,7 @@ async fn test_timeline_renders_complete_invocation_history() {
         state_backend: Some(Arc::clone(&setup.state_backend)),
         parent_invocation_id: None,
         num_retries: 0,
+        trace_context: Default::default(),
     };
     let mut rust_args = SerializedArguments::new();
     rust_args.insert("order_id", "ORD-RUST");
@@ -1506,6 +1507,148 @@ async fn test_workflows_list() {
         "should show workflow content or empty state"
     );
 
+    handle_keep_alive(server).await;
+}
+
+/// KEEP_ALIVE=1 keeps a deterministic, multi-page comparison fixture running.
+#[tokio::test]
+async fn test_workflow_comparison_pages() {
+    use rustvello_proto::call::CallDTO;
+    use rustvello_proto::invocation::{InvocationDTO, WorkflowIdentity};
+    let mut setup = create_test_app("workflow-comparison");
+    let aggregate = TaskId::new("test", "aggregate");
+    setup
+        .app
+        .register_task(
+            aggregate.clone(),
+            Default::default(),
+            Arc::new(|_| Ok("null".to_owned())),
+        )
+        .unwrap();
+    setup.task_ids.push(aggregate);
+    let task = TaskId::new("test", "process_order");
+    let base = chrono::Utc::now() - chrono::Duration::hours(2);
+    for run in 0..32 {
+        let root = InvocationId::from_string(format!("00000000-0000-4000-8000-{run:012}"));
+        let workflow = WorkflowIdentity::root(root.clone(), task.clone());
+        setup
+            .state_backend
+            .store_workflow_run(&workflow)
+            .await
+            .unwrap();
+        for member in 0..(12 + run % 7) {
+            let id = if member == 0 {
+                root.clone()
+            } else {
+                InvocationId::new()
+            };
+            let member_task = if member == 0 || member % 2 == 0 {
+                task.clone()
+            } else {
+                TaskId::new("test", "aggregate")
+            };
+            let call = CallDTO::new(member_task.clone(), SerializedArguments::new());
+            setup
+                .orchestrator
+                .register_invocation_with_id(&id, &call, None)
+                .await
+                .unwrap();
+            let mut inv = InvocationDTO::with_workflow(
+                id.clone(),
+                member_task,
+                call.call_id.clone(),
+                (member != 0).then(|| root.clone()),
+                workflow.clone(),
+            );
+            let start = base + chrono::Duration::seconds(run * 90 + member);
+            let duration = if member == 0 {
+                25 + run % 10
+            } else {
+                3 + run % 8
+            };
+            inv.created_at = start;
+            // Backends need not update the invocation DTO when recording status.
+            inv.updated_at = start;
+            setup
+                .state_backend
+                .upsert_invocation(&inv, &call)
+                .await
+                .unwrap();
+            for (status, offset) in [
+                (InvocationStatus::Registered, 0),
+                (InvocationStatus::Pending, 1),
+                (InvocationStatus::Running, 2),
+                (InvocationStatus::Success, duration),
+            ] {
+                let runner = RunnerId::from_string(format!("worker-{}", member % (2 + run % 5)));
+                let mut record = InvocationStatusRecord::new(status, Some(runner));
+                if status != InvocationStatus::Registered {
+                    setup
+                        .orchestrator
+                        .set_invocation_status(&id, status, record.runner_id.as_ref())
+                        .await
+                        .unwrap();
+                }
+                record.timestamp = start + chrono::Duration::seconds(offset);
+                setup
+                    .state_backend
+                    .add_history(&InvocationHistory::new(id.clone(), record, None))
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+    let server = start_test_server(setup).await;
+    let client = server.client();
+    let path = format!("{}/workflows/rust::test.process_order", server.url);
+    let empty = client
+        .get(format!("{path}?histogram_workflow=&limit=10"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(empty.matches("data-workflow-id=").count(), 10);
+    assert!(
+        empty.contains("26.0s"),
+        "root duration must follow status history, not DTO updated_at"
+    );
+    assert!(!empty.contains("class=\"workflow-comparison-run\""));
+    let selected = "00000000-0000-4000-8000-000000000031,00000000-0000-4000-8000-000000000000";
+    let body = client
+        .get(format!(
+            "{path}?histogram_workflow={selected}&page=2&limit=10"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(
+        body.matches("data-workflow-id=").count(),
+        10,
+        "off-page selections must not expand the page"
+    );
+    assert_eq!(body.matches("class=\"workflow-comparison-run\"").count(), 2);
+    assert!(body.contains("histogram-worker-line"));
+    let deep = client
+        .get(format!("{path}/00000000-0000-4000-8000-000000000000"))
+        .send()
+        .await
+        .unwrap();
+    assert!(deep.url().query().unwrap().contains("page=2"));
+    let members = client
+        .get(format!(
+            "{}/invocations?workflow_id=00000000-0000-4000-8000-000000000000&limit=5&page=2",
+            server.url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(members.status(), 200);
+    println!("Workflow comparison: {path}");
     handle_keep_alive(server).await;
 }
 

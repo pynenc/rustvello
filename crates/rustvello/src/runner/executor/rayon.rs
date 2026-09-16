@@ -8,6 +8,7 @@ use rustvello_core::context::{
     set_thread_runner_context, InvocationContext, RunnerContext,
 };
 use rustvello_core::error::{RustvelloError, RustvelloResult};
+use rustvello_core::observability::extract_w3c_trace_context;
 use rustvello_core::task::DynTask;
 use rustvello_proto::call::SerializedArguments;
 use rustvello_proto::identifiers::ExecutorKind;
@@ -61,6 +62,12 @@ impl TaskExecutor for RayonExecutor {
             let _permit = permit;
             set_thread_runner_context(runner_context);
             set_thread_invocation_context(invocation_context);
+            let _trace_guard = extract_w3c_trace_context(
+                &rustvello_core::context::get_invocation_context()
+                    .expect("invocation context set")
+                    .trace_context,
+            )
+            .attach();
             let result =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task.execute(&args)));
             clear_thread_invocation_context();
@@ -144,6 +151,7 @@ mod tests {
             state_backend: None,
             parent_invocation_id: None,
             num_retries: 0,
+            trace_context: Default::default(),
         }
     }
 

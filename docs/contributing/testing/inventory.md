@@ -56,7 +56,7 @@ Shared test functions are grouped by contract module:
 | `rustvello-redis`      |       3 | Broker, orchestrator, connection                                                            |
 | `rustvello-mongo`      |       2 | Connection, orchestrator                                                                    |
 | `rustvello-rabbitmq`   |       1 | Broker                                                                                      |
-| `rustvello-prometheus` |       1 | Sink                                                                                        |
+| `rustvello-otel`       |       1 | Lifecycle-to-OTLP adapter                                                                   |
 | `rustvello-python`     |       2 | Utils, error                                                                                |
 | `rustvello-cli`        |       0 | Tests in integration file only                                                              |
 

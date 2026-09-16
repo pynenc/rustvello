@@ -43,6 +43,10 @@ pub fn validate_routing(queue_name: &str, priority: f64) -> RustvelloResult<()> 
 /// [`retrieve_invocation_for_language`].
 #[async_trait]
 pub trait Broker: Send + Sync {
+    fn publication_domain(&self) -> Option<crate::publication::PublicationDomain> {
+        None
+    }
+
     /// Queue an invocation with independent task, logical queue, and priority routing.
     async fn route_invocation_with_options(
         &self,

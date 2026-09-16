@@ -210,8 +210,8 @@ cross-component behavior:
 - **Docker backends**: Each test function starts its own container via
   `testcontainers`. Tests run in parallel safely because they use independent
   database instances.
-- **Prometheus tests**: Use `metrics::with_local_recorder` for recorder
-  isolation — no global state leakage.
+- **OTLP tests**: Use bounded lifecycle fixtures and unit test assertions —
+  no global state leakage.
 - **Monitoring tests**: Bind to port 0 (OS-assigned random port) to avoid
   conflicts.
 

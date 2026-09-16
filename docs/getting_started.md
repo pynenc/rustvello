@@ -225,17 +225,64 @@ app = App(backend="redis", redis_url="redis://localhost:6379")
 app = App(backend="postgres", postgres_url="postgresql://localhost/mydb")
 app = App(backend="mongo", mongo_url="mongodb://localhost:27017", mongo_db="tasks")
 app = App(backend="mongo3", mongo_url="mongodb://localhost:27017", mongo_db="tasks")  # legacy driver v2
+
+# Mongo from connection parts, RabbitMQ as the broker on top of it
+app = App(
+    backend="mongo3",
+    mongo_host="mongo", mongo_port=27017, mongo_username="u", mongo_password="p",
+    mongo_auth_source="admin", mongo_db="tasks",
+    broker="rabbitmq", rabbitmq_url="amqp://guest:guest@rabbitmq/",
+)
 ```
+
+When `config` is not given, `App` resolves its `AppConfig` with
+`AppConfig.from_env()`: `RUSTVELLO__*` environment variables, an optional TOML
+file and `[tool.rustvello.app]` in `pyproject.toml`, exactly like the Rust
+builder. Explicit constructor arguments win.
 
 ### Running a persistent worker
 
 ```python
-# Blocking — processes queued invocations
+# Blocking — processes queued invocations on in-process threads (I/O-bound tasks)
 app.run(num_workers=4)
+
+# Worker processes: one interpreter (own GIL) per slot, for CPU-bound Python tasks.
+# The Rust control plane stays in this process; only task code runs in the children.
+app.run(num_processes=8, queues=["hpa"])
 
 # Non-blocking — runs in a background thread
 app.run(block=False)
 app.stop()  # graceful shutdown
+```
+
+The same runner can be started from the command line, which is the shape a
+container entrypoint or a Kubernetes manifest needs:
+
+```bash
+python -m rustvello.worker myproject.tasks:app --processes 8 --queues hpa hyper --loglevel info
+```
+
+Worker processes import the app through its import path (`package.module:app`);
+pass `App(..., import_path=...)` when the app object is not discoverable through
+`sys.modules`.
+
+### Operating the app
+
+```python
+app.queue_depth("hpa")        # queued invocations in one queue (autoscaler metric)
+app.queue_depths()            # per declared broker queue
+app.purge()                   # drop queued work, control records and state
+app.get_task("myproject.tasks.add")
+app.current_invocation()      # inside a task: id, task key, retries, arguments
+app.wait_results([add(1, 2), add(3, 4)], timeout=30)  # [3, 7]
+server = app.start_monitor(host="0.0.0.0", port=8000)  # dashboard; server.stop()
+```
+
+### Retries by exception type
+
+```python
+@app.task(max_retries=3, retry_for=(ConnectionError, TimeoutError))
+def fetch(url: str) -> str: ...
 ```
 
 ### Trigger scheduling

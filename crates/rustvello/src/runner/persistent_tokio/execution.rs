@@ -38,6 +38,7 @@ impl PersistentTokioRunner {
             emitter: Arc::clone(&self.emitter),
             middlewares: self.middlewares.clone(),
             task_catalog: Arc::clone(&self.control_plane.task_catalog),
+            app_config: self.control_plane.config.clone(),
             worker_states: Some(Arc::clone(&self.worker_states)),
         };
 
@@ -47,7 +48,7 @@ impl PersistentTokioRunner {
             worker_runner_id,
             "Worker",
             worker_ctx,
-            &self.executor,
+            self.executor.as_ref(),
         )
         .await
     }

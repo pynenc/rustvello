@@ -80,7 +80,7 @@ rustvello                     Application layer — RustvelloApp, RustvelloBuild
     │                         auto-discover via inventory::collect!
     │
     ├── rustvello-monitoring  Web dashboard (Axum + Askama + HTMX + SVG)
-    ├── rustvello-prometheus  Prometheus EventEmitter implementation
+    ├── rustvello-otel        OTLP lifecycle EventEmitter adapter
     ├── rustvello-test-suite  Macro-generated backend compliance tests
     │
     ├── rustvello-python      PyO3 #[pyclass] wrappers (Rust → Python bridge)
@@ -442,10 +442,10 @@ PersistentTokioRunner (default)       RayonRunner (dedicated CPU fleet)
                               |
                     admitted invocation
                               |
-                 +------------+------------+
-                 |                         |
-          TokioExecutor              RayonExecutor
-       direct / spawn_blocking       bounded Rayon pool
+                 +------------+------------+------------------+
+                 |                         |                  |
+          TokioExecutor              RayonExecutor     SubprocessExecutor
+       direct / spawn_blocking       bounded Rayon pool   worker processes
 ```
 
 `PersistentTokioRunner` is the general-purpose default. Its executor runs short
@@ -454,6 +454,21 @@ to Tokio's bounded blocking pool. `RayonRunner` remains an explicit deployment
 choice for CPU-focused logical queues. Rayon schedules independent invocation
 closures; it does not split one invocation's input unless task code itself uses
 Rayon parallel iterators, `join`, or `scope`.
+
+`SubprocessExecutor` (`ExecutorKind::Python`) is the executor for Python task
+code that must not share one interpreter. `PersistentTokioRunner::with_subprocess_executor`
+turns the worker slots into a bounded pool of child processes started from a
+`SubprocessSpec { command, env, kind }`. Each child prints a `{"ready": true}`
+line once it has imported the application, then answers one JSON request per
+line (`invocation_id`, task identity, serialized `args`, `num_retries`, parent
+id, trace carrier, workflow context) with `{"ok": true, "result": ...}` or
+`{"ok": false, "error_type", "message", "traceback"}`. Task failures become
+`RustvelloError::TaskExecution`, so `retry_for_errors` matching works exactly as
+for in-process execution; a child that dies mid-task is reported as
+`WorkerProcessCrashed` and replaced. `py-rustvello` uses this executor for
+`App.run(num_processes=N)` with `python -m rustvello.worker --child` as the
+child command, so N CPU-bound Python tasks run on N cores while claiming,
+heartbeats, recovery and trigger evaluation stay in the Rust control plane.
 
 The public runner set is intentionally small. `PersistentTokioRunner` is the
 default and covers general workloads, including `blocking = true` tasks through
@@ -510,8 +525,12 @@ library required.
 
 ### `rustvello-redis`
 
-Redis-backed broker, orchestrator, and state backend via `redis-rs`. Uses pipelining
-and `MGET` batching to minimize round trips. Suitable for distributed multi-host deployments.
+Redis-backed broker, orchestrator, and state backend via `redis-rs`. Atomic
+publication prevents partially visible submissions, dequeue uses expiring delivery
+leases, and bounded connections recover after restart. The optional durable profile
+requires non-eviction plus AOF or RDB; private-CA TLS retains hostname validation.
+See {doc}`contributing/redis-runtime-profile`. Deployment still owns Redis backup,
+resource isolation and HA policy.
 
 ### `rustvello-monitoring`
 
@@ -522,12 +541,13 @@ Axum web server with Askama HTML templates and HTMX for live updates. Features:
 - **Invocation tables** — filterable by status, task, runner, time range
 - **Workflow view** — parent/child invocation trees
 - **Trigger evidence** — event list/detail and trigger-run participants
-- **Prometheus endpoint** — `/metrics` when `rustvello-prometheus` is active
+- **OTLP correlation** — timeline identities link to exported task-attempt records
 
-### `rustvello-prometheus`
+### `rustvello-otel`
 
-Implements `EventEmitter` using the `metrics` crate facade. Bridges rustvello lifecycle
-events to Prometheus counters and histograms without a hard runtime dependency.
+Maps versioned native lifecycle events to OpenTelemetry OTLP traces, logs,
+worker resources, and completion sums. Transport executes behind the core bounded
+asynchronous emitter, never on task paths.
 
 ### `rustvello-test-suite`
 

@@ -165,14 +165,10 @@ This keeps the server running after the selected test completes so you can open
 the printed dashboard URL in a browser. `RUSTVELLO_MONITOR_KEEP_ALIVE=1` is also
 accepted when you want the longer namespaced variable.
 
-## Prometheus Tests
+## OTLP Lifecycle Tests
 
-The `rustvello-prometheus` crate uses `metrics::with_local_recorder` for test
-isolation:
+The `rustvello-otel` exporter contains offline mapping, context propagation, and payload bounding tests:
 
 ```bash
-cargo test -p rustvello-prometheus
+cargo test -p rustvello-otel
 ```
-
-Each test installs a thread-local metrics recorder, so tests never share global
-state and can run in parallel safely.

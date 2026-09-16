@@ -23,9 +23,11 @@ postgres-native-tls = { workspace = true, optional = true }
 native-tls = { workspace = true, optional = true }
 
 [features]
+fault-injection = []
 tls = ["postgres-native-tls", "native-tls"]
 
 [dev-dependencies]
+tempfile = { workspace = true }
 rustvello-test-suite = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }

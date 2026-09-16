@@ -17,18 +17,27 @@ Backend selection::
 
     app = App(backend="sqlite", db_path="./tasks.db")
     app = App(backend="redis", redis_url="redis://localhost:6379")
+    app = App(backend="mongo3", mongo_host="mongo", mongo_username="u", mongo_password="p",
+              mongo_auth_source="admin", mongo_db="pynenc", broker="rabbitmq",
+              rabbitmq_url="amqp://rabbitmq-service/")
 
 Running a persistent worker::
 
-    app.run()  # blocks, processes queued invocations
+    app.run()                      # in-process workers (I/O-bound Python)
+    app.run(num_processes=8)       # one interpreter per worker (CPU-bound Python)
 """
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 import json
+import os
+import sys
 import threading
 import time
+from collections.abc import Sequence
+from contextlib import contextmanager
 from enum import Enum
 from typing import Any, Callable, TypeVar
 
@@ -41,19 +50,92 @@ from rustvello.rustvello import (
     Rustvello,
     TaskConfig,
     get_current_invocation_id,
+    get_current_num_retries,
+    get_current_trace_context,
 )
 
 F = TypeVar("F", bound=Callable[..., Any])
 
-__all__ = ["App", "ForeignTaskHandle", "Invocation", "TaskHandle", "TaskLanguage"]
+__all__ = ["App", "CurrentInvocation", "ForeignTaskHandle", "Invocation", "TaskHandle", "TaskLanguage"]
 
 
 _SENTINEL = object()  # marks "no pre-computed result"
 
 
+def _current_trace_carrier() -> tuple[str | None, str | None]:
+    """Inject the active Python OTel context without requiring the SDK."""
+    try:
+        from opentelemetry.propagate import inject
+    except ImportError:
+        return None, None
+    carrier: dict[str, str] = {}
+    inject(carrier)
+    return carrier.get("traceparent"), carrier.get("tracestate")
+
+
+@contextmanager
+def _invocation_trace_context() -> Any:
+    """Attach Rustvello's execution span identity while executing a Python task."""
+    carrier = get_current_trace_context()
+    if carrier is None or carrier[0] is None:
+        yield
+        return
+    try:
+        from opentelemetry.context import attach, detach
+        from opentelemetry.propagate import extract
+    except ImportError:
+        yield
+        return
+    values = {"traceparent": carrier[0]}
+    if carrier[1] is not None:
+        values["tracestate"] = carrier[1]
+    token = attach(extract(values))
+    try:
+        yield
+    finally:
+        detach(token)
+
+
+def _mongo_url_from_parts(
+    host: str | None,
+    port: int | None,
+    username: str | None,
+    password: str | None,
+    auth_source: str | None,
+) -> str:
+    """Assemble a Mongo URI from host/port/credential fields."""
+    from urllib.parse import quote
+
+    credentials = ""
+    if username:
+        credentials = quote(username, safe="")
+        if password:
+            credentials += ":" + quote(password, safe="")
+        credentials += "@"
+    query = f"/?authSource={quote(auth_source, safe='')}" if auth_source else ""
+    return f"mongodb://{credentials}{host or 'localhost'}:{port or 27017}{query}"
+
+
+def _run_python_task(fn: Callable[..., Any], args_json: str) -> str:
+    args_dict: dict[str, str] = json.loads(args_json)
+    deserialized = {key: json.loads(value) for key, value in args_dict.items()}
+    with _invocation_trace_context():
+        return json.dumps(fn(**deserialized))
+
+
 class TaskLanguage(str, Enum):
     Rust = "rust"
     Python = "python"
+
+
+@dataclasses.dataclass(frozen=True)
+class CurrentInvocation:
+    """What :meth:`App.current_invocation` knows about the task attempt running right now."""
+
+    invocation_id: str
+    task_key: str
+    num_retries: int
+    arguments: dict[str, Any]
 
 
 class Invocation:
@@ -116,14 +198,13 @@ class Invocation:
             if status.is_terminal():
                 str_status = str(status)
                 if str_status == "FAILED":
-                    raw_err = self._app._engine.get_result(self._invocation_id)
-                    raise RuntimeError(f"Task failed: {raw_err}")
+                    raise RuntimeError(f"Task failed: {self._app._failure_message(self._invocation_id)}")
                 raw = self._app._engine.get_result(self._invocation_id)
                 if raw is None:
                     return None
                 return json.loads(raw)
             if time.monotonic() >= deadline:
-                raise TimeoutError(f"Invocation {self._invocation_id} still {status} " f"after {timeout}s")
+                raise TimeoutError(f"Invocation {self._invocation_id} still {status} after {timeout}s")
             time.sleep(poll_interval)
 
 
@@ -160,6 +241,16 @@ class TaskHandle:
         serialized = {k: json.dumps(v) for k, v in kwargs.items()}
         return self._dispatch(serialized)
 
+    def submit_with_id(self, invocation_id: InvocationId, **kwargs: Any) -> Invocation:
+        """Retry an ambiguous durable submission with the same ID and content.
+
+        Requires the co-located SQLite runtime; synchronous dev mode is not durable.
+        Keep the same parent/workflow/W3C context when replaying a submission.
+        """
+        if self._app._dev_mode_force_sync:
+            raise ValueError("durable submission is unavailable in synchronous dev mode")
+        return self._dispatch({k: json.dumps(v) for k, v in kwargs.items()}, invocation_id)
+
     @property
     def is_workflow_task(self) -> bool:
         """Whether this handle was registered as an explicit workflow root."""
@@ -171,14 +262,11 @@ class TaskHandle:
         fn = self._func
 
         def _wrapper(args_json: str) -> str:
-            args_dict: dict[str, str] = json.loads(args_json)
-            deserialized = {k: json.loads(v) for k, v in args_dict.items()}
-            result = fn(**deserialized)
-            return json.dumps(result)
+            return _run_python_task(fn, args_json)
 
         return _wrapper
 
-    def _dispatch(self, serialized: dict[str, str]) -> Invocation:
+    def _dispatch(self, serialized: dict[str, str], invocation_id: InvocationId | None = None) -> Invocation:
         """Route to call_sync or submit depending on the app mode."""
         if self._app._dev_mode_force_sync:
             deserialized = {key: json.loads(value) for key, value in serialized.items()}
@@ -191,7 +279,16 @@ class TaskHandle:
                 sync_result=value,
                 sync_status=InvocationStatus.success(),
             )
-        inv_id = self._app._engine.submit_task(self._language, self._module, self._name, serialized)
+        traceparent, tracestate = _current_trace_carrier()
+        inv_id = self._app._engine.submit_task(
+            self._language,
+            self._module,
+            self._name,
+            serialized,
+            traceparent,
+            tracestate,
+            invocation_id,
+        )
         return Invocation(self._app, inv_id)
 
 
@@ -205,10 +302,14 @@ class ForeignTaskHandle:
         language: TaskLanguage,
         module: str,
         name: str,
+        queue: str = "default",
+        priority: float = 0.0,
     ) -> None:
         self._app = app
         self._func = func
         self._language = language.value
+        self._queue = queue
+        self._priority = priority
         self._module = module
         self._name = name
         self.__name__ = func.__name__
@@ -220,7 +321,15 @@ class ForeignTaskHandle:
         bound = sig.bind(*args, **kwargs)
         bound.apply_defaults()
         serialized = {k: json.dumps(v) for k, v in bound.arguments.items()}
-        inv_id = self._app._engine.submit_task(self._language, self._module, self._name, serialized)
+        traceparent, tracestate = _current_trace_carrier()
+        inv_id = self._app._engine.submit_task(
+            self._language,
+            self._module,
+            self._name,
+            serialized,
+            traceparent,
+            tracestate,
+        )
         return Invocation(self._app, inv_id)
 
     def submit(self, **kwargs: Any) -> Invocation:
@@ -245,6 +354,8 @@ class App:
         postgres_url: PostgreSQL connection string (for ``backend="postgres"``).
         mongo_url: MongoDB connection URI (for ``backend="mongo"``).
         mongo_db: MongoDB database name (for ``backend="mongo"``).
+        otlp_endpoint: OTLP/HTTP endpoint for lifecycle telemetry.
+        otlp_bearer_token: Bearer token paired with ``otlp_endpoint``.
 
     Example::
 
@@ -270,14 +381,31 @@ class App:
         *,
         backend: str = "memory",
         db_path: str = "./rustvello.db",
+        sqlite_synchronous: str = "FULL",
+        sqlite_busy_timeout_ms: int = 5000,
+        config: AppConfig | None = None,
         redis_url: str = "redis://127.0.0.1:6379",
         postgres_url: str = "postgresql://localhost/rustvello",
-        mongo_url: str = "mongodb://localhost:27017",
+        mongo_url: str | None = None,
         mongo_db: str = "rustvello",
+        mongo_host: str | None = None,
+        mongo_port: int | None = None,
+        mongo_username: str | None = None,
+        mongo_password: str | None = None,
+        mongo_auth_source: str | None = None,
+        broker: str | None = None,
+        rabbitmq_url: str = "amqp://guest:guest@127.0.0.1:5672",
+        rabbitmq_prefix: str | None = None,
+        import_path: str | None = None,
+        otlp_endpoint: str | None = None,
+        otlp_bearer_token: str | None = None,
     ) -> None:
+        if (otlp_endpoint is None) != (otlp_bearer_token is None):
+            raise ValueError("otlp_endpoint and otlp_bearer_token must be provided together")
         self._app_id = app_id
-        self._dev_mode_force_sync = dev_mode_force_sync
         self._backend_name = backend.lower()
+        self._broker_name = broker.lower() if broker else None
+        self._import_path = import_path
         self._tasks: dict[str, TaskHandle] = {}
         self._foreign_tasks: dict[str, ForeignTaskHandle] = {}
         self._task_configs: dict[str, dict[str, Any]] = {}
@@ -285,33 +413,55 @@ class App:
         self._runner = None
         self._runner_thread: threading.Thread | None = None
         self._triggers: list[_TriggerDef] = []
+        self._otlp_endpoint = otlp_endpoint
+        self._otlp_bearer_token = otlp_bearer_token
+        self._telemetry_stopped = False
+        self._last_runner_telemetry: dict[str, int] | None = None
 
-        config = AppConfig(
-            app_id=app_id,
-            dev_mode_force_sync=dev_mode_force_sync,
+        if config is None:
+            # RUSTVELLO__* env vars, ./pyproject.toml [tool.rustvello.app] and defaults,
+            # like the Rust builder; explicit constructor arguments win.
+            config = AppConfig.from_env(app_id=app_id)
+            dev_mode_force_sync = dev_mode_force_sync or config.dev_mode_force_sync
+            config.dev_mode_force_sync = dev_mode_force_sync
+        elif config.app_id != app_id or config.dev_mode_force_sync != dev_mode_force_sync:
+            raise ValueError("AppConfig app_id and dev_mode_force_sync must match App")
+        self._dev_mode_force_sync = dev_mode_force_sync
+        self._config = config
+
+        if mongo_url is None:
+            mongo_url = (
+                _mongo_url_from_parts(mongo_host, mongo_port, mongo_username, mongo_password, mongo_auth_source)
+                if any(
+                    v is not None for v in (mongo_host, mongo_port, mongo_username, mongo_password, mongo_auth_source)
+                )
+                else "mongodb://localhost:27017"
+            )
+        backends = _create_backends(
+            self._backend_name,
+            app_id,
+            db_path=db_path,
+            sqlite_synchronous=sqlite_synchronous,
+            sqlite_busy_timeout_ms=sqlite_busy_timeout_ms,
+            redis_url=redis_url,
+            postgres_url=postgres_url,
+            mongo_url=mongo_url,
+            mongo_db=mongo_db,
+            broker=self._broker_name,
+            rabbitmq_url=rabbitmq_url,
+            rabbitmq_prefix=rabbitmq_prefix or app_id,
         )
-
-        if self._backend_name == "memory":
-            self._engine = Rustvello(config=config)
-        else:
-            backends = _create_backends(
-                self._backend_name,
-                app_id,
-                db_path=db_path,
-                redis_url=redis_url,
-                postgres_url=postgres_url,
-                mongo_url=mongo_url,
-                mongo_db=mongo_db,
-            )
-            self._backend_objects = backends
-            self._engine = Rustvello.from_backends(
-                backends["orchestrator"],
-                backends["state_backend"],
-                backends["broker"],
-                backends["trigger"],
-                backends["client_data_store"],
-                config,
-            )
+        self._backend_objects = backends
+        self._engine = Rustvello.from_backends(
+            backends["orchestrator"],
+            backends["state_backend"],
+            backends["broker"],
+            backends["trigger"],
+            backends["client_data_store"],
+            config,
+        )
+        if otlp_endpoint is not None and otlp_bearer_token is not None:
+            self._engine.enable_otlp(otlp_endpoint, otlp_bearer_token)
 
     def task(
         self,
@@ -325,6 +475,10 @@ class App:
         blocking: bool = False,
         parallel_batch_size: int = 100,
         reroute_on_cc: bool = False,
+        queue: str = "default",
+        priority: float = 0.0,
+        retry_for: tuple[type[BaseException], ...] = (),
+        replace: bool = False,
         _is_workflow_task: bool = False,
     ) -> Any:
         """Register a function as a distributed task.
@@ -352,6 +506,13 @@ class App:
             parallel_batch_size: How many invocations to retrieve per batch.
             reroute_on_cc: If ``True``, reroute invocations back to the broker
                 when concurrency-controlled (instead of failing).
+            queue: Broker queue shared by initial submission, recovery and retries.
+            priority: Larger values are claimed first within a queue.
+            retry_for: Exception classes that trigger a retry (matched by class name,
+                as ``retry_for_errors``). Empty means every exception retries while
+                ``max_retries`` allows.
+            replace: Re-register a task already known under the same ``module.name``
+                (module reloads, tests redefining a task) instead of raising.
 
         Returns:
             A :class:`TaskHandle` that submits the task when called.
@@ -366,6 +527,9 @@ class App:
             "parallel_batch_size": parallel_batch_size,
             "reroute_on_cc": reroute_on_cc,
             "is_workflow_task": _is_workflow_task,
+            "queue": queue,
+            "priority": priority,
+            "retry_for_errors": [cls.__name__ for cls in retry_for],
         }
 
         def decorator(fn: Callable[..., Any]) -> TaskHandle:
@@ -380,17 +544,19 @@ class App:
                 cache_results=cache_results,
                 running_concurrency=running_concurrency,
                 is_workflow_task=_is_workflow_task,
+                queue=queue,
+                priority=priority,
+                retry_for_errors=[cls.__name__ for cls in retry_for],
             )
 
             def _rust_wrapper(args_json: str) -> str:
-                args_dict: dict[str, str] = json.loads(args_json)
-                deserialized = {k: json.loads(v) for k, v in args_dict.items()}
-                result = fn(**deserialized)
-                return json.dumps(result)
+                return _run_python_task(fn, args_json)
 
+            key = f"python::{module}.{name}"
+            if replace and key in self._tasks:
+                self._engine.unregister_task(module, name)
             self._engine.register_task(module, name, _rust_wrapper, task_config)
             handle = TaskHandle(self, fn, "python", module, name)
-            key = f"python::{module}.{name}"
             self._tasks[key] = handle
             self._task_configs[key] = extra_config
             return handle
@@ -410,6 +576,10 @@ class App:
         key_arguments: list[str] | None = None,
         parallel_batch_size: int = 100,
         reroute_on_cc: bool = False,
+        queue: str = "default",
+        priority: float = 0.0,
+        retry_for: tuple[type[BaseException], ...] = (),
+        replace: bool = False,
     ) -> Any:
         """Register a function as an explicit workflow root.
 
@@ -428,6 +598,10 @@ class App:
             blocking=True,
             parallel_batch_size=parallel_batch_size,
             reroute_on_cc=reroute_on_cc,
+            queue=queue,
+            priority=priority,
+            retry_for=retry_for,
+            replace=replace,
             _is_workflow_task=True,
         )
 
@@ -456,7 +630,7 @@ class App:
             foreign_module = module or fn.__module__
             foreign_name = name or fn.__name__
             self._engine.register_foreign_task(language.value, foreign_module, foreign_name, config)
-            handle = ForeignTaskHandle(self, fn, language, foreign_module, foreign_name)
+            handle = ForeignTaskHandle(self, fn, language, foreign_module, foreign_name, queue, priority)
             self._foreign_tasks[f"{language.value}::{foreign_module}.{foreign_name}"] = handle
             return handle
 
@@ -473,6 +647,10 @@ class App:
         idle_sleep_ms: int = 50,
         evaluate_triggers: bool = True,
         block: bool = True,
+        num_processes: int | None = None,
+        queues: Sequence[str] | None = None,
+        import_path: str | None = None,
+        worker_env: dict[str, str] | None = None,
     ) -> None:
         """Start a persistent task runner.
 
@@ -480,21 +658,39 @@ class App:
         manages heartbeats and recovery.
 
         Args:
-            num_workers: Number of concurrent worker slots.
+            num_workers: Number of concurrent worker slots (in-process threads).
             idle_sleep_ms: Sleep interval when no work is available (ms).
             evaluate_triggers: Whether this runner should evaluate trigger conditions.
             block: If ``True`` (default), blocks until :meth:`stop` is
                 called. If ``False``, starts the runner in a background thread.
+            num_processes: Run task code in this many worker processes instead of
+                threads. Each worker is its own interpreter (own GIL), so CPU-bound
+                Python tasks run in parallel; the control plane stays here. The
+                workers import the app through :attr:`import_path`.
+            queues: Restrict this runner to these broker queues (overrides
+                ``runner_queues`` from the configuration).
+            import_path: ``"module:attribute"`` of this app for the worker
+                processes; defaults to the constructor's ``import_path`` or to
+                auto-discovery through ``sys.modules``.
+            worker_env: Extra environment variables for the worker processes.
         """
+        if queues is not None:
+            self._config.runner_queues = list(queues)
         runner = self._build_runner(
             num_workers=num_workers,
             idle_sleep_ms=idle_sleep_ms,
             evaluate_triggers=evaluate_triggers,
+            num_processes=num_processes,
+            import_path=import_path,
+            worker_env=worker_env,
         )
         self._runner = runner
 
         if block:
-            runner.run()
+            try:
+                runner.run()
+            finally:
+                self.stop()
         else:
             self._runner_thread = threading.Thread(target=runner.run, daemon=True, name="rustvello-runner")
             self._runner_thread.start()
@@ -505,7 +701,38 @@ class App:
             self._runner.shutdown()
         if self._runner_thread is not None:
             self._runner_thread.join(timeout=30)
+            if self._runner_thread.is_alive():
+                raise TimeoutError("runner shutdown timed out; task execution is still draining")
             self._runner_thread = None
+        if self._runner is not None:
+            if self._runner.is_running():
+                return
+            if self._otlp_endpoint is not None:
+                self._last_runner_telemetry = dict(self._runner.telemetry_stats())
+            self._runner = None
+        if self._otlp_endpoint is not None and not self._telemetry_stopped:
+            self._engine.shutdown_telemetry()
+            self._telemetry_stopped = True
+
+    def flush_telemetry(self, timeout_ms: int = 5_000) -> dict[str, dict[str, int]]:
+        """Flush enabled lifecycle exporters and return bounded delivery counters."""
+        if self._otlp_endpoint is None:
+            raise RuntimeError("OTLP telemetry is not enabled")
+        exporters = {"submission": dict(self._engine.flush_telemetry(timeout_ms))}
+        if self._runner is not None:
+            exporters["runner"] = dict(self._runner.flush_telemetry(timeout_ms))
+        return exporters
+
+    def telemetry_stats(self) -> dict[str, dict[str, int]]:
+        """Read queue and OTLP acknowledgement/loss counters without waiting."""
+        if self._otlp_endpoint is None:
+            raise RuntimeError("OTLP telemetry is not enabled")
+        exporters = {"submission": dict(self._engine.telemetry_stats())}
+        if self._runner is not None:
+            exporters["runner"] = dict(self._runner.telemetry_stats())
+        elif self._last_runner_telemetry is not None:
+            exporters["runner"] = self._last_runner_telemetry.copy()
+        return exporters
 
     def _build_runner(
         self,
@@ -513,8 +740,20 @@ class App:
         num_workers: int = 4,
         idle_sleep_ms: int = 50,
         evaluate_triggers: bool = True,
+        num_processes: int | None = None,
+        import_path: str | None = None,
+        worker_env: dict[str, str] | None = None,
     ) -> Any:
         builder = RustTaskRunnerBuilder(self._app_id)
+        builder.with_config(self._config)
+        if num_processes is not None:
+            if num_processes < 1:
+                raise ValueError("num_processes must be at least 1")
+            num_workers = num_processes
+            builder.with_process_pool(
+                self._worker_command(import_path),
+                list(self._worker_env(worker_env).items()),
+            )
 
         if self._backend_objects is not None:
             builder.with_backends(
@@ -528,6 +767,8 @@ class App:
 
         builder.with_num_workers(num_workers)
         builder.with_idle_sleep(idle_sleep_ms)
+        if self._otlp_endpoint is not None and self._otlp_bearer_token is not None:
+            builder.enable_otlp(self._otlp_endpoint, self._otlp_bearer_token)
 
         for key, handle in self._tasks.items():
             extra = self._task_configs.get(key, {})
@@ -540,19 +781,201 @@ class App:
                 reroute_on_cc=extra.get("reroute_on_cc", False),
                 running_concurrency=extra.get("running_concurrency"),
                 max_retries=extra.get("max_retries", 0),
-                retry_for_errors=[],
+                retry_for_errors=extra.get("retry_for_errors", []),
                 registration_concurrency="unlimited",
                 cache_results=extra.get("cache_results", False),
                 disable_cache_args=[],
                 on_diff_non_key_args_raise=False,
                 parallel_batch_size=extra.get("parallel_batch_size", 100),
                 is_workflow_task=extra.get("is_workflow_task", False),
+                queue=extra.get("queue", "default"),
+                priority=extra.get("priority", 0.0),
             )
 
         for handle in self._foreign_tasks.values():
-            builder.register_foreign_task(handle._language, handle._module, handle._name)
+            builder.register_foreign_task(
+                handle._language,
+                handle._module,
+                handle._name,
+                queue=handle._queue,
+                priority=handle._priority,
+            )
 
         return builder.build()
+
+    @property
+    def config(self) -> AppConfig:
+        """The effective :class:`AppConfig`; queue and runner settings are settable on it."""
+        return self._config
+
+    # --- Worker processes ------------------------------------------------
+
+    @property
+    def import_path(self) -> str:
+        """``module:attribute`` under which worker processes import this app."""
+        if self._import_path is None:
+            self._import_path = self._discover_import_path()
+        return self._import_path
+
+    def _discover_import_path(self) -> str:
+        """Find the module attribute bound to this app; explicit ``import_path`` avoids the scan."""
+        candidates: list[str] = []
+        for module_name, module in list(sys.modules.items()):
+            namespace = getattr(module, "__dict__", None)
+            if not isinstance(namespace, dict):
+                continue
+            for attribute, value in list(namespace.items()):
+                if value is self and not attribute.startswith("_"):
+                    if module_name == "__main__":
+                        spec = getattr(module, "__spec__", None)
+                        module_name = getattr(spec, "name", None) or module_name
+                    candidates.append(f"{module_name}:{attribute}")
+        importable = [c for c in candidates if not c.startswith("__main__:")]
+        if importable:
+            return sorted(importable, key=len)[0]
+        raise RuntimeError(
+            "cannot determine how worker processes should import this App; pass "
+            "App(..., import_path='package.module:app') or run(..., import_path=...)"
+        )
+
+    def _worker_command(self, import_path: str | None) -> list[str]:
+        return [sys.executable, "-m", "rustvello.worker", "--child", "--app", import_path or self.import_path]
+
+    def _worker_env(self, extra: dict[str, str] | None) -> dict[str, str]:
+        env = {
+            # the children must resolve the same modules as this interpreter
+            "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
+            "RUSTVELLO_WORKER_CHILD": "1",
+        }
+        if extra:
+            env.update(extra)
+        return env
+
+    # --- Operations ------------------------------------------------------
+
+    def purge(self) -> None:
+        """Delete every queued invocation, control record, stored state and trigger."""
+        assert self._backend_objects is not None
+        for name in ("broker", "orchestrator", "state_backend", "trigger", "client_data_store"):
+            component = self._backend_objects.get(name)
+            if component is not None and hasattr(component, "purge"):
+                component.purge()
+
+    def _failure_message(self, invocation_id: InvocationId) -> str:
+        """Stored error of a failed invocation as ``ErrorType: message`` (falls back to the raw record)."""
+        assert self._backend_objects is not None
+        state_backend = self._backend_objects["state_backend"]
+        try:
+            raw = state_backend.get_error_json(str(invocation_id))
+        except Exception:  # noqa: BLE001 - the error record is informative only
+            raw = None
+        if raw:
+            try:
+                error = json.loads(raw)
+                if isinstance(error, dict):
+                    kind = error.get("error_type") or error.get("type") or error.get("kind")
+                    message = error.get("message") or error.get("error") or ""
+                    if kind:
+                        return f"{kind}: {message}" if message else str(kind)
+            except ValueError:
+                pass
+            return str(raw)
+        try:
+            return str(state_backend.get_error(str(invocation_id)))
+        except Exception:  # noqa: BLE001
+            return str(self._engine.get_result(invocation_id))
+
+    def queue_depth(self, queue: str = "default") -> int:
+        """Number of queued Python invocations waiting in one logical queue."""
+        assert self._backend_objects is not None
+        return int(self._backend_objects["broker"].count_invocations_in_queues([queue]))
+
+    def queue_depths(self) -> dict[str, int]:
+        """Queued invocations per declared broker queue."""
+        return {queue: self.queue_depth(queue) for queue in self._config.broker_queues}
+
+    def get_task(self, key: str) -> "TaskHandle":
+        """Look up a task by ``module.name`` or ``python::module.name``."""
+        full = key if "::" in key else f"python::{key}"
+        try:
+            return self._tasks[full]
+        except KeyError:
+            raise KeyError(f"unknown task {key!r}; registered: {sorted(self._tasks)}") from None
+
+    def current_invocation(self) -> CurrentInvocation | None:
+        """Identity, retry count and arguments of the task attempt running in this thread."""
+        invocation_id = get_current_invocation_id()
+        if invocation_id is None:
+            return None
+        num_retries = get_current_num_retries() or 0
+        task_key = ""
+        arguments: dict[str, Any] = {}
+        assert self._backend_objects is not None
+        state_backend = self._backend_objects["state_backend"]
+        try:
+            invocation = json.loads(state_backend.get_invocation(invocation_id))
+            task = invocation["task_id"]
+            task_key = f"{task.get('language', 'python')}::{task['module']}.{task['name']}"
+            call_id = invocation["call_id"]
+            call_key = f"{task_key}:{call_id['args_id']}"
+            call = json.loads(state_backend.get_call(call_key))
+            arguments = {k: json.loads(v) for k, v in call.get("serialized_arguments", {}).items()}
+        except Exception:  # noqa: BLE001 - metadata is best effort; the id and retries are authoritative
+            pass
+        return CurrentInvocation(invocation_id, task_key, num_retries, arguments)
+
+    def wait_results(
+        self, invocations: Sequence["Invocation"], timeout: float = 60.0, poll_interval: float = 0.05
+    ) -> list[Any]:
+        """Block until every invocation is terminal; results in the same order.
+
+        Raises RuntimeError on the first failed invocation and TimeoutError when the
+        deadline passes; one poll loop covers all invocations instead of one per child.
+        """
+        pending = dict(enumerate(invocations))
+        results: list[Any] = [None] * len(invocations)
+        deadline = time.monotonic() + timeout
+        while pending:
+            for index, invocation in list(pending.items()):
+                if not invocation.status.is_terminal():
+                    continue
+                results[index] = invocation.result(timeout=0)  # terminal: returns or raises without waiting
+                del pending[index]
+            if pending:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"{len(pending)} invocation(s) still pending after {timeout}s")
+                time.sleep(poll_interval)
+        return results
+
+    @property
+    def dev_mode_force_sync(self) -> bool:
+        """Whether task calls run inline in the caller; settable at runtime (tests)."""
+        return self._dev_mode_force_sync
+
+    @dev_mode_force_sync.setter
+    def dev_mode_force_sync(self, enabled: bool) -> None:
+        self._dev_mode_force_sync = bool(enabled)
+        self._config.dev_mode_force_sync = bool(enabled)
+        self._engine.set_dev_mode_force_sync(bool(enabled))
+
+    def start_monitor(self, host: str = "127.0.0.1", port: int = 8000, log_level: str = "info") -> Any:
+        """Serve the monitoring dashboard for this app's backends; returns a stoppable server handle."""
+        from rustvello.rustvello import start_monitor
+
+        assert self._backend_objects is not None
+        return start_monitor(
+            self._app_id,
+            self._backend_objects["broker"],
+            self._backend_objects["orchestrator"],
+            self._backend_objects["state_backend"],
+            self._backend_objects["client_data_store"],
+            trigger=self._backend_objects.get("trigger"),
+            task_ids=[(handle._module, handle._name) for handle in self._tasks.values()],
+            host=host,
+            port=port,
+            log_level=log_level,
+            config=self._config,
+        )
 
     # --- Triggers --------------------------------------------------------
 
@@ -639,7 +1062,7 @@ class _TriggerBuilder:
         Returns the :class:`_TriggerDef` for introspection.
         """
         if self._kind is None:
-            raise ValueError("Must specify a trigger type (on_cron / on_interval) " "before calling register()")
+            raise ValueError("Must specify a trigger type (on_cron / on_interval) before calling register()")
         key = f"{self._task_handle._language}::{self._task_handle._module}.{self._task_handle._name}"
         tdef = _TriggerDef(key, self._kind, self._schedule, **self._kwargs)
         self._app._triggers.append(tdef)

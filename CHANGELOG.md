@@ -1,51 +1,34 @@
 # Changelog
 
-## 0.5.0 - 2026-09-04
+## 0.5.1 - 2026-09-15
 
-- Made task language a closed Rust enum and a structural part of `TaskId`, with
-  canonical `language::module.name` display and physical language queue isolation.
-- Added typed foreign-task declarations for Rust and Python applications, plus
-  cross-language calls, waits, triggers, and wrong-worker isolation tests.
-- Added standalone Python workflow roots with `@app.workflow` and
-  `workflow_root()` deterministic random, time, and UUID helpers, while keeping
-  Pynenc as the full Python framework integration.
-- Split the concrete cross-backend `Orchestrator` from the atomic
-  `InvocationControlBackend` persistence port, extracted `TaskCatalog`, and
-  organized orchestration modules by submission, routing, dispatch, retrieval,
-  maintenance, and triggers.
-- Removed deprecated coordinator/core-trait compatibility names and the
-  redundant per-invocation and always-blocking runner surfaces.
-- Unified runner lifecycle in `RunnerControlPlane`, introduced bounded Tokio
-  and Rayon executors, and persisted runner language plus executor metadata for
-  monitoring.
-- Expanded monitoring to show canonical task IDs, task language, runner
-  language, executor kind, Python/Rust logo-colour badges, cross-language
-  timelines, and richer status-history detail.
-- Reworked task occupancy charts to group running work by actual runner
-  language, show active-worker lines per runtime, and provide a hover-linked
-  Rust-rendered legend table for per-bucket Rust/Python comparison.
-- Tightened monitoring timelines with single-line worker labels, denser lane
-  spacing, language-coloured lane backgrounds, and stable Rayon worker-slot
-  identities so CPU pools render as bounded worker groups instead of one row per
-  invocation.
-- Modernized the timeline dashboard with collapsed top filters, wider shared
-  runner/task label rails, full task names, per-runner colours with language
-  badges, synchronized scrolling and time cursors, batched backend reads, and
-  one relation path per invocation for substantially lower browser overhead.
-- Refined timeline hierarchy and occupancy charts with parent-derived worker
-  tones, ranked task colours, readable time ticks and bar spacing, navigable
-  runner labels, strict load-fixture provenance, and visible atomic-service
-  execution windows correlated with each owning runner group.
-- Expanded event monitoring with matched/triggered page summaries, event and
-  trigger-run timeline actions, and JSON trace endpoints for agentic
-  investigation.
-- Added failure-injection coverage for retrying caller-owned invocation IDs
-  after broker publication failure.
-- Added `make monitoring-load` and an ignored monitoring load fixture that
-  generates mixed Rust/Python workflow, trigger, queue, Tokio, and Rayon data
-  for dashboard development, including multiple runner groups and atomic
-  service evidence.
-- Rust crates and Python packaging are version-aligned at `0.5.0`.
+- Process-pool executor for Python task code (`SubprocessExecutor`,
+  `ExecutorKind::Python`): `App.run(num_processes=N, queues=[...])` and the
+  `python -m rustvello.worker module:app` launcher run one interpreter per worker
+  under the Rust control plane.
+- Standalone `App`: `backend="mongo3"`, `broker="rabbitmq"`, Mongo connection
+  parts, `retry_for`, `AppConfig.from_env()/from_file()` with settable fields,
+  runtime `dev_mode_force_sync`, `purge()`, `queue_depth()`, `get_task()`,
+  `current_invocation()`, `wait_results()`, `start_monitor()`, `config`.
+- Bindings: `start_monitor`/`MonitorServer`, `set_current_invocation_context`,
+  `clear_current_invocation_context`, `get_current_task_key`,
+  `TaskConfig.retry_for_errors`, `Rustvello.set_dev_mode_force_sync`, and the
+  queue-aware broker methods (`route_invocation_to_queue`, ...).
+- Failed invocations report `ErrorType: message` from the stored error.
+- Added SQLite atomic publication and idempotent Rust/Python submission,
+  explicit FULL/NORMAL synchronization, owner-fenced execution identity, and
+  native Python recovery configuration.
+- Preserved Python named-queue/priority routing through retries, rejected removed
+  ID reuse, and fenced stale-worker concurrency cleanup. Extended crash coverage
+  to permanent errors, terminal cleanup and original-carrier submission replay.
+- Persisted execution identities and known retry links across Rust/Python worker
+  processes; children inherit their parent's actual execution span.
+- Bounded OTLP request bytes and exporter teardown, and added adverse per-signal
+  delivery accounting tests.
+- Added SQLite delivery reservations/atomic claim acknowledgement, stale-owner
+  payload protection, strict app IDs and bounded runner shutdown.
+- Added bounded native lifecycle capture and `rustvello-otel` OTLP telemetry module.
+- Removed the former Prometheus crate, feature, dependencies, and release surface.
 
 ## 0.4.0 - 2026-09-01
 

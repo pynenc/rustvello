@@ -7,7 +7,9 @@ use rustvello_core::state_backend::StateBackendCore;
 
 use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::identifiers::{CallId, InvocationId, RunnerId, TaskId};
-use rustvello_proto::invocation::{InvocationDTO, InvocationHistory, WorkflowIdentity};
+use rustvello_proto::invocation::{
+    InvocationDTO, InvocationHistory, TraceContextCarrier, WorkflowIdentity,
+};
 use rustvello_proto::status::{InvocationStatus, InvocationStatusRecord};
 
 use crate::db::{blocking, lock_err, parse_status, parse_timestamp, sql_err};
@@ -16,6 +18,10 @@ use super::SqliteStateBackend;
 
 #[async_trait]
 impl StateBackendCore for SqliteStateBackend {
+    fn publication_domain(&self) -> Option<rustvello_core::publication::PublicationDomain> {
+        Some(Arc::clone(&self.db.domain))
+    }
+
     async fn upsert_invocation(
         &self,
         invocation: &InvocationDTO,
@@ -55,8 +61,8 @@ impl StateBackendCore for SqliteStateBackend {
             };
 
             tx.execute(
-                "INSERT OR REPLACE INTO invocations (invocation_id, task_id, call_id, status, created_at, updated_at, parent_invocation_id, workflow_id, workflow_type, workflow_depth)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT OR REPLACE INTO invocations (invocation_id, task_id, call_id, status, created_at, updated_at, parent_invocation_id, workflow_id, workflow_type, workflow_depth, traceparent, tracestate)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 rusqlite::params![
                     &invocation.invocation_id.as_str(),
                     &invocation.task_id.to_string(),
@@ -68,6 +74,8 @@ impl StateBackendCore for SqliteStateBackend {
                     &wf_id,
                     &wf_type,
                     &wf_depth,
+                    &invocation.trace_context.traceparent,
+                    &invocation.trace_context.tracestate,
                 ],
             )
             .map_err(sql_err)?;
@@ -81,6 +89,8 @@ impl StateBackendCore for SqliteStateBackend {
                 ],
             )
             .map_err(sql_err)?;
+
+            tx.execute("UPDATE invocations SET workflow_parent_id=?1 WHERE invocation_id=?2", rusqlite::params![invocation.workflow.as_ref().and_then(|w| w.parent_id.as_ref()).map(InvocationId::as_str), invocation.invocation_id.as_str()]).map_err(sql_err)?;
 
             tx.commit().map_err(sql_err)?;
 
@@ -97,7 +107,7 @@ impl StateBackendCore for SqliteStateBackend {
 
             let conn = db.conn.lock().map_err(lock_err)?;
 
-            let (task_id_str, call_id_str, status_str, created_str, updated_str, parent_inv_id, wf_id, wf_type, wf_depth): (
+            let (task_id_str, call_id_str, status_str, created_str, updated_str, parent_inv_id, wf_id, wf_type, wf_depth, traceparent, tracestate): (
                 String,
                 String,
                 String,
@@ -107,11 +117,13 @@ impl StateBackendCore for SqliteStateBackend {
                 Option<String>,
                 Option<String>,
                 Option<i64>,
+                Option<String>,
+                Option<String>,
             ) = conn
                 .query_row(
-                    "SELECT task_id, call_id, status, created_at, updated_at, parent_invocation_id, workflow_id, workflow_type, workflow_depth FROM invocations WHERE invocation_id = ?1",
+                    "SELECT task_id, call_id, status, created_at, updated_at, parent_invocation_id, workflow_id, workflow_type, workflow_depth, traceparent, tracestate FROM invocations WHERE invocation_id = ?1",
                     [invocation_id.as_str()],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?)),
                 )
                 .map_err(|_| RustvelloError::InvocationNotFound { invocation_id: invocation_id.clone() })?;
 
@@ -137,7 +149,7 @@ impl StateBackendCore for SqliteStateBackend {
                     Some(WorkflowIdentity {
                         workflow_id: InvocationId::from_string(wf_id_str),
                         workflow_type: wf_task_id,
-                        parent_id: None,
+                        parent_id: conn.query_row("SELECT workflow_parent_id FROM invocations WHERE invocation_id=?1", [invocation_id.as_str()], |row| row.get::<_, Option<String>>(0)).map_err(sql_err)?.map(InvocationId::from_string),
                         depth: u32::try_from(wf_depth.unwrap_or(0)).unwrap_or(0),
                     })
                 }
@@ -153,6 +165,10 @@ impl StateBackendCore for SqliteStateBackend {
                 updated_at,
                 parent_invocation_id,
                 workflow,
+                trace_context: TraceContextCarrier {
+                    traceparent,
+                    tracestate,
+                },
             })
 
         })
@@ -216,6 +232,29 @@ impl StateBackendCore for SqliteStateBackend {
         .await
     }
 
+    async fn store_result_for_runner(
+        &self,
+        invocation_id: &InvocationId,
+        result: &str,
+        runner_id: &rustvello_proto::identifiers::RunnerId,
+    ) -> RustvelloResult<()> {
+        let id = invocation_id.clone();
+        let result = result.to_owned();
+        crate::completion::write_owned(
+            Arc::clone(&self.db),
+            invocation_id.clone(),
+            runner_id.clone(),
+            rustvello_proto::status::InvocationStatus::Success,
+            move |tx| {
+                tx.execute(
+                    "INSERT OR REPLACE INTO results (invocation_id, result) VALUES (?1, ?2)",
+                    rusqlite::params![id.as_str(), result],
+                )
+            },
+        )
+        .await
+    }
+
     async fn get_result(&self, invocation_id: &InvocationId) -> RustvelloResult<Option<String>> {
         let db = Arc::clone(&self.db);
         let invocation_id = invocation_id.clone();
@@ -258,6 +297,24 @@ impl StateBackendCore for SqliteStateBackend {
 
         })
         .await
+    }
+
+    async fn store_error_for_runner(
+        &self,
+        invocation_id: &InvocationId,
+        error: &TaskError,
+        runner_id: &rustvello_proto::identifiers::RunnerId,
+    ) -> RustvelloResult<()> {
+        let id = invocation_id.clone();
+        let error = error.clone();
+        crate::completion::write_owned(
+            Arc::clone(&self.db), invocation_id.clone(), runner_id.clone(),
+            rustvello_proto::status::InvocationStatus::Failed,
+            move |tx| tx.execute(
+                "INSERT OR REPLACE INTO errors (invocation_id, error_type, message, traceback) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![id.as_str(), error.error_type, error.message, error.traceback],
+            ),
+        ).await
     }
 
     async fn get_error(&self, invocation_id: &InvocationId) -> RustvelloResult<Option<TaskError>> {
@@ -380,8 +437,12 @@ impl StateBackendCore for SqliteStateBackend {
         let db = Arc::clone(&self.db);
         blocking(move || {
             let conn = db.conn.lock().map_err(lock_err)?;
-            conn.execute_batch(
-                "DELETE FROM invocations;
+            let tx = conn.unchecked_transaction().map_err(sql_err)?;
+            tx.execute_batch(
+                "INSERT OR IGNORE INTO submission_publications (invocation_id, identity_json)
+                 SELECT invocation_id, '' FROM invocations;
+                 UPDATE submission_publications SET identity_json = '';
+                 DELETE FROM invocations;
                  DELETE FROM calls;
                  DELETE FROM results;
                  DELETE FROM errors;
@@ -396,6 +457,7 @@ impl StateBackendCore for SqliteStateBackend {
                  DELETE FROM runner_contexts;",
             )
             .map_err(sql_err)?;
+            tx.commit().map_err(sql_err)?;
             Ok(())
         })
         .await

@@ -1,6 +1,9 @@
 use super::*;
 use rustvello_core::broker::Broker;
 use rustvello_core::error::RustvelloError;
+use rustvello_core::observability::{
+    EventEmitter, EventLevel, TaskLifecycleEvent, TaskLifecycleKind,
+};
 use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::runner::Runner;
 use rustvello_core::state_backend::StateBackend;
@@ -8,10 +11,11 @@ use rustvello_core::task::{TaskDefinition, TaskRegistry};
 use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::config::{AppConfig, TaskConfig};
 use rustvello_proto::identifiers::{InvocationId, RunnerId, TaskId};
-use rustvello_proto::invocation::InvocationDTO;
+use rustvello_proto::invocation::{InvocationDTO, TraceContextCarrier};
 use rustvello_proto::status::{ConcurrencyControlType, InvocationStatus};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 pub(super) fn make_runner() -> (
@@ -58,6 +62,17 @@ pub(super) fn make_runner() -> (
     (runner, orchestrator, state_backend)
 }
 
+#[derive(Clone, Default)]
+struct RecordingEmitter {
+    events: Arc<Mutex<Vec<TaskLifecycleEvent>>>,
+}
+
+impl EventEmitter for RecordingEmitter {
+    fn on_task_lifecycle(&self, event: &TaskLifecycleEvent) {
+        self.events.lock().unwrap().push(event.clone());
+    }
+}
+
 #[tokio::test]
 async fn test_run_one_no_work() {
     let (runner, _, _) = make_runner();
@@ -98,6 +113,55 @@ async fn test_full_invocation_cycle() {
 }
 
 #[tokio::test]
+async fn lifecycle_hooks_carry_attempt_worker_and_task_context() {
+    let (runner, orchestrator, state_backend) = make_runner();
+    let recording = RecordingEmitter::default();
+    let events = Arc::clone(&recording.events);
+    let runner = runner.with_event_emitter(EventLevel::TaskLifecycle, recording);
+
+    let task_id = TaskId::new("test", "double");
+    let call = CallDTO::new(task_id.clone(), SerializedArguments::new());
+    let invocation_id = orchestrator.register_invocation(&call).await.unwrap();
+    state_backend
+        .upsert_invocation(
+            &InvocationDTO::new(invocation_id.clone(), task_id.clone(), call.call_id.clone()),
+            &call,
+        )
+        .await
+        .unwrap();
+    runner
+        .control_plane
+        .broker
+        .route_invocation(&invocation_id)
+        .await
+        .unwrap();
+
+    assert!(runner.run_one().await.unwrap());
+
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(events[0].kind, TaskLifecycleKind::Started));
+    assert!(matches!(
+        events[1].kind,
+        TaskLifecycleKind::Succeeded { .. }
+    ));
+    for event in events.iter() {
+        assert_eq!(event.context.app_id.as_ref(), "test-app");
+        assert_eq!(event.context.task_id, task_id);
+        assert_eq!(event.context.invocation_id, invocation_id);
+        assert_eq!(event.context.attempt, 0);
+        assert_eq!(event.context.queue.as_ref(), "default");
+        assert_eq!(
+            event.context.worker.runner_cls.as_ref(),
+            "PersistentTokioWorker"
+        );
+        assert!(event.context.worker.parent_runner_id.is_some());
+        assert!(event.context.trace_context.traceparent.is_none());
+    }
+    assert!(events[0].event_time <= events[1].event_time);
+}
+
+#[tokio::test]
 async fn test_retry_on_failure() {
     let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
     let orchestrator: Arc<dyn InvocationControlBackend> =
@@ -120,6 +184,8 @@ async fn test_retry_on_failure() {
         })
         .unwrap();
 
+    let recording = RecordingEmitter::default();
+    let events = Arc::clone(&recording.events);
     let runner = PersistentTokioRunner::new(
         "test-app".to_string(),
         AppConfig::default(),
@@ -128,14 +194,20 @@ async fn test_retry_on_failure() {
         Arc::clone(&state_backend),
         Arc::new(registry),
         None,
-    );
+    )
+    .with_event_emitter(EventLevel::TaskLifecycle, recording);
 
     let task_id = TaskId::new("test", "failing");
     let args = SerializedArguments::new();
     let call = CallDTO::new(task_id.clone(), args);
 
     let inv_id = orchestrator.register_invocation(&call).await.unwrap();
-    let inv_dto = InvocationDTO::new(inv_id.clone(), task_id, call.call_id.clone());
+    let trace_context = TraceContextCarrier {
+        traceparent: Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string()),
+        tracestate: Some("ih=retry".to_string()),
+    };
+    let inv_dto = InvocationDTO::new(inv_id.clone(), task_id, call.call_id.clone())
+        .with_trace_context(trace_context.clone());
     state_backend
         .upsert_invocation(&inv_dto, &call)
         .await
@@ -156,6 +228,49 @@ async fn test_retry_on_failure() {
 
     let error = state_backend.get_error(&inv_id).await.unwrap();
     assert!(error.is_some());
+
+    let events = events.lock().unwrap();
+    let attempts: Vec<_> = events
+        .iter()
+        .filter(|event| matches!(event.kind, TaskLifecycleKind::Started))
+        .collect();
+    assert_eq!(attempts.len(), 3);
+    assert_eq!(attempts[0].context.attempt, 0);
+    assert_eq!(attempts[1].context.attempt, 1);
+    assert_eq!(attempts[2].context.attempt, 2);
+    assert!(attempts
+        .windows(2)
+        .all(|pair| pair[0].context.worker.runner_id != pair[1].context.worker.runner_id));
+    let lifecycle: Vec<_> = events
+        .iter()
+        .map(|event| (&event.kind, event.context.attempt))
+        .collect();
+    assert!(matches!(lifecycle[0], (&TaskLifecycleKind::Started, 0)));
+    assert!(matches!(
+        lifecycle[1],
+        (&TaskLifecycleKind::Failed { .. }, 0)
+    ));
+    assert!(matches!(
+        lifecycle[2],
+        (&TaskLifecycleKind::RetryScheduled { .. }, 0)
+    ));
+    assert!(matches!(lifecycle[3], (&TaskLifecycleKind::Started, 1)));
+    assert!(matches!(
+        lifecycle[4],
+        (&TaskLifecycleKind::Failed { .. }, 1)
+    ));
+    assert!(matches!(
+        lifecycle[5],
+        (&TaskLifecycleKind::RetryScheduled { .. }, 1)
+    ));
+    assert!(matches!(lifecycle[6], (&TaskLifecycleKind::Started, 2)));
+    assert!(matches!(
+        lifecycle[7],
+        (&TaskLifecycleKind::Failed { .. }, 2)
+    ));
+    assert!(events
+        .iter()
+        .all(|event| event.context.trace_context == trace_context));
 }
 
 #[tokio::test]

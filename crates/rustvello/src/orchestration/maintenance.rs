@@ -69,6 +69,50 @@ impl Orchestrator {
         invocation_id: &InvocationId,
         recovery_status: InvocationStatus,
     ) -> RustvelloResult<bool> {
+        if let Some(publication) = self.publication()? {
+            let invocation = self
+                .backends
+                .state_backend
+                .get_invocation(invocation_id)
+                .await?;
+            let (queue, priority) = task_catalog
+                .routing_for(app_config, &invocation.task_id)
+                .ok_or_else(|| RustvelloError::TaskNotRegistered {
+                    task_id: invocation.task_id.clone(),
+                })?;
+            let stale_after_seconds = if recovery_status == InvocationStatus::PendingRecovery {
+                app_config.max_pending_seconds
+            } else {
+                app_config.runner_dead_after_seconds
+            };
+            let recovered = publication
+                .change(
+                    invocation_id,
+                    runner_id,
+                    rustvello_core::publication::PublicationChange::Recover {
+                        status: recovery_status,
+                        stale_after_seconds,
+                        route: rustvello_core::publication::PublicationRoute { queue, priority },
+                    },
+                    false,
+                )
+                .await?
+                .is_some();
+            if recovered {
+                let arguments = self.get_invocation_arguments(invocation_id).await;
+                for status in [recovery_status, InvocationStatus::Rerouted] {
+                    self.report_published_status(
+                        invocation_id,
+                        runner_id,
+                        status,
+                        &invocation.task_id,
+                        arguments.clone(),
+                    )
+                    .await?;
+                }
+            }
+            return Ok(recovered);
+        }
         match self
             .set_invocation_status(invocation_id, recovery_status, runner_id)
             .await

@@ -134,6 +134,29 @@ Useful for debugging configuration priority issues.
 
 ---
 
+## Python worker launcher
+
+The Python package ships its own launcher for standalone `rustvello.App`
+applications (the equivalent of `pynenc runner` / `celery worker`):
+
+```bash
+python -m rustvello.worker package.module:app [--processes N | --workers N] \
+    [--queues q1 q2 ...] [--idle-sleep-ms MS] [--no-triggers] [--loglevel LEVEL]
+```
+
+| Option            | Description                                                    | Default |
+| ----------------- | -------------------------------------------------------------- | ------- |
+| `--processes N`   | Run task code in N worker processes (one interpreter each)     | —       |
+| `--workers N`     | In-process worker slots when `--processes` is not given        | `4`     |
+| `--queues ...`    | Broker queues this runner consumes (overrides `runner_queues`) | config  |
+| `--idle-sleep-ms` | Sleep when no work is available                                | `50`    |
+| `--no-triggers`   | Do not evaluate trigger conditions on this runner              | —       |
+| `--loglevel`      | Python logging and runner log level                            | config  |
+
+Configuration comes from `RUSTVELLO__*` environment variables and the optional
+TOML / `pyproject.toml` sources (see Configuration), so a Kubernetes manifest
+can set `RUSTVELLO__RUNNER_QUEUES=hpa` per deployment instead of passing flags.
+
 ## Environment Variables
 
 The `run` and `config` commands load `RUSTVELLO__*` application configuration

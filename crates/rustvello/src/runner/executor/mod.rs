@@ -1,3 +1,4 @@
+mod subprocess;
 mod tokio;
 
 #[cfg(feature = "rayon")]
@@ -14,6 +15,8 @@ use rustvello_proto::identifiers::ExecutorKind;
 
 #[cfg(feature = "rayon")]
 pub(crate) use rayon::RayonExecutor;
+pub(crate) use subprocess::SubprocessExecutor;
+pub use subprocess::SubprocessSpec;
 pub(crate) use tokio::TokioExecutor;
 
 /// Local mechanism used to invoke task code after distributed work is claimed.

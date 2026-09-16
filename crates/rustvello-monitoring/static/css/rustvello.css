@@ -66,6 +66,25 @@ body {
   opacity: 0.9;
 }
 
+.navbar-collapse {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.navbar-nav {
+  flex-wrap: wrap;
+}
+.navbar-nav .nav-link {
+  white-space: nowrap;
+}
+@media (min-width: 992px) and (max-width: 1800px) {
+  .navbar > .container-fluid {
+    flex-wrap: wrap;
+  }
+  .navbar-collapse {
+    flex-basis: 100%;
+  }
+}
+
 .navbar-nav .nav-link {
   color: var(--nav-text-primary) !important;
   font-weight: 500;

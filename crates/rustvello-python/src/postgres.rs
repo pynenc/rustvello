@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use rustvello_core::client_data_store::{ClientDataStore, ClientDataStoreManager};
 use rustvello_core::trigger::{TriggerManager, TriggerStore};
-use rustvello_postgres::db::Database;
+#[cfg(feature = "postgres-tls")]
+use rustvello_postgres::db::PostgresTlsOptions;
+use rustvello_postgres::db::{Database, PostgresOptions};
 use rustvello_postgres::prelude::*;
 use rustvello_proto::config::ClientDataStoreConfig;
 
@@ -25,10 +27,66 @@ impl PyPostgresDatabase {
     ///
     /// The `app_id` creates a dedicated schema for per-application isolation.
     #[new]
-    fn new(connection_string: &str, app_id: &str) -> PyResult<Self> {
-        let db = crate::runtime::shared_runtime()?
-            .block_on(Database::connect(connection_string, app_id))
+    #[pyo3(signature = (connection_string, app_id, *, max_pool_size=4, operation_timeout_ms=5_000, delivery_lease_ms=60_000, max_queue_rows=100_000, max_payload_bytes=1_048_576, tls_hostname=None, tls_ca_pem=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        connection_string: &str,
+        app_id: &str,
+        max_pool_size: usize,
+        operation_timeout_ms: u64,
+        delivery_lease_ms: u64,
+        max_queue_rows: u32,
+        max_payload_bytes: u32,
+        tls_hostname: Option<&str>,
+        tls_ca_pem: Option<&[u8]>,
+    ) -> PyResult<Self> {
+        let options = PostgresOptions {
+            max_pool_size,
+            operation_timeout_ms,
+            delivery_lease_ms,
+            max_queue_rows,
+            max_payload_bytes,
+        };
+        let runtime = crate::runtime::shared_runtime()?;
+        #[cfg(feature = "postgres-tls")]
+        let result = if let Some(hostname) = tls_hostname {
+            let tls = match tls_ca_pem {
+                Some(pem) => PostgresTlsOptions::private_ca_pem(hostname, pem),
+                None => PostgresTlsOptions::system_roots(hostname),
+            }
             .map_err(to_py_err)?;
+            runtime.block_on(Database::connect_tls_with_options(
+                connection_string,
+                app_id,
+                options,
+                tls,
+            ))
+        } else {
+            if tls_ca_pem.is_some() {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "tls_ca_pem requires tls_hostname",
+                ));
+            }
+            runtime.block_on(Database::connect_with_options(
+                connection_string,
+                app_id,
+                options,
+            ))
+        };
+        #[cfg(not(feature = "postgres-tls"))]
+        let result = {
+            if tls_hostname.is_some() || tls_ca_pem.is_some() {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "PostgreSQL TLS support is not enabled",
+                ));
+            }
+            runtime.block_on(Database::connect_with_options(
+                connection_string,
+                app_id,
+                options,
+            ))
+        };
+        let db = result.map_err(to_py_err)?;
         Ok(Self {
             inner: Arc::new(db),
         })

@@ -9,6 +9,8 @@ Thank you for your interest in contributing! This guide covers how to set up you
 ide
 monitoring-test-fixtures
 agent-monitoring
+workflow-comparison
+redis-runtime-profile
 testing/index
 ```
 

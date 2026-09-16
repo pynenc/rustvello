@@ -19,10 +19,23 @@ impl RustvelloBuilder {
     /// The database file is opened during [`build()`](Self::build), not here.
     #[cfg(feature = "sqlite")]
     #[cfg_attr(docsrs, doc(cfg(feature = "sqlite")))]
-    pub fn sqlite(mut self, path: &str, app_id: &str) -> Self {
+    pub fn sqlite(self, path: &str, app_id: &str) -> Self {
+        self.sqlite_with_options(path, app_id, rustvello_sqlite::db::SqliteOptions::default())
+    }
+
+    /// Co-located atomic publication with explicit connection synchronization.
+    /// All producers/workers must use the same local path, app ID and FULL policy.
+    #[cfg(feature = "sqlite")]
+    pub fn sqlite_with_options(
+        mut self,
+        path: &str,
+        app_id: &str,
+        options: rustvello_sqlite::db::SqliteOptions,
+    ) -> Self {
         self.backend_preset = Some(super::BackendPreset::Sqlite {
             path: path.to_string(),
             app_id: app_id.to_string(),
+            options,
         });
         self
     }
@@ -45,10 +58,45 @@ impl RustvelloBuilder {
     /// ```
     #[cfg(feature = "redis")]
     #[cfg_attr(docsrs, doc(cfg(feature = "redis")))]
-    pub fn redis(mut self, uri: &str, app_id: &str) -> Self {
+    pub fn redis(self, uri: &str, app_id: &str) -> Self {
+        self.redis_with_options(
+            uri,
+            app_id,
+            rustvello_redis::prelude::RedisOptions::default(),
+        )
+    }
+
+    /// Use all Redis ports with bounded queue, lease and connection policy.
+    #[cfg(feature = "redis")]
+    pub fn redis_with_options(
+        mut self,
+        uri: &str,
+        app_id: &str,
+        options: rustvello_redis::prelude::RedisOptions,
+    ) -> Self {
         self.backend_preset = Some(super::BackendPreset::Redis {
             uri: uri.to_string(),
             app_id: app_id.to_string(),
+            options,
+            tls: None,
+        });
+        self
+    }
+
+    /// Use all Redis ports over TLS with explicit private trust roots.
+    #[cfg(feature = "redis")]
+    pub fn redis_tls_with_options(
+        mut self,
+        uri: &str,
+        app_id: &str,
+        options: rustvello_redis::prelude::RedisOptions,
+        tls: rustvello_redis::prelude::RedisTlsOptions,
+    ) -> Self {
+        self.backend_preset = Some(super::BackendPreset::Redis {
+            uri: uri.to_string(),
+            app_id: app_id.to_string(),
+            options,
+            tls: Some(tls),
         });
         self
     }
@@ -130,10 +178,26 @@ impl RustvelloBuilder {
     /// ```
     #[cfg(feature = "postgres")]
     #[cfg_attr(docsrs, doc(cfg(feature = "postgres")))]
-    pub fn postgres(mut self, connection_string: &str, app_id: &str) -> Self {
+    pub fn postgres(self, connection_string: &str, app_id: &str) -> Self {
+        self.postgres_with_options(
+            connection_string,
+            app_id,
+            rustvello_postgres::db::PostgresOptions::default(),
+        )
+    }
+
+    /// Networked atomic-publication profile with bounded I/O and admission.
+    #[cfg(feature = "postgres")]
+    pub fn postgres_with_options(
+        mut self,
+        connection_string: &str,
+        app_id: &str,
+        options: rustvello_postgres::db::PostgresOptions,
+    ) -> Self {
         self.backend_preset = Some(super::BackendPreset::Postgres {
             connection_string: connection_string.to_string(),
             app_id: app_id.to_string(),
+            options,
         });
         self
     }
@@ -147,6 +211,26 @@ impl RustvelloBuilder {
         self.backend_preset = Some(super::BackendPreset::PostgresTls {
             connection_string: connection_string.to_string(),
             app_id: app_id.to_string(),
+            options: rustvello_postgres::db::PostgresOptions::default(),
+            tls: None,
+        });
+        self
+    }
+
+    /// Use verified PostgreSQL TLS with complete runtime and trust policy.
+    #[cfg(all(feature = "postgres", feature = "tls"))]
+    pub fn postgres_tls_with_options(
+        mut self,
+        connection_string: &str,
+        app_id: &str,
+        options: rustvello_postgres::db::PostgresOptions,
+        tls: rustvello_postgres::db::PostgresTlsOptions,
+    ) -> Self {
+        self.backend_preset = Some(super::BackendPreset::PostgresTls {
+            connection_string: connection_string.to_string(),
+            app_id: app_id.to_string(),
+            options,
+            tls: Some(tls),
         });
         self
     }

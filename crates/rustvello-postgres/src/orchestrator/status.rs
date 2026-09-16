@@ -14,6 +14,15 @@ use crate::db::{parse_status, pg_err};
 
 #[async_trait]
 impl OrchestratorStatus for PostgresOrchestrator {
+    fn runtime_publication(
+        &self,
+    ) -> Option<std::sync::Arc<dyn rustvello_core::publication::RuntimePublication>> {
+        Some(std::sync::Arc::new(
+            crate::publication::PostgresPublication {
+                db: std::sync::Arc::clone(&self.db),
+            },
+        ))
+    }
     async fn register_invocation(&self, call: &CallDTO) -> RustvelloResult<InvocationId> {
         let invocation_id = InvocationId::new();
         let now = Utc::now();
@@ -228,6 +237,22 @@ impl OrchestratorStatus for PostgresOrchestrator {
     async fn remove_invocation(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
         let mut client = self.db.conn().await?;
         let tx = client.transaction().await.map_err(pg_err)?;
+        tx.query_one("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':submission:' || $1, 0))", &[&invocation_id.as_str()]).await?;
+        tx.query_opt(
+            "SELECT invocation_id FROM status_records WHERE invocation_id=$1 FOR UPDATE",
+            &[&invocation_id.as_str()],
+        )
+        .await?;
+        tx.execute(
+            "UPDATE submission_publications SET identity_json='' WHERE invocation_id=$1",
+            &[&invocation_id.as_str()],
+        )
+        .await?;
+        tx.execute(
+            "DELETE FROM broker_queue WHERE invocation_id=$1",
+            &[&invocation_id.as_str()],
+        )
+        .await?;
         tx.execute(
             "DELETE FROM cc_arg_pairs WHERE invocation_id = $1",
             &[&invocation_id.as_str()],
@@ -265,6 +290,9 @@ impl OrchestratorStatus for PostgresOrchestrator {
     async fn purge(&self) -> RustvelloResult<()> {
         let mut client = self.db.conn().await?;
         let tx = client.transaction().await.map_err(pg_err)?;
+        tx.execute("UPDATE submission_publications SET identity_json=''", &[])
+            .await?;
+        tx.execute("DELETE FROM broker_queue", &[]).await?;
         tx.execute("DELETE FROM cc_arg_pairs", &[])
             .await
             .map_err(pg_err)?;

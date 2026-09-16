@@ -11,7 +11,20 @@ from typing import Any
 def get_version() -> str: ...
 def get_current_invocation_id() -> str | None: ...
 def get_current_num_retries() -> int | None: ...
+def get_current_task_key() -> str | None: ...
+def set_current_invocation_context(
+    invocation_id: str,
+    task_module: str,
+    task_name: str,
+    num_retries: int = 0,
+    language: str = "python",
+    parent_invocation_id: str | None = None,
+    traceparent: str | None = None,
+    tracestate: str | None = None,
+) -> None: ...
+def clear_current_invocation_context() -> None: ...
 def get_current_workflow_info() -> tuple[str, str, str | None] | None: ...
+def get_current_trace_context() -> tuple[str | None, str | None] | None: ...
 def workflow_root() -> WorkflowRoot: ...
 def compute_args_id(serialized_args: dict[str, str]) -> str: ...
 def init_logging(
@@ -105,9 +118,12 @@ class TaskConfig:
         queue: str = "default",
         priority: float = 0.0,
         is_workflow_task: bool = False,
+        retry_for_errors: list[str] = ...,
     ) -> None: ...
     @property
     def max_retries(self) -> int: ...
+    @property
+    def retry_for_errors(self) -> list[str]: ...
     @property
     def cache_results(self) -> bool: ...
     @property
@@ -127,6 +143,9 @@ class WorkflowRoot:
     def __repr__(self) -> str: ...
 
 class AppConfig:
+    def with_atomic_services(
+        self, *, interval_minutes: float, check_interval_minutes: float, spread_margin_minutes: float = 0.0
+    ) -> AppConfig: ...
     def __init__(
         self,
         app_id: str = "rustvello",
@@ -143,10 +162,22 @@ class AppConfig:
         queue_selection_strategy: str | None = None,
         priority_rules: list[tuple[str, float]] | None = None,
     ) -> None: ...
+    @staticmethod
+    def from_env(file: str | None = None, app_id: str | None = None) -> AppConfig: ...
+    @staticmethod
+    def from_file(path: str, app_id: str | None = None) -> AppConfig: ...
     @property
     def app_id(self) -> str: ...
+    @app_id.setter
+    def app_id(self, value: str) -> None: ...
     @property
     def dev_mode_force_sync(self) -> bool: ...
+    @dev_mode_force_sync.setter
+    def dev_mode_force_sync(self, value: bool) -> None: ...
+    @property
+    def logging_level(self) -> str: ...
+    @logging_level.setter
+    def logging_level(self, value: str) -> None: ...
     @property
     def max_pending_seconds(self) -> int: ...
     @property
@@ -163,10 +194,16 @@ class AppConfig:
     def blocking_control(self) -> bool: ...
     @property
     def broker_queues(self) -> list[str]: ...
+    @broker_queues.setter
+    def broker_queues(self, queues: list[str]) -> None: ...
     @property
     def runner_queues(self) -> list[str]: ...
+    @runner_queues.setter
+    def runner_queues(self, queues: list[str]) -> None: ...
     @property
     def queue_selection_strategy(self) -> str: ...
+    @queue_selection_strategy.setter
+    def queue_selection_strategy(self, strategy: str) -> None: ...
     @property
     def priority_rules(self) -> list[tuple[str, float]]: ...
     def __repr__(self) -> str: ...
@@ -198,7 +235,9 @@ class Rustvello:
         name: str,
         func: Any,
         config: TaskConfig | None = None,
+        replace: bool = False,
     ) -> None: ...
+    def unregister_task(self, module: str, name: str) -> bool: ...
     def register_foreign_task(
         self,
         language: str,
@@ -211,6 +250,8 @@ class Rustvello:
         module: str,
         name: str,
         kwargs: dict[str, str] | None = None,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
     ) -> InvocationId: ...
     def submit_task(
         self,
@@ -218,7 +259,14 @@ class Rustvello:
         module: str,
         name: str,
         kwargs: dict[str, str] | None = None,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
+        invocation_id: InvocationId | None = None,
     ) -> InvocationId: ...
+    def enable_otlp(self, endpoint: str, bearer_token: str) -> None: ...
+    def telemetry_stats(self) -> dict[str, int]: ...
+    def flush_telemetry(self, timeout_ms: int = 5000) -> dict[str, int]: ...
+    def shutdown_telemetry(self, timeout_ms: int = 5000) -> dict[str, int]: ...
     def set_waiting_for(self, waiter: InvocationId, waited_on: InvocationId) -> None: ...
     def call_sync(
         self,
@@ -228,6 +276,7 @@ class Rustvello:
     ) -> str | None: ...
     def get_status(self, invocation_id: InvocationId) -> InvocationStatus: ...
     def get_result(self, invocation_id: InvocationId) -> str | None: ...
+    def set_dev_mode_force_sync(self, enabled: bool) -> None: ...
     @staticmethod
     def from_backends(
         orchestrator: Any,
@@ -254,8 +303,12 @@ class RustTaskRunnerBuilder:
         trigger_store: Any | None = None,
     ) -> RustTaskRunnerBuilder: ...
     def with_num_workers(self, n: int) -> RustTaskRunnerBuilder: ...
+    def with_process_pool(
+        self, command: list[str], env: list[tuple[str, str]] | None = None
+    ) -> RustTaskRunnerBuilder: ...
     def with_idle_sleep(self, ms: int) -> RustTaskRunnerBuilder: ...
     def with_config(self, config: AppConfig) -> RustTaskRunnerBuilder: ...
+    def enable_otlp(self, endpoint: str, bearer_token: str) -> RustTaskRunnerBuilder: ...
     def register_task(
         self,
         module: str,
@@ -274,6 +327,8 @@ class RustTaskRunnerBuilder:
         on_diff_non_key_args_raise: bool = False,
         parallel_batch_size: int = 100,
         is_workflow_task: bool = False,
+        queue: str = "default",
+        priority: float = 0.0,
     ) -> None: ...
     def register_foreign_task(
         self,
@@ -287,23 +342,41 @@ class RustTaskRunnerBuilder:
     def build(self) -> RustTaskRunner: ...
 
 class RustTaskRunner:
+    def is_running(self) -> bool: ...
     def runner_id(self) -> str: ...
     def active_invocations(self) -> list[tuple[str, str]]: ...
     def run_one(self) -> bool: ...
     def run(self) -> None: ...
     def shutdown(self) -> None: ...
+    def telemetry_stats(self) -> dict[str, int]: ...
+    def flush_telemetry(self, timeout_ms: int = 5000) -> dict[str, int]: ...
 
 # ============================================================================
 # Connection / Pool Classes
 # ============================================================================
 
 class RustSqliteDatabase:
-    def __init__(self, path: str, app_id: str) -> None: ...
+    def __init__(self, path: str, app_id: str, *, synchronous: str = "FULL", busy_timeout_ms: int = 5000) -> None: ...
+    def synchronization(self) -> tuple[str, int, int]: ...
+    @staticmethod
+    def fault_injection_enabled() -> bool: ...
     @staticmethod
     def in_memory() -> RustSqliteDatabase: ...
 
 class RustPostgresDatabase:
-    def __init__(self, connection_string: str, app_id: str) -> None: ...
+    def __init__(
+        self,
+        connection_string: str,
+        app_id: str,
+        *,
+        max_pool_size: int = 4,
+        operation_timeout_ms: int = 5_000,
+        delivery_lease_ms: int = 60_000,
+        max_queue_rows: int = 100_000,
+        max_payload_bytes: int = 1_048_576,
+        tls_hostname: str | None = None,
+        tls_ca_pem: bytes | None = None,
+    ) -> None: ...
 
 class RustRedisPool:
     def __init__(self, uri: str, app_id: str) -> None: ...
@@ -1250,6 +1323,38 @@ class RustMemBroker:
     def retrieve_invocation_for_language(self, language: str) -> str | None: ...
     def count_invocations_for_task(self, task_module: str, task_name: str) -> int: ...
     def purge_task(self, task_module: str, task_name: str) -> None: ...
+    def route_invocation_to_queue(
+        self,
+        invocation_id: str,
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def route_invocations_to_queue(
+        self,
+        invocation_ids: list[str],
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def retrieve_invocation_from_queue(
+        self,
+        queue_name: str,
+        language: str | None = None,
+        task_module: str | None = None,
+        task_name: str | None = None,
+    ) -> str | None: ...
+    def count_invocations_in_queues(
+        self,
+        queue_names: list[str],
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> int: ...
 
 class RustSqliteBroker:
     def __init__(self, db: RustSqliteDatabase) -> None: ...
@@ -1263,6 +1368,38 @@ class RustSqliteBroker:
     def retrieve_invocation_for_language(self, language: str) -> str | None: ...
     def count_invocations_for_task(self, task_module: str, task_name: str) -> int: ...
     def purge_task(self, task_module: str, task_name: str) -> None: ...
+    def route_invocation_to_queue(
+        self,
+        invocation_id: str,
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def route_invocations_to_queue(
+        self,
+        invocation_ids: list[str],
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def retrieve_invocation_from_queue(
+        self,
+        queue_name: str,
+        language: str | None = None,
+        task_module: str | None = None,
+        task_name: str | None = None,
+    ) -> str | None: ...
+    def count_invocations_in_queues(
+        self,
+        queue_names: list[str],
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> int: ...
 
 class RustPostgresBroker:
     def __init__(self, db: RustPostgresDatabase) -> None: ...
@@ -1276,6 +1413,38 @@ class RustPostgresBroker:
     def retrieve_invocation_for_language(self, language: str) -> str | None: ...
     def count_invocations_for_task(self, task_module: str, task_name: str) -> int: ...
     def purge_task(self, task_module: str, task_name: str) -> None: ...
+    def route_invocation_to_queue(
+        self,
+        invocation_id: str,
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def route_invocations_to_queue(
+        self,
+        invocation_ids: list[str],
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def retrieve_invocation_from_queue(
+        self,
+        queue_name: str,
+        language: str | None = None,
+        task_module: str | None = None,
+        task_name: str | None = None,
+    ) -> str | None: ...
+    def count_invocations_in_queues(
+        self,
+        queue_names: list[str],
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> int: ...
 
 class RustRedisBroker:
     def __init__(self, pool: RustRedisPool) -> None: ...
@@ -1289,6 +1458,38 @@ class RustRedisBroker:
     def retrieve_invocation_for_language(self, language: str) -> str | None: ...
     def count_invocations_for_task(self, task_module: str, task_name: str) -> int: ...
     def purge_task(self, task_module: str, task_name: str) -> None: ...
+    def route_invocation_to_queue(
+        self,
+        invocation_id: str,
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def route_invocations_to_queue(
+        self,
+        invocation_ids: list[str],
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def retrieve_invocation_from_queue(
+        self,
+        queue_name: str,
+        language: str | None = None,
+        task_module: str | None = None,
+        task_name: str | None = None,
+    ) -> str | None: ...
+    def count_invocations_in_queues(
+        self,
+        queue_names: list[str],
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> int: ...
 
 class RustMongoBroker:
     def __init__(self, pool: RustMongoPool) -> None: ...
@@ -1302,6 +1503,38 @@ class RustMongoBroker:
     def retrieve_invocation_for_language(self, language: str) -> str | None: ...
     def count_invocations_for_task(self, task_module: str, task_name: str) -> int: ...
     def purge_task(self, task_module: str, task_name: str) -> None: ...
+    def route_invocation_to_queue(
+        self,
+        invocation_id: str,
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def route_invocations_to_queue(
+        self,
+        invocation_ids: list[str],
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def retrieve_invocation_from_queue(
+        self,
+        queue_name: str,
+        language: str | None = None,
+        task_module: str | None = None,
+        task_name: str | None = None,
+    ) -> str | None: ...
+    def count_invocations_in_queues(
+        self,
+        queue_names: list[str],
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> int: ...
 
 class RustMongo3Broker:
     def __init__(self, pool: RustMongo3Pool) -> None: ...
@@ -1315,6 +1548,38 @@ class RustMongo3Broker:
     def retrieve_invocation_for_language(self, language: str) -> str | None: ...
     def count_invocations_for_task(self, task_module: str, task_name: str) -> int: ...
     def purge_task(self, task_module: str, task_name: str) -> None: ...
+    def route_invocation_to_queue(
+        self,
+        invocation_id: str,
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def route_invocations_to_queue(
+        self,
+        invocation_ids: list[str],
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def retrieve_invocation_from_queue(
+        self,
+        queue_name: str,
+        language: str | None = None,
+        task_module: str | None = None,
+        task_name: str | None = None,
+    ) -> str | None: ...
+    def count_invocations_in_queues(
+        self,
+        queue_names: list[str],
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> int: ...
 
 class RustRabbitmqBroker:
     def __init__(self, uri: str, prefix: str) -> None: ...
@@ -1328,6 +1593,38 @@ class RustRabbitmqBroker:
     def retrieve_invocation_for_language(self, language: str) -> str | None: ...
     def count_invocations_for_task(self, task_module: str, task_name: str) -> int: ...
     def purge_task(self, task_module: str, task_name: str) -> None: ...
+    def route_invocation_to_queue(
+        self,
+        invocation_id: str,
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def route_invocations_to_queue(
+        self,
+        invocation_ids: list[str],
+        queue_name: str,
+        priority: float,
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> None: ...
+    def retrieve_invocation_from_queue(
+        self,
+        queue_name: str,
+        language: str | None = None,
+        task_module: str | None = None,
+        task_name: str | None = None,
+    ) -> str | None: ...
+    def count_invocations_in_queues(
+        self,
+        queue_names: list[str],
+        task_module: str | None = None,
+        task_name: str | None = None,
+        language: str = "python",
+    ) -> int: ...
 
 # ============================================================================
 # Trigger Store — all backends share the same methods
@@ -1624,6 +1921,30 @@ class RustMongo3ClientDataStore:
 # ============================================================================
 # Exception classes
 # ============================================================================
+
+# ============================================================================
+# Monitoring (feature "monitoring", enabled in the published wheel)
+# ============================================================================
+
+class MonitorServer:
+    @property
+    def address(self) -> str: ...
+    def is_running(self) -> bool: ...
+    def stop(self) -> None: ...
+
+def start_monitor(
+    app_id: str,
+    broker: Any,
+    orchestrator: Any,
+    state_backend: Any,
+    client_data_store: Any,
+    trigger: Any | None = None,
+    task_ids: list[tuple[str, str]] = ...,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    log_level: str = "info",
+    config: AppConfig | None = None,
+) -> MonitorServer: ...
 
 class RustvelloError(Exception): ...
 class BrokerError(RustvelloError): ...

@@ -489,6 +489,13 @@ impl TaskRegistry {
         Ok(())
     }
 
+    /// Remove a task so it can be registered again (module reloads, test fixtures
+    /// redefining a task). Returns whether something was removed.
+    pub fn unregister(&mut self, task_id: &TaskId) -> bool {
+        self.legacy_tasks.remove(task_id);
+        self.tasks.remove(task_id).is_some()
+    }
+
     /// Get a type-erased task by ID.
     pub fn get_dyn(&self, task_id: &TaskId) -> Option<Arc<dyn DynTask>> {
         self.tasks.get(task_id).cloned()

@@ -1,10 +1,12 @@
 //! PyO3 wrapper for the task runner subsystem.
 
 use pyo3::prelude::*;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use rustvello_core::broker::Broker;
+use crate::telemetry::TelemetryEmitter;
+use rustvello_core::broker::{validate_routing, Broker};
 use rustvello_core::error::RustvelloError;
+use rustvello_core::observability::EventLevel;
 use rustvello_core::orchestrator::InvocationControlBackend;
 use rustvello_core::runner::Runner;
 use rustvello_core::state_backend::StateBackend;
@@ -47,6 +49,46 @@ use crate::backend_extract::{
 #[pyclass(name = "RustTaskRunner")]
 pub struct PyTaskRunner {
     runner: Arc<rustvello::runner::TaskRunner>,
+    telemetry: Option<TelemetryEmitter>,
+    calls: Mutex<RunnerCalls>,
+}
+
+#[derive(Default)]
+struct RunnerCalls {
+    active: usize,
+    closing: bool,
+}
+
+struct RunningCall<'a>(&'a PyTaskRunner);
+
+impl Drop for RunningCall<'_> {
+    fn drop(&mut self) {
+        let closing = {
+            let mut calls = self.0.calls.lock().expect("runner calls lock");
+            calls.active -= 1;
+            calls.closing && calls.active == 0
+        };
+        if closing {
+            if let Some(emitter) = &self.0.telemetry {
+                // Runs outside the GIL after terminal and worker-stop events.
+                // Counters remain readable even if the bounded shutdown fails.
+                let _ = crate::telemetry::shutdown(emitter, 5_000);
+            }
+        }
+    }
+}
+
+impl PyTaskRunner {
+    fn begin_call(&self) -> PyResult<RunningCall<'_>> {
+        let mut calls = self.calls.lock().expect("runner calls lock");
+        if calls.closing {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "runner is shutting down",
+            ));
+        }
+        calls.active += 1;
+        Ok(RunningCall(self))
+    }
 }
 
 #[pymethods]
@@ -54,6 +96,11 @@ impl PyTaskRunner {
     /// Get the runner's unique ID.
     fn runner_id(&self) -> String {
         self.runner.runner_id().to_string()
+    }
+
+    /// Whether an execution call is still draining after a shutdown signal.
+    fn is_running(&self) -> bool {
+        self.calls.lock().expect("runner calls lock").active != 0
     }
 
     /// Return currently active invocations as (worker_runner_id, invocation_id).
@@ -75,7 +122,8 @@ impl PyTaskRunner {
     /// from spawn_blocking threads.
     fn run_one(&self, py: Python<'_>) -> PyResult<bool> {
         let runner = Arc::clone(&self.runner);
-        py.allow_threads(move || {
+        py.allow_threads(|| {
+            let _call = self.begin_call()?;
             crate::runtime::shared_runtime()?
                 .block_on(runner.run_one())
                 .map_err(to_py_err)
@@ -86,7 +134,8 @@ impl PyTaskRunner {
     /// Releases the GIL so other Python threads can run.
     fn run(&self, py: Python<'_>) -> PyResult<()> {
         let runner = Arc::clone(&self.runner);
-        py.allow_threads(move || {
+        py.allow_threads(|| {
+            let _call = self.begin_call()?;
             crate::runtime::shared_runtime()?
                 .block_on(runner.run())
                 .map_err(to_py_err)
@@ -95,12 +144,45 @@ impl PyTaskRunner {
 
     /// Signal the runner to shut down gracefully.
     fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
+        let idle = {
+            let mut calls = self.calls.lock().expect("runner calls lock");
+            calls.closing = true;
+            calls.active == 0
+        };
         let runner = Arc::clone(&self.runner);
         py.allow_threads(move || {
             crate::runtime::shared_runtime()?
                 .block_on(runner.shutdown())
                 .map_err(to_py_err)
-        })
+        })?;
+        if idle {
+            if let Some(emitter) = &self.telemetry {
+                py.allow_threads(|| crate::telemetry::shutdown(emitter, 5_000))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Read delivery counters without waiting, including after an export timeout.
+    fn telemetry_stats(&self) -> PyResult<std::collections::BTreeMap<&'static str, u64>> {
+        self.telemetry
+            .as_ref()
+            .map(crate::telemetry::snapshot)
+            .ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("OTLP telemetry is not enabled")
+            })
+    }
+
+    #[pyo3(signature = (timeout_ms=5000))]
+    fn flush_telemetry(
+        &self,
+        py: Python<'_>,
+        timeout_ms: u64,
+    ) -> PyResult<std::collections::BTreeMap<&'static str, u64>> {
+        let emitter = self.telemetry.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("OTLP telemetry is not enabled")
+        })?;
+        py.allow_threads(|| crate::telemetry::flush(emitter, timeout_ms))
     }
 }
 
@@ -113,6 +195,9 @@ impl PyTaskRunner {
 /// Backends can be set via `.memory()` for testing, or via
 /// `.with_backends()` to reuse backends from Python adapters.
 /// Tasks must be registered via `.register_task()` before `.build()`.
+/// Worker command plus extra environment for the subprocess executor.
+type ProcessPoolSpec = (Vec<String>, Vec<(String, String)>);
+
 #[pyclass(name = "RustTaskRunnerBuilder")]
 pub struct PyTaskRunnerBuilder {
     app_id: String,
@@ -123,7 +208,10 @@ pub struct PyTaskRunnerBuilder {
     trigger_manager: Option<TriggerManager>,
     task_registry: TaskRegistry,
     num_workers: Option<usize>,
+    /// Worker command and extra env for the subprocess executor (one interpreter per worker).
+    process_pool: Option<ProcessPoolSpec>,
     idle_sleep_ms: Option<u64>,
+    telemetry: Option<TelemetryEmitter>,
 }
 
 #[pymethods]
@@ -140,7 +228,9 @@ impl PyTaskRunnerBuilder {
             trigger_manager: None,
             task_registry: TaskRegistry::new(),
             num_workers: None,
+            process_pool: None,
             idle_sleep_ms: None,
+            telemetry: None,
         }
     }
 
@@ -183,12 +273,47 @@ impl PyTaskRunnerBuilder {
         slf
     }
 
+    /// Execute Python tasks in a pool of worker processes started with `command`.
+    ///
+    /// The pool size is `with_num_workers`. Each worker runs one interpreter, so this is
+    /// how CPU-bound Python tasks use several cores; the control plane stays in this
+    /// process. `env` adds environment variables to the workers.
+    #[pyo3(signature = (command, env=None))]
+    fn with_process_pool(
+        mut slf: PyRefMut<'_, Self>,
+        command: Vec<String>,
+        env: Option<Vec<(String, String)>>,
+    ) -> PyResult<PyRefMut<'_, Self>> {
+        if command.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "process pool command must not be empty",
+            ));
+        }
+        slf.process_pool = Some((command, env.unwrap_or_default()));
+        Ok(slf)
+    }
+
     /// Set the idle sleep interval in milliseconds.
     ///
     /// Controls how long the runner sleeps when no work is available.
     fn with_idle_sleep(mut slf: PyRefMut<'_, Self>, ms: u64) -> PyRefMut<'_, Self> {
         slf.idle_sleep_ms = Some(ms);
         slf
+    }
+
+    /// Enable bounded OTLP/HTTP-Protobuf lifecycle export for this runner.
+    fn enable_otlp<'a>(
+        mut slf: PyRefMut<'a, Self>,
+        endpoint: &str,
+        bearer_token: &str,
+    ) -> PyResult<PyRefMut<'a, Self>> {
+        if slf.telemetry.is_some() {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "OTLP telemetry is already enabled",
+            ));
+        }
+        slf.telemetry = Some(crate::telemetry::emitter(endpoint, bearer_token)?);
+        Ok(slf)
     }
 
     /// Replace the builder's `AppConfig` with a pre-configured one.
@@ -216,6 +341,8 @@ impl PyTaskRunnerBuilder {
         on_diff_non_key_args_raise = false,
         parallel_batch_size = 100,
         is_workflow_task = false,
+        queue = "default",
+        priority = 0.0,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn register_task(
@@ -236,7 +363,11 @@ impl PyTaskRunnerBuilder {
         on_diff_non_key_args_raise: bool,
         parallel_batch_size: usize,
         is_workflow_task: bool,
+        queue: &str,
+        priority: f64,
     ) -> PyResult<()> {
+        validate_routing(queue, priority)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         let task_id = TaskId::try_for_language(TaskLanguage::Python, module, name)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
@@ -282,6 +413,8 @@ impl PyTaskRunnerBuilder {
         config.on_diff_non_key_args_raise = on_diff_non_key_args_raise;
         config.parallel_batch_size = parallel_batch_size;
         config.is_workflow_task = is_workflow_task;
+        config.queue = queue.to_owned();
+        config.priority = priority;
 
         self.task_registry
             .register(TaskDefinition::new(task_id, config, task_fn))
@@ -342,8 +475,22 @@ impl PyTaskRunnerBuilder {
             runner = runner.with_idle_sleep(ms);
         }
 
+        if let Some((command, env)) = &self.process_pool {
+            runner = runner.with_subprocess_executor(rustvello::runner::SubprocessSpec {
+                command: command.clone(),
+                env: env.clone(),
+                kind: rustvello_proto::identifiers::ExecutorKind::Python,
+            });
+        }
+
+        if let Some(emitter) = &self.telemetry {
+            runner = runner.with_event_emitter(EventLevel::TaskLifecycle, emitter.clone());
+        }
+
         Ok(PyTaskRunner {
             runner: Arc::new(runner),
+            telemetry: self.telemetry.clone(),
+            calls: Mutex::new(RunnerCalls::default()),
         })
     }
 }

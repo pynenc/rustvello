@@ -114,6 +114,11 @@
     return Math.max(8, Math.min(clientX + 12, window.innerWidth - 460));
   }
 
+  function comparisonPanels(panel) {
+    var group = panel.closest(".workflow-comparison-grid");
+    return group ? Array.from(group.querySelectorAll("[data-histogram-panel]")) : [panel];
+  }
+
   function enterBucket(panel, bucket, event) {
     var tip = tooltip();
     var clientX = Number.isFinite(event.clientX) ? event.clientX : window.innerWidth / 2;
@@ -122,8 +127,10 @@
     tip.style.display = "block";
     tip.style.left = tooltipLeft(clientX) + "px";
     tip.style.top = Math.max(8, clientY - 38) + "px";
-    setBucketHover(panel, bucket.dataset.bucketIndex, true);
-    updateLegend(panel, Number(bucket.dataset.bucketIndex));
+    comparisonPanels(panel).forEach(function (peer) {
+      setBucketHover(peer, bucket.dataset.bucketIndex, true);
+      updateLegend(peer, Number(bucket.dataset.bucketIndex));
+    });
     if (window.rustvelloSetTimeCursor) {
       window.rustvelloSetTimeCursor(bucket.dataset.bucketStart, bucket.dataset.bucketEnd, true);
     }
@@ -131,8 +138,10 @@
 
   function leaveBucket(panel, bucket) {
     tooltip().style.display = "none";
-    setBucketHover(panel, bucket.dataset.bucketIndex, false);
-    updateLegend(panel, null);
+    comparisonPanels(panel).forEach(function (peer) {
+      setBucketHover(peer, bucket.dataset.bucketIndex, false);
+      updateLegend(peer, null);
+    });
     if (window.rustvelloSetTimeCursor) window.rustvelloSetTimeCursor(null, null, false);
   }
 

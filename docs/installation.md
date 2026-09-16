@@ -10,7 +10,7 @@ Add the main library crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustvello = "0.5.0"
+rustvello = "0.5.1"
 ```
 
 Or via Cargo:
@@ -24,30 +24,29 @@ feature flags (see below).
 
 ### Feature Flags
 
-| Feature      | Description                                  | Default |
-| ------------ | -------------------------------------------- | ------- |
-| `mem`        | In-memory backend (dev/testing)              | **Yes** |
-| `sqlite`     | SQLite-backed persistent backend             | No      |
-| `redis`      | Redis-backed distributed backend             | No      |
-| `mongodb`    | MongoDB-backed backend (driver v3)           | No      |
-| `mongodb3`   | MongoDB-backed backend (driver v2 — legacy)  | No      |
-| `rabbitmq`   | RabbitMQ broker                              | No      |
-| `postgres`   | PostgreSQL trigger store                     | No      |
-| `prometheus` | Prometheus metrics exporter                  | No      |
-| `rayon`      | Rayon thread-pool runner for CPU-bound tasks | No      |
-| `full`       | All backends enabled                         | No      |
+| Feature    | Description                                  | Default |
+| ---------- | -------------------------------------------- | ------- |
+| `mem`      | In-memory backend (dev/testing)              | **Yes** |
+| `sqlite`   | SQLite-backed persistent backend             | No      |
+| `redis`    | Redis-backed distributed backend             | No      |
+| `mongodb`  | MongoDB-backed backend (driver v3)           | No      |
+| `mongodb3` | MongoDB-backed backend (driver v2 — legacy)  | No      |
+| `rabbitmq` | RabbitMQ broker                              | No      |
+| `postgres` | PostgreSQL trigger store                     | No      |
+| `rayon`    | Rayon thread-pool runner for CPU-bound tasks | No      |
+| `full`     | All backends enabled                         | No      |
 
 Examples:
 
 ```toml
 # SQLite for single-host persistence
-rustvello = { version = "0.5.0", features = ["sqlite"] }
+rustvello = { version = "0.5.1", features = ["sqlite"] }
 
 # Redis for distributed production
-rustvello = { version = "0.5.0", features = ["redis"] }
+rustvello = { version = "0.5.1", features = ["redis"] }
 
 # Everything
-rustvello = { version = "0.5.0", features = ["full"] }
+rustvello = { version = "0.5.1", features = ["full"] }
 ```
 
 ---
@@ -68,7 +67,7 @@ For finer-grained control, depend on individual crates directly:
 | `rustvello-mongo3`     | MongoDB backend implementations (driver v2 — legacy)              |
 | `rustvello-rabbitmq`   | RabbitMQ broker implementation                                    |
 | `rustvello-postgres`   | PostgreSQL trigger store implementation                           |
-| `rustvello-prometheus` | Prometheus `EventEmitter` implementation                          |
+| `rustvello-otel`       | Bounded OTLP lifecycle exporter                                   |
 | `rustvello-monitoring` | Axum web dashboard (SVG timelines, log explorer)                  |
 | `rustvello-test-suite` | Macro-generated backend compliance test suite                     |
 | `rustvello-python`     | PyO3 `#[pyclass]` wrappers (Rust → Python bridge)                 |

@@ -37,7 +37,7 @@ rustvello/
 │   ├── rustvello-postgres/    # PostgreSQL backend (WIP)
 │   ├── rustvello-mongo/       # MongoDB backend (WIP)
 │   ├── rustvello-rabbitmq/    # RabbitMQ backend (WIP)
-│   ├── rustvello-prometheus/  # Prometheus metrics exporter
+│   ├── rustvello-otel/        # OTLP lifecycle exporter
 │   ├── rustvello-macros/      # #[rustvello::task] proc-macro
 │   ├── rustvello/             # Main library (app, builder, runner, trigger builder)
 │   ├── rustvello-cli/         # CLI binary (run, status, list, purge, info)
@@ -72,7 +72,6 @@ rustvello-proto → rustvello-core → rustvello-mem / rustvello-sqlite / ...
 | `redis`         | Redis backends       |
 | `mongodb`       | MongoDB backends     |
 | `rabbitmq`      | RabbitMQ backends    |
-| `prometheus`    | Prometheus metrics   |
 | `postgres`      | PostgreSQL backends  |
 | `full`          | All backends enabled |
 

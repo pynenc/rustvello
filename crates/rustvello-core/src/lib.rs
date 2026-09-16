@@ -19,11 +19,13 @@ pub mod call;
 pub mod client_data_store;
 pub mod context;
 pub mod error;
+pub mod execution;
 pub mod invocation;
 pub mod logging;
 pub mod middleware;
 pub mod observability;
 pub mod orchestrator;
+pub mod publication;
 pub mod reconnectable;
 pub mod runner;
 pub mod serializer;
@@ -41,6 +43,13 @@ pub mod prelude {
     };
     pub use crate::error::{RustvelloError, RustvelloResult};
     pub use crate::invocation::{Invocation, InvocationHandle, SyncInvocation};
+    pub use crate::observability::{
+        capture_w3c_trace_context, extract_w3c_trace_context, is_valid_w3c_trace_context,
+        AsyncExportConfig, AsyncExportStats, BoundedAsyncEmitter, CompositeEmitter, EventEmitter,
+        EventLevel, LifecycleEvent, LifecycleExporter, NoopEmitter, TaskAttemptContext,
+        TaskLifecycleEvent, TaskLifecycleKind, TraceContextCarrier, WorkerLifecycleEvent,
+        WorkerLifecycleKind, WorkerTelemetryContext, LIFECYCLE_CONTEXT_VERSION,
+    };
     pub use crate::orchestrator::{
         InvocationControlBackend, OrchestratorBlocking, OrchestratorConcurrency, OrchestratorQuery,
         OrchestratorRecovery, OrchestratorStatus,

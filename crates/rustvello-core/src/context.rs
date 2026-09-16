@@ -23,7 +23,7 @@
 use std::sync::Arc;
 
 use rustvello_proto::identifiers::{ExecutorKind, InvocationId, RunnerId, TaskId, TaskLanguage};
-use rustvello_proto::invocation::WorkflowIdentity;
+use rustvello_proto::invocation::{TraceContextCarrier, WorkflowIdentity};
 use serde::{Deserialize, Serialize};
 
 use crate::state_backend::StateBackend;
@@ -69,6 +69,8 @@ pub struct InvocationContext {
     pub parent_invocation_id: Option<InvocationId>,
     /// The current retry attempt number (0 for first attempt).
     pub num_retries: u32,
+    /// Persisted execution span identity inherited by child submissions.
+    pub trace_context: TraceContextCarrier,
 }
 
 impl std::fmt::Debug for InvocationContext {
@@ -80,6 +82,7 @@ impl std::fmt::Debug for InvocationContext {
             .field("is_workflow_defining", &self.is_workflow_defining)
             .field("parent_invocation_id", &self.parent_invocation_id)
             .field("num_retries", &self.num_retries)
+            .field("trace_context", &self.trace_context)
             .finish_non_exhaustive()
     }
 }
@@ -183,9 +186,14 @@ impl RunnerContext {
     /// The child inherits the parent's `runner_cls` — use this for worker tasks
     /// that run under the same runner type as the parent.
     pub fn new_child(&self, runner_id: RunnerId) -> Self {
+        self.new_child_with_cls(runner_id, Arc::clone(&self.runner_cls))
+    }
+
+    /// Create a child context with an explicit worker class.
+    pub fn new_child_with_cls(&self, runner_id: RunnerId, runner_cls: impl Into<Arc<str>>) -> Self {
         Self {
             runner_id,
-            runner_cls: Arc::clone(&self.runner_cls),
+            runner_cls: runner_cls.into(),
             runner_language: self.runner_language,
             executor_kind: self.executor_kind,
             app_id: Arc::clone(&self.app_id),
@@ -397,6 +405,7 @@ mod tests {
             state_backend: None,
             parent_invocation_id: None,
             num_retries: 0,
+            trace_context: Default::default(),
         }
     }
 
@@ -450,6 +459,7 @@ mod tests {
             state_backend: outer.state_backend.clone(),
             parent_invocation_id: Some(outer.invocation_id.clone()),
             num_retries: 0,
+            trace_context: Default::default(),
         };
 
         INVOCATION_CTX
