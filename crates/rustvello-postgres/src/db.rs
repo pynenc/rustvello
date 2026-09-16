@@ -105,6 +105,43 @@ impl PostgresTlsOptions {
         self.private_ca_pem.is_some()
     }
 
+    /// rustls client configuration for this trust policy: verified server certificates,
+    /// either the private CA alone or the operating system roots, no client certificate.
+    fn client_config(&self) -> RustvelloResult<rustls::ClientConfig> {
+        let mut roots = rustls::RootCertStore::empty();
+        if let Some(ca_pem) = &self.private_ca_pem {
+            let invalid = || configuration("invalid PostgreSQL private CA certificate");
+            let mut added = 0usize;
+            for certificate in rustls_pemfile::certs(&mut &ca_pem[..]) {
+                roots
+                    .add(certificate.map_err(|_| invalid())?)
+                    .map_err(|_| invalid())?;
+                added += 1;
+            }
+            if added == 0 {
+                return Err(invalid());
+            }
+        } else {
+            // unparsable system entries are skipped, as native trust stores do
+            for certificate in rustls_native_certs::load_native_certs().certs {
+                let _ = roots.add(certificate);
+            }
+            if roots.is_empty() {
+                return Err(RustvelloError::state_backend(
+                    "no operating system trust roots available for PostgreSQL TLS".to_owned(),
+                ));
+            }
+        }
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        Ok(rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| {
+                RustvelloError::state_backend(format!("failed to create TLS connector: {e}"))
+            })?
+            .with_root_certificates(roots)
+            .with_no_client_auth())
+    }
+
     fn validate_hosts(&self, config: &tokio_postgres::Config) -> RustvelloResult<()> {
         if config.get_hosts().is_empty()
             || config.get_hosts().iter().any(|host| {
@@ -298,18 +335,7 @@ impl Database {
         pg_config.ssl_mode(tokio_postgres::config::SslMode::Require);
         pg_config.connect_timeout(Duration::from_millis(options.operation_timeout_ms));
 
-        let mut connector = native_tls::TlsConnector::builder();
-        if let Some(ca_pem) = &tls.private_ca_pem {
-            connector.disable_built_in_roots(true);
-            connector.add_root_certificate(
-                native_tls::Certificate::from_pem(ca_pem)
-                    .map_err(|_| configuration("invalid PostgreSQL private CA certificate"))?,
-            );
-        }
-        let tls_connector = connector.build().map_err(|e| {
-            RustvelloError::state_backend(format!("failed to create TLS connector: {e}"))
-        })?;
-        let pg_tls = postgres_native_tls::MakeTlsConnector::new(tls_connector);
+        let pg_tls = tokio_postgres_rustls::MakeRustlsConnect::new(tls.client_config()?);
 
         let mgr = deadpool_postgres::Manager::new(pg_config, pg_tls);
         let pool = Pool::builder(mgr)

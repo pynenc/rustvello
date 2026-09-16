@@ -56,6 +56,7 @@ def test_app_config_identity_and_runner_configuration():
 
 
 def test_durable_replay_restores_original_w3c_context_and_rejects_drift(tmp_path):
+    pytest.importorskip("opentelemetry")
     from opentelemetry.context import attach, detach
     from opentelemetry.propagate import extract
 
