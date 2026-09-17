@@ -209,7 +209,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           args: >
-            --release
+            --profile dist-release
             --manifest-path py-rustvello/Cargo.toml
             --interpreter ${{ steps.python-versions.outputs.versions }}
             --out dist

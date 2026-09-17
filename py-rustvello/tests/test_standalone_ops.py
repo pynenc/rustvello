@@ -34,6 +34,22 @@ class TestConfigFromEnvironment:
         assert config.runner_queues == ["hyper"]
         assert config.logging_level == "debug"
 
+    def test_env_switch_reaches_an_app_built_with_an_explicit_config(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """A suite sets RUSTVELLO__DEV_MODE_FORCE_SYNC and every app runs inline, code untouched."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("RUSTVELLO__DEV_MODE_FORCE_SYNC", "true")
+        config = AppConfig.from_env(app_id="env_sync")
+        assert config.dev_mode_force_sync is True
+        assert App(app_id="env_sync", config=config).dev_mode_force_sync is True
+        assert App(app_id="env_sync").dev_mode_force_sync is True
+
+    def test_explicit_argument_still_wins_over_the_environment(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("RUSTVELLO__DEV_MODE_FORCE_SYNC", "true")
+        assert App(app_id="env_sync_off", dev_mode_force_sync=False).dev_mode_force_sync is False
+
     def test_setters(self) -> None:
         config = AppConfig(app_id="x")
         config.broker_queues = ["default", "hpa"]

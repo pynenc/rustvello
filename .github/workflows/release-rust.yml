@@ -135,13 +135,17 @@ jobs:
           publish rustvello-mongo
           publish rustvello-mongo3
           publish rustvello-rabbitmq
-          publish rustvello-otel
 
           # Layer 3: depends on core + backends
           publish rustvello
+
+          # Layer 4: dev-depend on the rustvello crate, so they cannot go out before it.
+          # crates.io resolves dev-dependencies too, and a workspace dependency carries a
+          # version, so publishing these earlier fails on an unresolvable requirement.
+          publish rustvello-otel
           publish rustvello-monitoring
 
-          # Layer 4: depends on rustvello
+          # Layer 5: depends on rustvello
           publish rustvello-cli
 
       - name: Summary

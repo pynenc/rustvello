@@ -346,6 +346,9 @@ class App:
         app_id: Unique identifier for this application instance.
         dev_mode_force_sync: When ``True``, tasks execute synchronously in the
             calling thread — useful for testing without a separate worker.
+            Left unset it follows the resolved configuration, so
+            ``RUSTVELLO__DEV_MODE_FORCE_SYNC=true`` switches a whole test suite to
+            inline execution without touching any code.
         backend: Backend type — ``"memory"`` (default), ``"sqlite"``,
             ``"redis"``, ``"postgres"``, ``"mongo"``, or ``"rabbitmq"``
             (broker-only, requires another backend for state).
@@ -377,7 +380,7 @@ class App:
     def __init__(
         self,
         app_id: str = "rustvello",
-        dev_mode_force_sync: bool = False,
+        dev_mode_force_sync: bool | None = None,
         *,
         backend: str = "memory",
         db_path: str = "./rustvello.db",
@@ -422,10 +425,13 @@ class App:
             # RUSTVELLO__* env vars, ./pyproject.toml [tool.rustvello.app] and defaults,
             # like the Rust builder; explicit constructor arguments win.
             config = AppConfig.from_env(app_id=app_id)
-            dev_mode_force_sync = dev_mode_force_sync or config.dev_mode_force_sync
-            config.dev_mode_force_sync = dev_mode_force_sync
-        elif config.app_id != app_id or config.dev_mode_force_sync != dev_mode_force_sync:
-            raise ValueError("AppConfig app_id and dev_mode_force_sync must match App")
+        elif config.app_id != app_id:
+            raise ValueError(f"AppConfig app_id {config.app_id!r} must match App app_id {app_id!r}")
+        if dev_mode_force_sync is None:
+            # unset: follow the resolved configuration, so RUSTVELLO__DEV_MODE_FORCE_SYNC reaches
+            # an App built with an explicit AppConfig; passing the argument still wins
+            dev_mode_force_sync = config.dev_mode_force_sync
+        config.dev_mode_force_sync = dev_mode_force_sync
         self._dev_mode_force_sync = dev_mode_force_sync
         self._config = config
 
