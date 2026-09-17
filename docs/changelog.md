@@ -4,6 +4,15 @@ For detailed information on each version, please visit the [GitHub Releases page
 
 ## Unreleased
 
+## 0.5.2 - 2026-09-17
+
+- `RUSTVELLO__DEV_MODE_FORCE_SYNC` reaches an `App` built with an explicit
+  `AppConfig`. `dev_mode_force_sync` defaults to unset and follows the resolved
+  configuration, so a test suite can run every task inline through the environment
+  alone. Previously such an app raised `ValueError` whenever the variable was set.
+- The published wheel is built with the `dist-release` profile, cutting the
+  extension from 56 MB to 35 MB.
+
 ## 0.5.1 - 2026-09-15
 
 - Process-pool executor for Python task code (`SubprocessExecutor`,

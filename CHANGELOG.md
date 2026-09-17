@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.2 - 2026-09-17
+
+- `RUSTVELLO__DEV_MODE_FORCE_SYNC` now reaches an `App` constructed with an explicit
+  `AppConfig`. `dev_mode_force_sync` defaults to unset instead of `False`, so it
+  follows the resolved configuration unless the argument is passed. Before, an app
+  built from `AppConfig.from_env()` raised `ValueError` whenever the environment
+  enabled the flag, which made the documented environment switch unusable. A test
+  suite can now run every task inline through the environment alone, with no code
+  change in the application.
+- The wheel is built with the `dist-release` profile instead of `release`, cutting
+  the published extension from 56 MB to 35 MB.
+
 ## 0.5.1 - 2026-09-15
 
 - PostgreSQL TLS (`rustvello-postgres` feature `tls`, part of the wheel's

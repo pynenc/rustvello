@@ -101,7 +101,7 @@ Feature flags:
 
 ```toml
 [dependencies]
-rustvello = { version = "0.5.1", features = ["full"] }
+rustvello = { version = "0.5.2", features = ["full"] }
 ```
 
 ### Python
