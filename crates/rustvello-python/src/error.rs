@@ -569,7 +569,8 @@ mod tests {
             });
             let val = err.value_bound(py);
             let tid: String = val.getattr("task_id").unwrap().extract().unwrap();
-            assert_eq!(tid, "mod.task");
+            // TaskId is language-qualified, like every task key Python sees
+            assert_eq!(tid, "rust::mod.task");
             let reason: String = val.getattr("reason").unwrap().extract().unwrap();
             assert_eq!(reason, "locked");
         });

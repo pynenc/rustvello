@@ -43,7 +43,7 @@ python-versions: ## Print Python versions supported by py-rustvello metadata
 .PHONY: test-rust
 test-rust: ## Run Rust tests
 	@echo "🚀 Testing Rust: Running cargo test"
-	@cargo test --workspace --exclude py-rustvello --exclude rustvello-python
+	@cargo test --workspace --exclude py-rustvello
 
 .PHONY: test
 test: test-rust test-python ## Run all tests (Rust + Python)

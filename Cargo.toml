@@ -28,6 +28,7 @@ homepage = "https://pynenc.org"
 repository = "https://github.com/pynenc/rustvello"
 authors = ["Luis Diaz <code.luis.diaz@proton.me>"]
 license = "MIT"
+readme = "README.md"
 
 [workspace.dependencies]
 rustvello = { version = "0.5.1", path = "crates/rustvello" }

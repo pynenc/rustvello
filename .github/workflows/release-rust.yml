@@ -25,15 +25,24 @@ jobs:
         run: |
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | cut -d '"' -f 2)
           echo "version=v$VERSION" >> "$GITHUB_OUTPUT"
-          # Check if this version already exists on crates.io
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://crates.io/api/v1/crates/rustvello/$VERSION")
-          if [[ "$HTTP_CODE" == "200" ]]; then
-            echo "Version $VERSION already published on crates.io — skipping"
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Version $VERSION not found on crates.io — will publish"
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-          fi
+          # crates.io answers 403 to requests without a User-Agent, which made every version
+          # look unpublished; only 200 and 404 are real answers
+          HTTP_CODE=$(curl -sS -H "User-Agent: rustvello-release (https://github.com/pynenc/rustvello)" \
+            -o /dev/null -w "%{http_code}" "https://crates.io/api/v1/crates/rustvello/$VERSION")
+          case "$HTTP_CODE" in
+            200)
+              echo "Version $VERSION already published on crates.io — skipping"
+              echo "is_release=false" >> "$GITHUB_OUTPUT"
+              ;;
+            404)
+              echo "Version $VERSION not found on crates.io — will publish"
+              echo "is_release=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "crates.io answered $HTTP_CODE for rustvello/$VERSION; refusing to guess"
+              exit 1
+              ;;
+          esac
 
   verify-docs:
     name: Verify docs build
@@ -84,26 +93,30 @@ jobs:
             local max_retries=3
             echo "Publishing $crate..."
             for attempt in $(seq 1 $max_retries); do
-              output=$(cargo publish -p "$crate" --no-verify 2>&1) && {
+              if output=$(cargo publish -p "$crate" --no-verify 2>&1); then
                 echo "$output"
                 echo "✅ $crate published"
                 sleep 30
                 return 0
-              }
+              fi
               echo "$output"
-              if echo "$output" | grep -q "already exists"; then
+              # re-running after a partial release must not fail on what is already out;
+              # crates.io says "already uploaded", cargo says "already exists"
+              if echo "$output" | grep -qE "already (exists|uploaded)"; then
                 echo "⏭️ $crate already published, skipping"
                 return 0
               fi
-              if echo "$output" | grep -q "429\|Too Many Requests"; then
+              if echo "$output" | grep -qE "429|Too Many Requests"; then
                 echo "⏳ Rate limited, waiting 5 minutes before retry ($attempt/$max_retries)..."
                 sleep 300
-              else
-                echo "❌ $crate failed with unexpected error"
-                return 0
+                continue
               fi
+              # anything else fails the job: a swallowed error published nothing for 0.5.0 and 0.5.1
+              echo "❌ $crate failed to publish"
+              return 1
             done
-            echo "❌ $crate failed after $max_retries retries"
+            echo "❌ $crate still rate limited after $max_retries attempts"
+            return 1
           }
 
           # Layer 0: no internal deps

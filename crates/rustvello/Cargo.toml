@@ -8,6 +8,7 @@ homepage.workspace = true
 repository.workspace = true
 authors.workspace = true
 license.workspace = true
+readme.workspace = true
 
 [features]
 default = ["mem"]
