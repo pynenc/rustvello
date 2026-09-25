@@ -4,6 +4,22 @@ For detailed information on each version, please visit the [GitHub Releases page
 
 ## Unreleased
 
+- Native async tasks. `#[rustvello::task]` and `#[rustvello::workflow]` accept
+  `async fn`: the runner awaits the body on its Tokio runtime without a blocking
+  thread, bounded by `num_workers`. The invocation, runner and W3C trace contexts
+  and the worker's tracing span follow the body across `.await` points.
+  `Task`/`DynTask` gain `is_async` and `run_async`/`execute_async` with defaults,
+  so existing implementations are unchanged; `block_on_task_future` serves the
+  synchronous entry points. A panicking or aborted body fails the attempt
+  (`TaskCancelled`) instead of hanging, and a dropped worker aborts its body so
+  stale recovery can re-run the invocation. `blocking = true` on an `async fn` is
+  a compile error.
+- Python `@app.task` accepts `async def`. Each worker thread (or worker process)
+  owns one reusable event loop, so the invocation context and OpenTelemetry context
+  work unchanged. Tasks a coroutine leaves running are cancelled when it returns.
+  `Invocation.result_async()` awaits a child without blocking the loop, and dev
+  mode awaits async bodies inline. See [Async tasks](async_tasks.md).
+
 ## 0.5.2 - 2026-09-17
 
 - `RUSTVELLO__DEV_MODE_FORCE_SYNC` reaches an `App` built with an explicit

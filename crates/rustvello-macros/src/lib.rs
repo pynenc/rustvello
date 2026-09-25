@@ -56,6 +56,26 @@ use syn::{
 /// }
 /// ```
 ///
+/// # Async tasks
+///
+/// An `async fn` becomes a task whose body the runner awaits natively on its
+/// Tokio runtime: it holds no blocking thread while it waits on I/O, and the
+/// worker count still bounds how many run at once. The invocation context,
+/// W3C trace context and tracing span follow the future across `.await`
+/// points, and retries, results and errors behave as for synchronous tasks.
+/// The future must be `Send`.
+///
+/// ```rust,ignore
+/// #[rustvello::task(max_retries = 2)]
+/// async fn fetch_length(url: String) -> RustvelloResult<usize> {
+///     let body = http_get(&url).await?;
+///     Ok(body.len())
+/// }
+/// ```
+///
+/// `blocking = true` is rejected on an `async fn`; move blocking sections into
+/// `tokio::task::spawn_blocking` inside the body instead.
+///
 /// # Supported attributes
 ///
 /// | Attribute       | Type       | Description                                     |
@@ -347,6 +367,14 @@ fn validate_concurrency_str(lit: &LitStr) -> syn::Result<()> {
 fn expand_task(attrs: TaskAttrs, func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
     validate_function(&func)?;
     validate_attrs_against_params(&attrs, &func)?;
+    let is_async = func.sig.asyncness.is_some();
+    if is_async && attrs.blocking == Some(true) {
+        return Err(syn::Error::new_spanned(
+            &func.sig,
+            "async tasks run natively on the runner's async runtime; `blocking = true` is not \
+             supported on an `async fn` (use `tokio::task::spawn_blocking` inside the body)",
+        ));
+    }
 
     let fn_name = &func.sig.ident;
     let fn_name_str = fn_name.to_string();
@@ -371,7 +399,7 @@ fn expand_task(attrs: TaskAttrs, func: ItemFn) -> syn::Result<proc_macro2::Token
     let param_names: Vec<&Ident> = params.iter().map(|(name, _)| name).collect();
 
     // Config builder
-    let config_body = build_config(&attrs, &proto_path);
+    let config_body = build_config(&attrs, &proto_path, is_async);
 
     // Module for TaskId
     let module_expr = match &attrs.module {
@@ -384,11 +412,61 @@ fn expand_task(attrs: TaskAttrs, func: ItemFn) -> syn::Result<proc_macro2::Token
     } else {
         quote! { #fn_name(#(#param_names),*) }
     };
+    let fn_call = if is_async {
+        quote! { #fn_call.await }
+    } else {
+        fn_call
+    };
 
     let run_body = if wrap_ok {
         quote! { Ok(#fn_call) }
     } else {
         quote! { #fn_call }
+    };
+
+    let params_type = if params.is_empty() {
+        quote! { () }
+    } else {
+        quote! { #params_struct }
+    };
+    let destructure = if params.is_empty() {
+        quote! { let _: () = params; }
+    } else {
+        quote! { let #params_struct { #(#param_names),* } = params; }
+    };
+    let run_methods = if is_async {
+        quote! {
+            fn is_async(&self) -> bool {
+                true
+            }
+
+            fn run(
+                &self,
+                params: #params_type,
+            ) -> #core_path::error::RustvelloResult<#result_type> {
+                #core_path::task::block_on_task_future(
+                    #core_path::task::Task::run_async(self, params),
+                )
+            }
+
+            fn run_async(
+                &self,
+                params: #params_type,
+            ) -> #core_path::task::TaskFuture<'_, #result_type> {
+                #destructure
+                ::std::boxed::Box::pin(async move { #run_body })
+            }
+        }
+    } else {
+        quote! {
+            fn run(
+                &self,
+                params: #params_type,
+            ) -> #core_path::error::RustvelloResult<#result_type> {
+                #destructure
+                #run_body
+            }
+        }
     };
 
     let generated = if params.is_empty() {
@@ -403,7 +481,7 @@ fn expand_task(attrs: TaskAttrs, func: ItemFn) -> syn::Result<proc_macro2::Token
             fn_name_str.as_str(),
             &result_type,
             &config_body,
-            &run_body,
+            &run_methods,
         )
     } else {
         generate_with_params(
@@ -420,23 +498,16 @@ fn expand_task(attrs: TaskAttrs, func: ItemFn) -> syn::Result<proc_macro2::Token
             fn_name_str.as_str(),
             &result_type,
             &config_body,
-            &run_body,
+            &run_methods,
             &params,
-            &param_names,
         )
     };
 
     Ok(generated)
 }
 
-/// Reject unsupported function forms (async, unsafe, generic).
+/// Reject unsupported function forms (unsafe, generic).
 fn validate_function(func: &ItemFn) -> syn::Result<()> {
-    if func.sig.asyncness.is_some() {
-        return Err(syn::Error::new_spanned(
-            &func.sig,
-            "#[rustvello::task] does not support async functions yet",
-        ));
-    }
     if func.sig.unsafety.is_some() {
         return Err(syn::Error::new_spanned(
             &func.sig,
@@ -504,7 +575,7 @@ fn generate_no_params(
     fn_name_str: &str,
     result_type: &proc_macro2::TokenStream,
     config_body: &proc_macro2::TokenStream,
-    run_body: &proc_macro2::TokenStream,
+    run_methods: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     quote! {
         #func
@@ -542,12 +613,7 @@ fn generate_no_params(
                 &self.config
             }
 
-            fn run(
-                &self,
-                _params: (),
-            ) -> #core_path::error::RustvelloResult<#result_type> {
-                #run_body
-            }
+            #run_methods
         }
 
         fn #fn_name_register(
@@ -580,9 +646,8 @@ fn generate_with_params(
     fn_name_str: &str,
     result_type: &proc_macro2::TokenStream,
     config_body: &proc_macro2::TokenStream,
-    run_body: &proc_macro2::TokenStream,
+    run_methods: &proc_macro2::TokenStream,
     params: &[(Ident, Type)],
-    param_names: &[&Ident],
 ) -> proc_macro2::TokenStream {
     let param_fields: Vec<_> = params
         .iter()
@@ -631,13 +696,7 @@ fn generate_with_params(
                 &self.config
             }
 
-            fn run(
-                &self,
-                params: #params_struct,
-            ) -> #core_path::error::RustvelloResult<#result_type> {
-                let #params_struct { #(#param_names),* } = params;
-                #run_body
-            }
+            #run_methods
         }
 
         fn #fn_name_register(
@@ -723,6 +782,7 @@ fn unwrap_result_type(ty: &Type) -> Option<&Type> {
 fn build_config(
     attrs: &TaskAttrs,
     proto_path: &proc_macro2::TokenStream,
+    is_async: bool,
 ) -> proc_macro2::TokenStream {
     let base = quote! { let mut config = #proto_path::config::TaskConfig::default(); };
     let mut setters = Vec::new();
@@ -772,9 +832,12 @@ fn build_config(
     }
 
     if attrs.is_workflow_task {
+        // Synchronous workflow bodies block on child results, so they need a
+        // blocking thread; async workflow bodies await them on the runtime.
+        let blocking = !is_async;
         setters.push(quote! {
             config.is_workflow_task = true;
-            config.blocking = true;
+            config.blocking = #blocking;
         });
     }
 

@@ -1,3 +1,4 @@
+mod native_async;
 mod subprocess;
 mod tokio;
 
@@ -13,6 +14,7 @@ use rustvello_core::task::DynTask;
 use rustvello_proto::call::SerializedArguments;
 use rustvello_proto::identifiers::ExecutorKind;
 
+pub(crate) use native_async::execute_native_async;
 #[cfg(feature = "rayon")]
 pub(crate) use rayon::RayonExecutor;
 pub(crate) use subprocess::SubprocessExecutor;

@@ -25,10 +25,30 @@ Running a persistent worker::
 
     app.run()                      # in-process workers (I/O-bound Python)
     app.run(num_processes=8)       # one interpreter per worker (CPU-bound Python)
+
+Async tasks::
+
+    @app.task
+    async def fetch(url: str) -> int:
+        reader, writer = await asyncio.open_connection(...)
+        ...
+
+An ``async def`` task runs on an event loop owned by the worker that executes
+it: one loop per worker thread (``app.run()``) or per worker process
+(``app.run(num_processes=...)``), created on first use and reused. The loop
+runs on the worker's own thread, so the invocation context
+(:meth:`App.current_invocation`, child submissions, ``workflow_root()``) and
+the OpenTelemetry context are the same as for a synchronous task. While the
+loop waits on I/O it releases the GIL, so other workers keep running; CPU-bound
+code inside a coroutine still holds the GIL and stalls that worker's loop.
+Tasks a coroutine leaves running when it returns are cancelled before the
+worker takes its next invocation.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import dataclasses
 import inspect
 import json
@@ -116,11 +136,87 @@ def _mongo_url_from_parts(
     return f"mongodb://{credentials}{host or 'localhost'}:{port or 27017}{query}"
 
 
+class _WorkerLoop:
+    """The event loop of one worker thread; closed when the thread goes away."""
+
+    def __init__(self) -> None:
+        self.loop = asyncio.new_event_loop()
+
+    def __del__(self) -> None:
+        loop = self.loop
+        if not loop.is_closed() and not loop.is_running():
+            loop.close()
+
+
+_worker_loops = threading.local()
+
+
+def _worker_event_loop() -> asyncio.AbstractEventLoop:
+    """This thread's reusable worker event loop (one per worker thread or process)."""
+    holder: _WorkerLoop | None = getattr(_worker_loops, "holder", None)
+    if holder is None or holder.loop.is_closed():
+        holder = _WorkerLoop()
+        _worker_loops.holder = holder
+    return holder.loop
+
+
+def _cancel_leftover_tasks(loop: asyncio.AbstractEventLoop) -> None:
+    """Cancel tasks a finished coroutine left behind, as ``asyncio.run`` does."""
+    leftovers = [task for task in asyncio.all_tasks(loop) if not task.done()]
+    if not leftovers:
+        return
+    for task in leftovers:
+        task.cancel()
+    loop.run_until_complete(asyncio.gather(*leftovers, return_exceptions=True))
+
+
+def _run_coroutine(coro: Any) -> Any:
+    """Drive a task coroutine to completion from synchronous worker code.
+
+    Runs on this thread's worker loop, keeping the thread's invocation context. If a
+    loop is already running here (a dev-mode call made from async code), the
+    coroutine runs to completion on a helper thread with its own loop instead.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        loop = _worker_event_loop()
+        task = loop.create_task(coro)
+        try:
+            return loop.run_until_complete(task)
+        finally:
+            _cancel_leftover_tasks(loop)
+
+    outcome: dict[str, Any] = {}
+    context = contextvars.copy_context()
+
+    def _in_helper_thread() -> None:
+        try:
+            outcome["value"] = context.run(asyncio.run, coro)
+        except BaseException as error:  # noqa: BLE001 - re-raised in the caller
+            outcome["error"] = error
+
+    helper = threading.Thread(target=_in_helper_thread, name="rustvello-async-dev")
+    helper.start()
+    helper.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
+
+
+def _call_task_function(fn: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
+    """Call a task body; an ``async def`` body is awaited on the worker's event loop."""
+    result = fn(**kwargs)
+    if inspect.iscoroutine(result):
+        return _run_coroutine(result)
+    return result
+
+
 def _run_python_task(fn: Callable[..., Any], args_json: str) -> str:
     args_dict: dict[str, str] = json.loads(args_json)
     deserialized = {key: json.loads(value) for key, value in args_dict.items()}
     with _invocation_trace_context():
-        return json.dumps(fn(**deserialized))
+        return json.dumps(_call_task_function(fn, deserialized))
 
 
 class TaskLanguage(str, Enum):
@@ -185,27 +281,48 @@ class Invocation:
         # Fast path: sync mode — result already computed
         if self._sync_result is not _SENTINEL:
             return self._sync_result
+        self._mark_waiting()
+        deadline = time.monotonic() + timeout
+        while True:
+            done, value = self._poll(deadline, timeout)
+            if done:
+                return value
+            time.sleep(poll_interval)
 
+    async def result_async(self, timeout: float = 60.0, poll_interval: float = 0.05) -> Any:
+        """Await the result without blocking the event loop (for ``async def`` tasks).
+
+        Same contract as :meth:`result`; polls with ``asyncio.sleep``.
+        """
+        if self._sync_result is not _SENTINEL:
+            return self._sync_result
+        self._mark_waiting()
+        deadline = time.monotonic() + timeout
+        while True:
+            done, value = self._poll(deadline, timeout)
+            if done:
+                return value
+            await asyncio.sleep(poll_interval)
+
+    def _mark_waiting(self) -> None:
+        """Inside a running task, record that it waits on this invocation."""
         current_invocation_id = get_current_invocation_id()
         if current_invocation_id is not None:
             current = InvocationId.from_string(current_invocation_id)
             if str(current) != str(self._invocation_id):
                 self._app._engine.set_waiting_for(current, self._invocation_id)
 
-        deadline = time.monotonic() + timeout
-        while True:
-            status = self.status
-            if status.is_terminal():
-                str_status = str(status)
-                if str_status == "FAILED":
-                    raise RuntimeError(f"Task failed: {self._app._failure_message(self._invocation_id)}")
-                raw = self._app._engine.get_result(self._invocation_id)
-                if raw is None:
-                    return None
-                return json.loads(raw)
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"Invocation {self._invocation_id} still {status} after {timeout}s")
-            time.sleep(poll_interval)
+    def _poll(self, deadline: float, timeout: float) -> tuple[bool, Any]:
+        """One status check: ``(True, result)`` when terminal; raises on failure or timeout."""
+        status = self.status
+        if status.is_terminal():
+            if str(status) == "FAILED":
+                raise RuntimeError(f"Task failed: {self._app._failure_message(self._invocation_id)}")
+            raw = self._app._engine.get_result(self._invocation_id)
+            return True, None if raw is None else json.loads(raw)
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Invocation {self._invocation_id} still {status} after {timeout}s")
+        return False, None
 
 
 class TaskHandle:
@@ -270,7 +387,7 @@ class TaskHandle:
         """Route to call_sync or submit depending on the app mode."""
         if self._app._dev_mode_force_sync:
             deserialized = {key: json.loads(value) for key, value in serialized.items()}
-            result = self._func(**deserialized)
+            result = _call_task_function(self._func, deserialized)
             raw = json.dumps(result)
             value = json.loads(raw)
             return Invocation(
@@ -494,6 +611,9 @@ class App:
             @app.task
             def simple(x: int) -> int: ...
 
+            @app.task
+            async def fetch(url: str) -> str: ...  # awaited on the worker's event loop
+
             @app.task(max_retries=3, cache_results=True)
             def resilient(x: int) -> int: ...
 
@@ -539,8 +659,8 @@ class App:
         }
 
         def decorator(fn: Callable[..., Any]) -> TaskHandle:
-            if inspect.iscoroutinefunction(fn) or inspect.isasyncgenfunction(fn):
-                raise TypeError("Rustvello standalone tasks must be a synchronous callable")
+            if inspect.isasyncgenfunction(fn):
+                raise TypeError("Rustvello tasks must be a function or an async function, not an async generator")
 
             module = fn.__module__
             name = fn.__name__

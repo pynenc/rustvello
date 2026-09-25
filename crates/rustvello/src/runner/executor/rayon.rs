@@ -57,6 +57,13 @@ impl TaskExecutor for RayonExecutor {
             .map_err(|error| RustvelloError::Internal {
                 message: format!("rayon executor closed: {error}"),
             })?;
+        if task.is_async() {
+            // Async bodies wait on I/O, not CPU: await them on the runtime and
+            // keep the Rayon threads for compute. The permit still bounds them.
+            let _permit = permit;
+            return super::execute_native_async(task, args, invocation_context, runner_context)
+                .await;
+        }
         let (sender, receiver) = tokio::sync::oneshot::channel();
         self.pool.spawn(move || {
             let _permit = permit;

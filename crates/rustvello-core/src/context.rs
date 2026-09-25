@@ -380,6 +380,30 @@ pub fn get_or_create_runner_context() -> RunnerContext {
     RunnerContext::external()
 }
 
+/// Carry the caller's invocation and runner contexts into `future`.
+///
+/// Task-locals do not follow a future onto another thread or runtime, and the
+/// thread-local fallback is only visible on the thread that set it. This
+/// captures whichever context is current (task-local first, then thread-local)
+/// and re-establishes it as task-locals around `future`, so the contexts
+/// survive every `.await` wherever the future is polled.
+pub fn scope_current_contexts<'a, T: 'a>(
+    future: std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>> {
+    let runner = RUNNER_CTX
+        .try_with(Clone::clone)
+        .ok()
+        .or_else(|| THREAD_RUNNER_CTX.with(|cell| cell.borrow().clone()));
+    let future = match runner {
+        Some(runner) => Box::pin(RUNNER_CTX.scope(runner, future)),
+        None => future,
+    };
+    match get_invocation_context() {
+        Some(invocation) => Box::pin(INVOCATION_CTX.scope(invocation, future)),
+        None => future,
+    }
+}
+
 /// Build a stable external runner ID: `"{hostname}-{pid}"`.
 ///
 /// Matches pynenc's `ExternalRunner` which uses hostname-pid since external

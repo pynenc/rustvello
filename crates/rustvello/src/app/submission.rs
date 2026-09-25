@@ -219,7 +219,9 @@ impl RustvelloApp {
     /// Execute a typed task synchronously (dev mode).
     ///
     /// Bypasses the broker/runner — executes immediately in the current thread.
-    /// Returns the typed result directly.
+    /// Returns the typed result directly. An async task is driven to completion
+    /// with [`rustvello_core::task::block_on_task_future`]; prefer
+    /// [`RustvelloApp::call`] from async code.
     pub fn execute_sync<T: Task>(&self, task: &T, params: T::Params) -> RustvelloResult<T::Result> {
         task.run(params)
     }
@@ -250,7 +252,9 @@ impl RustvelloApp {
         }
 
         if self.config.dev_mode_force_sync {
-            Ok(Invocation::Sync(Self::run_sync_with_retries(task, params)))
+            Ok(Invocation::Sync(
+                Self::run_sync_with_retries(task, params).await,
+            ))
         } else {
             // Distributed path: delegate to submit_call
             let handle = self.submit_call(task, params).await?;
@@ -260,8 +264,12 @@ impl RustvelloApp {
 
     /// Execute a task synchronously with retry logic.
     ///
-    /// Mirrors pynenc's `ConcurrentInvocation` retry behaviour.
-    fn run_sync_with_retries<T: Task>(task: &T, params: T::Params) -> SyncInvocation<T::Result>
+    /// Mirrors pynenc's `ConcurrentInvocation` retry behaviour. Async task
+    /// bodies are awaited in place; synchronous bodies run inline as before.
+    async fn run_sync_with_retries<T: Task>(
+        task: &T,
+        params: T::Params,
+    ) -> SyncInvocation<T::Result>
     where
         T::Params: Clone,
     {
@@ -270,7 +278,7 @@ impl RustvelloApp {
 
         let mut last_err = None;
         for attempt in 0..=max_retries {
-            match task.run(params.clone()) {
+            match task.run_async(params.clone()).await {
                 Ok(result) => {
                     return SyncInvocation::success(invocation_id, result);
                 }

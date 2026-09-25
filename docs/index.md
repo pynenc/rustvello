@@ -13,6 +13,7 @@
 installation
 getting_started
 architecture
+async_tasks
 workflows
 configuration/index
 monitoring/index

@@ -65,6 +65,7 @@ For the full architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Key Features
 
 - **Typed Task System**: proc-macro `#[rustvello::task]` generates serializable params, deterministic call IDs, and compile-time auto-discovery via `inventory`
+- **Async Tasks**: `async fn` (Rust) and `async def` (Python) task bodies awaited natively on the worker's runtime or event loop, with the same retries, results and context propagation as synchronous tasks
 - **Invocation State Machine**: 13-state FSM with guarded transitions, ownership tracking, and automatic recovery
 - **Pluggable Backends**: Swap between in-memory, SQLite, Redis, PostgreSQL, MongoDB, and RabbitMQ backends via feature flags
 - **Concurrency Control**: Four levels (Unlimited, Task, Argument, None) enforced at both registration and execution time

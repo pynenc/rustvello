@@ -58,8 +58,8 @@ pub mod prelude {
     pub use crate::serializer::{SerdeSerializer, Serializer};
     pub use crate::state_backend::StateBackend;
     pub use crate::task::{
-        CrossLanguageSafe, DynTask, ForeignTask, ForeignTaskProxy, Task, TaskDefinition,
-        TaskModule, TaskRegistry,
+        block_on_task_future, CrossLanguageSafe, DynTask, ForeignTask, ForeignTaskProxy, Task,
+        TaskDefinition, TaskFuture, TaskModule, TaskRegistry,
     };
     pub use crate::trigger::{TriggerManager, TriggerStore};
     pub use crate::workflow::WorkflowRoot;

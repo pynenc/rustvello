@@ -45,6 +45,10 @@ impl TaskExecutor for TokioExecutor {
         invocation_context: InvocationContext,
         runner_context: RunnerContext,
     ) -> RustvelloResult<String> {
+        if task.is_async() {
+            return super::execute_native_async(task, args, invocation_context, runner_context)
+                .await;
+        }
         if self.should_spawn_blocking(task.as_ref()) {
             let permit = Arc::clone(&self.blocking_permits)
                 .acquire_owned()
