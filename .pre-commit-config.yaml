@@ -57,6 +57,11 @@ repos:
 
   - repo: local
     hooks:
+      - id: repo-links
+        name: Links into this repository resolve (offline)
+        entry: python3 scripts/check_repo_links.py
+        language: system
+        files: '(\.md|llms\.txt)$'
       - id: readme-examples
         name: README examples match their files
         entry: python3 scripts/readme_examples.py check

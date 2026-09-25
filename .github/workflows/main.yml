@@ -196,6 +196,9 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
 
+      - name: Check links into this repository (offline, against this branch)
+        run: python3 scripts/check_repo_links.py
+
       - name: Check Markdown links
         uses: lycheeverse/lychee-action@v2
         with:

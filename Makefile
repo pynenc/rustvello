@@ -102,6 +102,7 @@ bench-down: ## Stop and remove the benchmark containers and their volumes
 
 .PHONY: links
 links: ## Check repository-relative links in Markdown (offline, needs lychee)
+	@python3 scripts/check_repo_links.py
 	@lychee --config lychee.toml --no-progress --offline $(LINK_SOURCES)
 
 .PHONY: links-online

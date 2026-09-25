@@ -13,6 +13,11 @@ exclude = [
   '^(amqp|redis|mongodb|postgres|postgresql)://',
   '\$\{?[A-Z_]+',
   '<[^>]+>',
+  # Links to this repository's main branch: a file added by a pull request
+  # exists there only after the merge. `scripts/check_repo_links.py` checks
+  # them against the working tree (pre-commit, `make links`, CI).
+  '^https://github\.com/pynenc/rustvello/(blob|tree)/main/',
+  '^https://raw\.githubusercontent\.com/pynenc/rustvello/main/',
 ]
 
 # Transient failures and rate limits must not fail CI; broken links must.
