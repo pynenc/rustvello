@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://pynenc.org/assets/img/pynenc_logo.png" alt="Rustvello" width="300">
+  <img src="https://raw.githubusercontent.com/pynenc/rustvello/main/docs/_static/logo.png" alt="Rustvello" width="300">
 </p>
 <h1 align="center">Rustvello</h1>
 <p align="center">
