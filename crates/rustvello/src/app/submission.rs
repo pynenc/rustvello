@@ -209,6 +209,27 @@ impl RustvelloApp {
         ))
     }
 
+    /// Submit a typed task at most once per idempotency `key`.
+    ///
+    /// The invocation id is [`InvocationId::from_key`] of the task and the key,
+    /// and the submission is [`submit_call_with_id`](Self::submit_call_with_id):
+    /// repeating it with the same key, arguments and lineage returns the same
+    /// invocation instead of creating another one; the same key with different
+    /// arguments fails. Needs a backend with atomic publication (SQLite or
+    /// PostgreSQL); others fail closed. The key deduplicates *submissions*:
+    /// the task body still runs at least once (see the idempotency guide).
+    pub async fn submit_call_with_key<T: Task>(
+        &self,
+        key: &str,
+        task: &T,
+        params: T::Params,
+        trace_context: Option<TraceContextCarrier>,
+    ) -> RustvelloResult<InvocationHandle<T::Result>> {
+        let invocation_id = InvocationId::from_key(task.task_id(), key);
+        self.submit_call_with_id(invocation_id, task, params, trace_context)
+            .await
+    }
+
     /// Submit a typed foreign task for distributed execution.
     ///
     /// The task is registered and routed exactly like any other task, but only

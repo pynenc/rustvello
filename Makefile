@@ -2,7 +2,7 @@
 PYTHON_BIN ?= $(CURDIR)/.venv/bin/python
 MONITORING_LOAD_LOG ?= rustvello=debug,rustvello_monitoring=debug
 # Markdown checked by `make links` / `make links-online` (and the CI link job).
-LINK_SOURCES = README.md '*.md' py-rustvello/README.md 'crates/*/README.md' 'docs/**/*.md' 'skills/**/*.md' evals/README.md
+LINK_SOURCES = README.md '*.md' py-rustvello/README.md 'crates/*/README.md' 'docs/**/*.md' 'skills/**/*.md' evals/README.md benchmarks/README.md
 
 .PHONY: install
 install: ## Install dependencies, build the Python extension, and set up pre-commit hooks
@@ -48,12 +48,12 @@ test-rust: ## Run Rust tests
 	@cargo test --workspace --exclude py-rustvello
 
 .PHONY: test-fault
-test-fault: ## Run the fault-injection suites (SQLite process kills at every publication, trigger and delayed-retry boundary, in-process trigger faults)
+test-fault: ## Run the fault-injection suites (SQLite process kills at every publication, trigger and delayed-retry boundary, a worker killed after its side effects, in-process trigger faults)
 	@echo "🚀 Testing Rust: SQLite process kills, trigger outbox faults and durable retries"
 	@cargo test -p rustvello --features sqlite-fault-injection \
 		--test publication_crash_acceptance --test trigger_crash_acceptance \
 		--test stale_owner_concurrency --test trigger_fallback_faults \
-		--test durable_retry_kill -- --test-threads=1
+		--test durable_retry_kill --test idempotency_kill -- --test-threads=1
 	@echo "🚀 Testing Rust: SQLite backend with failpoints compiled in"
 	@cargo test -p rustvello-sqlite --features fault-injection -- --test-threads=1
 
@@ -82,6 +82,23 @@ skill-examples: develop ## Fresh-agent check: run the agent skill's examples fro
 evals-check: develop ## Self-test the cross-model eval harness (mock models, no keys, no network)
 	@uv run python evals/run.py api-surface
 	@uv run python -m pytest evals/tests -q
+
+.PHONY: migration-example
+migration-example: develop ## Run the Celery migration example: the Celery app (in-memory transport), then its Rustvello port
+	@cd py-rustvello/examples/celery_migration && uv run --no-sync --with celery==5.6.3 python celery_app.py
+	@cd py-rustvello/examples/celery_migration && uv run --no-sync python rustvello_app.py
+
+.PHONY: bench-up
+bench-up: ## Start the benchmark's Redis, RabbitMQ and PostgreSQL containers (benchmarks/docker-compose.yml)
+	@docker compose -f benchmarks/docker-compose.yml up -d --wait
+
+.PHONY: bench
+bench: develop ## Run the Rustvello vs Celery benchmark; BENCH_ARGS="--systems rustvello-sqlite celery-redis" narrows it
+	@uv run --no-sync --with-requirements benchmarks/requirements.txt python benchmarks/run.py $(BENCH_ARGS)
+
+.PHONY: bench-down
+bench-down: ## Stop and remove the benchmark containers and their volumes
+	@docker compose -f benchmarks/docker-compose.yml down -v
 
 .PHONY: links
 links: ## Check repository-relative links in Markdown (offline, needs lychee)

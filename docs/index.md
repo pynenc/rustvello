@@ -11,14 +11,18 @@
 :caption: User Guide
 
 installation
+when-to-use
 getting_started
 architecture
 async_tasks
 workflows
 retries-timeouts-cancellation
+idempotency
 configuration/index
 monitoring/index
 guarantees
+migrating-from-celery
+benchmarks
 migration-0.2
 agents
 ```
@@ -65,6 +69,10 @@ or for Python:
 ```bash
 pip install rustvello
 ```
+
+Choosing a task runtime? Start with {doc}`when-to-use`, the at-least-once
+contract in {doc}`idempotency`, {doc}`migrating-from-celery` and the
+{doc}`benchmarks` against Celery.
 
 ---
 

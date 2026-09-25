@@ -179,6 +179,48 @@ async fn timeout_retries_per_policy_unless_disabled() {
 }
 
 #[tokio::test]
+async fn abandoned_blocking_body_overlaps_its_retry_with_the_same_invocation_id() {
+    // The idempotency guide's claim: a timed-out synchronous body keeps running
+    // after the deadline, so the retry can run beside it, and both see the
+    // same invocation id (the key to make their side effects idempotent).
+    let spans: Arc<std::sync::Mutex<Vec<(String, Instant, Instant)>>> = Arc::default();
+    let recorded = Arc::clone(&spans);
+    let body: TaskFn = Arc::new(move |_| {
+        let id = get_invocation_context().unwrap().invocation_id.to_string();
+        let started = Instant::now();
+        std::thread::sleep(Duration::from_millis(400));
+        recorded.lock().unwrap().push((id, started, Instant::now()));
+        Ok("\"late\"".into())
+    });
+    let mut config = TaskConfig::default();
+    config.blocking = true;
+    config.max_retries = 1;
+    config.timeout_ms = Some(50);
+    let (worker, client) = apps(config, body);
+    let id = client
+        .submit(&task_id(), SerializedArguments::new())
+        .await
+        .unwrap();
+    let runner = worker.into_runner();
+    while runner.run_one().await.unwrap() {}
+    // Both abandoned bodies finish in the background.
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert_eq!(status(&client, &id).await, InvocationStatus::Failed);
+    let spans = spans.lock().unwrap().clone();
+    assert_eq!(spans.len(), 2, "two executions of one invocation");
+    assert!(spans.iter().all(|(inv, _, _)| inv == id.as_str()));
+    let (first, second) = if spans[0].1 <= spans[1].1 {
+        (&spans[0], &spans[1])
+    } else {
+        (&spans[1], &spans[0])
+    };
+    assert!(
+        second.1 < first.2,
+        "the retry started before the abandoned first body returned"
+    );
+}
+
+#[tokio::test]
 async fn inline_sync_task_result_past_deadline_is_discarded() {
     // Non-blocking sync bodies cannot be preempted; the deadline is checked
     // when they return.

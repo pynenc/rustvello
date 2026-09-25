@@ -404,6 +404,18 @@ class TaskHandle:
             raise ValueError("durable submission is unavailable in synchronous dev mode")
         return self._dispatch({k: json.dumps(v) for k, v in kwargs.items()}, invocation_id)
 
+    def submit_with_key(self, key: str, **kwargs: Any) -> Invocation:
+        """Submit at most once per idempotency ``key`` (a request id, an order id).
+
+        The invocation id is ``InvocationId.from_key(task key, key)``, submitted
+        through :meth:`submit_with_id`: repeating the call with the same key and
+        arguments returns the same invocation, the same key with other arguments
+        raises. Needs SQLite or PostgreSQL. The key deduplicates submissions only;
+        the task body still runs at least once, so keep its side effects idempotent.
+        """
+        invocation_id = InvocationId.from_key(f"{self._language}::{self._module}.{self._name}", key)
+        return self.submit_with_id(invocation_id, **kwargs)
+
     @property
     def is_workflow_task(self) -> bool:
         """Whether this handle was registered as an explicit workflow root."""

@@ -4,6 +4,32 @@ For detailed information on each version, please visit the [GitHub Releases page
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-25
+
+- Fix: Python `app.trigger(...).register()` stored nothing, so cron and
+  interval triggers never fired. It now registers the cron condition and the
+  trigger in the app's trigger store (idempotent), rejects an invalid cron
+  expression or a foreign task with `ValueError`, and accepts a task argument
+  named `kind`. `on_cron` takes `min_interval_seconds` (default 50 for 5-field
+  expressions, as in Rust, 0 for 6-field ones).
+- Fix: cron conditions fired only when an evaluation (every few seconds) landed
+  on the slot's exact second, so a minute cron such as `*/5 * * * *` rarely
+  fired. Evaluation now fires the latest due slot once, up to two minutes late
+  (`cron_slot_due`); older missed slots are skipped, not replayed.
+- Fix: `idle_sleep_ms` (`with_idle_sleep`, `App.run(idle_sleep_ms=...)`,
+  `python -m rustvello.worker --idle-sleep-ms`) had no effect: an idle worker
+  always waited the broker's fixed 100 ms before polling again. It now caps
+  that wait, so the Python default (50 ms) and smaller values reduce the
+  dispatch delay of an idle worker, at the cost of more idle polling. Found by
+  the Celery benchmark.
+- The investigation report (`/invocations/{id}/investigation`) adds the
+  current `status` and the stored `error` of a failed invocation.
+- Python `App.start_monitor` binds before returning: `port=0` picks a free port
+  that `address` reports, requests made right after the call are served, and a
+  bind error raises `OSError`.
+- The in-memory trigger store indexes a trigger registered twice only once, and
+  `RuntimeError("Task failed: …")` no longer repeats the error type when the
+  stored message already starts with it.
 - Agent skill `skills/rustvello/` (`SKILL.md` format, no MCP needed): set up an
   app on SQLite, sync and async tasks with retries, backoff, timeouts and
   cancellation, workers, submit and wait, cron triggers, choosing a backend
@@ -19,24 +45,22 @@ For detailed information on each version, please visit the [GitHub Releases page
   Anthropic, OpenAI(-compatible) or Gemini models when their key is in the
   environment and skips them otherwise; mock models validate the harness in CI
   (`make evals-check`).
-- Fix: Python `app.trigger(...).register()` stored nothing, so cron and
-  interval triggers never fired. It now registers the cron condition and the
-  trigger in the app's trigger store (idempotent), rejects an invalid cron
-  expression or a foreign task with `ValueError`, and accepts a task argument
-  named `kind`. `on_cron` takes `min_interval_seconds` (default 50 for 5-field
-  expressions, as in Rust, 0 for 6-field ones).
-- Fix: cron conditions fired only when an evaluation (every few seconds) landed
-  on the slot's exact second, so a minute cron such as `*/5 * * * *` rarely
-  fired. Evaluation now fires the latest due slot once, up to two minutes late
-  (`cron_slot_due`); older missed slots are skipped, not replayed.
-- The investigation report (`/invocations/{id}/investigation`) adds the
-  current `status` and the stored `error` of a failed invocation.
-- Python `App.start_monitor` binds before returning: `port=0` picks a free port
-  that `address` reports, requests made right after the call are served, and a
-  bind error raises `OSError`.
-- The in-memory trigger store indexes a trigger registered twice only once, and
-  `RuntimeError("Task failed: …")` no longer repeats the error type when the
-  stored message already starts with it.
+- Idempotency keys: `InvocationId::from_key(task_id, key)` (Rust) and
+  `InvocationId.from_key(task_key, key)` (Python) derive the same UUID v5 for a
+  task and a caller key. `RustvelloApp::submit_call_with_key` and
+  `TaskHandle.submit_with_key` submit through the idempotent durable submission,
+  so repeating a request with the same key returns the same invocation
+  (SQLite and PostgreSQL; other backends fail closed).
+- New guide: [Idempotency and the at-least-once contract](idempotency.md), with
+  a new kill test (`idempotency_kill.rs`, in `make test-fault`) showing that a
+  worker killed after its side effects has its body run again under the same
+  invocation id, and that an effect keyed by that id is applied once. A new test
+  shows that a timed-out synchronous body overlaps its retry.
+- New pages: [When to use Rustvello](when-to-use.md),
+  [Migrating from Celery](migrating-from-celery.md) with a runnable before/after
+  example checked in CI (`make migration-example`), and a reproducible
+  [benchmark against Celery](benchmarks.md) under equal durability settings
+  (`benchmarks/`, `make bench-up bench bench-down`).
 
 ## 0.7.0 - 2026-09-25
 
