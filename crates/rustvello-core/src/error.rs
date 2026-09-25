@@ -115,6 +115,10 @@ pub enum RustvelloError {
         actual_status: InvocationStatus,
     },
 
+    /// The invocation was cancelled by a user request before it finished.
+    #[error("invocation {invocation_id} was cancelled")]
+    InvocationCancelled { invocation_id: InvocationId },
+
     // --- Task execution errors ---
     /// Task function raised an error during execution.
     /// Carries the original exception type name for retry matching.

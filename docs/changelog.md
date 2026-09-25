@@ -19,6 +19,23 @@ For detailed information on each version, please visit the [GitHub Releases page
   work unchanged. Tasks a coroutine leaves running are cancelled when it returns.
   `Invocation.result_async()` awaits a child without blocking the loop, and dev
   mode awaits async bodies inline. See [Async tasks](async_tasks.md).
+- Retry backoff: `retry_delay_ms`, `retry_max_delay_ms`, `retry_backoff` and
+  `retry_jitter` (equal by default; full or none) on `TaskConfig`, on the task
+  macros and on Python `@app.task`/`@app.workflow` (seconds). Delayed retries are
+  stored durably in the backend on SQLite and PostgreSQL. The in-memory backend
+  keeps them only for the life of the process. Redis, MongoDB and RabbitMQ
+  declare no support and retry immediately. A worker killed during the backoff
+  loses nothing, and the retry fires once when due (kill test).
+- Execution deadlines: `timeout_ms` / `timeout` fail an attempt with
+  `TaskTimeoutError`. `retry_on_timeout` decides whether the attempt is
+  retried. Async bodies are dropped and process-pool workers are killed. Sync
+  threads are abandoned and their late result is discarded.
+- Cancellation: new terminal status `CANCELLED`, `RustvelloApp::cancel`,
+  Python `Invocation.cancel()`/`App.cancel()` and `rustvello cancel`. Running
+  attempts are abandoned within `cancellation_check_interval_seconds`.
+- Defaults keep the previous behaviour, and task configs serialized before this
+  release deserialize unchanged. See the "Retries, timeouts and cancellation"
+  guide for the per-backend guarantees and the side-effect semantics.
 
 ## 0.5.2 - 2026-09-17
 

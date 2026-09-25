@@ -64,6 +64,7 @@ from typing import Any, Callable, TypeVar
 from rustvello.backends import create_backends as _create_backends
 from rustvello.rustvello import (
     AppConfig,
+    InvocationCancelledError,
     InvocationId,
     InvocationStatus,
     RustTaskRunnerBuilder,
@@ -269,13 +270,29 @@ class Invocation:
             return self._sync_status
         return self._app._engine.get_status(self._invocation_id)
 
+    def cancel(self) -> bool:
+        """Cancel this invocation if it has not finished.
+
+        Returns ``True`` when this call cancelled it, ``False`` when it had
+        already finished. Queued or backing-off invocations never run; a
+        running attempt is abandoned by its worker (async code is aborted, a
+        synchronous function keeps running in its thread but its result is
+        discarded). Side effects already performed are not undone.
+        """
+        if self._sync_status is not None:
+            return False  # dev mode: already executed inline
+        return bool(self._app._engine.cancel(self._invocation_id))
+
     def result(self, timeout: float = 60.0, poll_interval: float = 0.05) -> Any:
         """Block until the result is available or *timeout* seconds have elapsed.
 
         Returns the deserialized result (parsed from JSON).
 
         Raises:
-            RuntimeError: if the invocation reached a FAILED terminal state.
+            RuntimeError: if the invocation reached a FAILED terminal state
+                (a task that exceeded its ``timeout`` fails with
+                ``TaskTimeoutError`` in the message).
+            InvocationCancelledError: if the invocation was cancelled.
             TimeoutError: if the timeout is reached before a terminal state.
         """
         # Fast path: sync mode — result already computed
@@ -313,11 +330,14 @@ class Invocation:
                 self._app._engine.set_waiting_for(current, self._invocation_id)
 
     def _poll(self, deadline: float, timeout: float) -> tuple[bool, Any]:
-        """One status check: ``(True, result)`` when terminal; raises on failure or timeout."""
+        """One status check: ``(True, result)`` when terminal; raises on failure, cancel or timeout."""
         status = self.status
         if status.is_terminal():
-            if str(status) == "FAILED":
+            str_status = str(status)
+            if str_status == "FAILED":
                 raise RuntimeError(f"Task failed: {self._app._failure_message(self._invocation_id)}")
+            if str_status == "CANCELLED":
+                raise InvocationCancelledError(f"invocation {self._invocation_id} was cancelled")
             raw = self._app._engine.get_result(self._invocation_id)
             return True, None if raw is None else json.loads(raw)
         if time.monotonic() >= deadline:
@@ -602,6 +622,12 @@ class App:
         priority: float = 0.0,
         retry_for: tuple[type[BaseException], ...] = (),
         replace: bool = False,
+        retry_delay: float = 0.0,
+        retry_max_delay: float = 300.0,
+        retry_backoff: float = 2.0,
+        retry_jitter: str = "equal",
+        timeout: float | None = None,
+        retry_on_timeout: bool = True,
         _is_workflow_task: bool = False,
     ) -> Any:
         """Register a function as a distributed task.
@@ -639,6 +665,19 @@ class App:
                 ``max_retries`` allows.
             replace: Re-register a task already known under the same ``module.name``
                 (module reloads, tests redefining a task) instead of raising.
+            retry_delay: Seconds before the first retry (default 0: retry at once).
+                Retry ``n`` waits ``min(retry_max_delay, retry_delay * retry_backoff**n)``
+                with jitter. The wait is stored in the backend, not slept in a worker.
+            retry_max_delay: Upper bound of the retry delay before jitter (seconds).
+            retry_backoff: Growth factor of the delay per retry (>= 1.0).
+            retry_jitter: ``"equal"`` (default: half the delay plus a random half),
+                ``"full"`` (random in ``[0, delay]``) or ``"none"``.
+            timeout: Execution deadline of one attempt in seconds (``None`` = none).
+                An expired attempt fails with ``TaskTimeoutError``; the Python
+                function cannot be interrupted, so its thread keeps running and
+                its result is discarded (use ``num_processes`` to have the
+                worker process killed instead).
+            retry_on_timeout: Whether a timed-out attempt may be retried.
 
         Returns:
             A :class:`TaskHandle` that submits the task when called.
@@ -656,6 +695,12 @@ class App:
             "queue": queue,
             "priority": priority,
             "retry_for_errors": [cls.__name__ for cls in retry_for],
+            "retry_delay": retry_delay,
+            "retry_max_delay": retry_max_delay,
+            "retry_backoff": retry_backoff,
+            "retry_jitter": retry_jitter,
+            "timeout": timeout,
+            "retry_on_timeout": retry_on_timeout,
         }
 
         def decorator(fn: Callable[..., Any]) -> TaskHandle:
@@ -673,6 +718,13 @@ class App:
                 queue=queue,
                 priority=priority,
                 retry_for_errors=[cls.__name__ for cls in retry_for],
+            ).with_retry_policy(
+                retry_delay=retry_delay,
+                retry_max_delay=retry_max_delay,
+                retry_backoff=retry_backoff,
+                retry_jitter=retry_jitter,
+                timeout=timeout,
+                retry_on_timeout=retry_on_timeout,
             )
 
             def _rust_wrapper(args_json: str) -> str:
@@ -706,6 +758,12 @@ class App:
         priority: float = 0.0,
         retry_for: tuple[type[BaseException], ...] = (),
         replace: bool = False,
+        retry_delay: float = 0.0,
+        retry_max_delay: float = 300.0,
+        retry_backoff: float = 2.0,
+        retry_jitter: str = "equal",
+        timeout: float | None = None,
+        retry_on_timeout: bool = True,
     ) -> Any:
         """Register a function as an explicit workflow root.
 
@@ -728,6 +786,12 @@ class App:
             priority=priority,
             retry_for=retry_for,
             replace=replace,
+            retry_delay=retry_delay,
+            retry_max_delay=retry_max_delay,
+            retry_backoff=retry_backoff,
+            retry_jitter=retry_jitter,
+            timeout=timeout,
+            retry_on_timeout=retry_on_timeout,
             _is_workflow_task=True,
         )
 
@@ -916,6 +980,12 @@ class App:
                 is_workflow_task=extra.get("is_workflow_task", False),
                 queue=extra.get("queue", "default"),
                 priority=extra.get("priority", 0.0),
+                retry_delay=extra.get("retry_delay", 0.0),
+                retry_max_delay=extra.get("retry_max_delay", 300.0),
+                retry_backoff=extra.get("retry_backoff", 2.0),
+                retry_jitter=extra.get("retry_jitter", "equal"),
+                timeout=extra.get("timeout"),
+                retry_on_timeout=extra.get("retry_on_timeout", True),
             )
 
         for handle in self._foreign_tasks.values():
@@ -1010,6 +1080,11 @@ class App:
             return str(state_backend.get_error(str(invocation_id)))
         except Exception:  # noqa: BLE001
             return str(self._engine.get_result(invocation_id))
+
+    def cancel(self, invocation: "Invocation | InvocationId") -> bool:
+        """Cancel an invocation that has not finished; see :meth:`Invocation.cancel`."""
+        invocation_id = invocation.id if isinstance(invocation, Invocation) else invocation
+        return bool(self._engine.cancel(invocation_id))
 
     def queue_depth(self, queue: str = "default") -> int:
         """Number of queued Python invocations waiting in one logical queue."""

@@ -213,6 +213,16 @@ impl TaskCatalog {
             reroute_on_cc: (config.reroute_on_cc != base.reroute_on_cc)
                 .then_some(config.reroute_on_cc),
             blocking: (config.blocking != base.blocking).then_some(config.blocking),
+            retry_delay_ms: (config.retry_delay_ms != base.retry_delay_ms)
+                .then_some(config.retry_delay_ms),
+            retry_max_delay_ms: (config.retry_max_delay_ms != base.retry_max_delay_ms)
+                .then_some(config.retry_max_delay_ms),
+            retry_backoff: (config.retry_backoff != base.retry_backoff)
+                .then_some(config.retry_backoff),
+            retry_jitter: (config.retry_jitter != base.retry_jitter).then_some(config.retry_jitter),
+            timeout_ms: (config.timeout_ms != base.timeout_ms).then_some(config.timeout_ms),
+            retry_on_timeout: (config.retry_on_timeout != base.retry_on_timeout)
+                .then_some(config.retry_on_timeout),
         });
         cache.insert(task_name.to_owned(), Arc::clone(&env_override));
         env_override

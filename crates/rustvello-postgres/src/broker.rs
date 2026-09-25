@@ -52,6 +52,40 @@ impl Broker for PostgresBroker {
         Ok(())
     }
 
+    fn supports_delayed_delivery(&self) -> bool {
+        true
+    }
+
+    /// Inserts the entry and its not-before time (database clock) in one
+    /// transaction; retrieval and counts skip it until it is due.
+    async fn route_invocation_after(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: Option<&TaskId>,
+        queue_name: &str,
+        priority: f64,
+        delay: std::time::Duration,
+    ) -> RustvelloResult<()> {
+        validate_routing(queue_name, priority)?;
+        let mut client = self.db.conn().await?;
+        let tx = client.transaction().await?;
+        let task_id = task_id.map(ToString::to_string);
+        crate::publication::publish(
+            &tx,
+            invocation_id.as_str(),
+            task_id.as_deref(),
+            &rustvello_core::publication::PublicationRoute {
+                queue: queue_name.into(),
+                priority,
+            },
+            self.db.options.max_queue_rows,
+        )
+        .await?;
+        crate::publication::delay_delivery(&tx, invocation_id.as_str(), delay).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn route_invocation(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
         self.route_invocation_with_options(invocation_id, None, DEFAULT_QUEUE, 0.0)
             .await

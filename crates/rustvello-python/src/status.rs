@@ -80,6 +80,14 @@ impl PyInvocationStatus {
         }
     }
 
+    /// Terminal status of an invocation cancelled by a user request.
+    #[staticmethod]
+    fn cancelled() -> Self {
+        Self {
+            inner: InvocationStatus::Cancelled,
+        }
+    }
+
     #[staticmethod]
     fn concurrency_controlled() -> Self {
         Self {
@@ -265,6 +273,7 @@ mod tests {
             (PyInvocationStatus::success(), "SUCCESS"),
             (PyInvocationStatus::failed(), "FAILED"),
             (PyInvocationStatus::retry(), "RETRY"),
+            (PyInvocationStatus::cancelled(), "CANCELLED"),
             (PyInvocationStatus::rerouted(), "REROUTED"),
         ];
         for (status, expected) in cases {

@@ -61,6 +61,24 @@ pub(crate) async fn publish(
     Ok(())
 }
 
+/// Hide the invocation's queued entry until `delay` elapses on the database
+/// clock (durable retry backoff). Reuses the delivery lease column: a lease
+/// nobody holds that expires at the not-before time.
+pub(crate) async fn delay_delivery(
+    tx: &Transaction<'_>,
+    id: &str,
+    delay: std::time::Duration,
+) -> RustvelloResult<()> {
+    let delay_ms = delay.as_millis().min(i64::MAX as u128) as f64;
+    tx.execute(
+        "UPDATE broker_queue SET reserved_until = clock_timestamp() + $2 * interval '1 millisecond' \
+         WHERE invocation_id = $1",
+        &[&id, &delay_ms],
+    )
+    .await?;
+    Ok(())
+}
+
 async fn now(tx: &Transaction<'_>) -> RustvelloResult<DateTime<Utc>> {
     Ok(tx.query_one("SELECT clock_timestamp()", &[]).await?.get(0))
 }
@@ -129,6 +147,10 @@ async fn transition(
 impl RuntimePublication for PostgresPublication {
     fn domain(&self) -> PublicationDomain {
         Arc::clone(&self.db.domain)
+    }
+
+    fn supports_delayed_retry(&self) -> bool {
+        true
     }
 
     async fn begin_execution(
@@ -284,7 +306,7 @@ impl RuntimePublication for PostgresPublication {
     ) -> RustvelloResult<Option<InvocationStatusRecord>> {
         let operation = match &change {
             PublicationChange::Recover { .. } => "recover".into(),
-            PublicationChange::Retry(_) => "retry".into(),
+            PublicationChange::Retry(_) | PublicationChange::DelayedRetry { .. } => "retry".into(),
             PublicationChange::Reroute(_) | PublicationChange::ConcurrencyReroute(_) => {
                 "reroute".into()
             }
@@ -341,12 +363,16 @@ impl RuntimePublication for PostgresPublication {
                 boundary("reroute.concurrency_status", id.as_str()).await?;
                 Some(route)
             }
-            PublicationChange::Retry(route) | PublicationChange::Reroute(route) => Some(route),
+            PublicationChange::Retry(route)
+            | PublicationChange::Reroute(route)
+            | PublicationChange::DelayedRetry { route, .. } => Some(route),
             _ => None,
         };
         let status = match &change {
             PublicationChange::Status(s) => *s,
-            PublicationChange::Retry(_) => InvocationStatus::Retry,
+            PublicationChange::Retry(_) | PublicationChange::DelayedRetry { .. } => {
+                InvocationStatus::Retry
+            }
             PublicationChange::Success(_) => InvocationStatus::Success,
             PublicationChange::Failure(_) => InvocationStatus::Failed,
             _ => InvocationStatus::Rerouted,
@@ -372,7 +398,7 @@ impl RuntimePublication for PostgresPublication {
         let record = transition(&tx, id, runner, &old, status).await?;
         boundary(&format!("{operation}.status_history"), id.as_str()).await?;
         match &change {
-            PublicationChange::Retry(_) => {
+            PublicationChange::Retry(_) | PublicationChange::DelayedRetry { .. } => {
                 tx.execute("INSERT INTO retries (invocation_id,count) VALUES ($1,1) ON CONFLICT (invocation_id) DO UPDATE SET count=retries.count+1", &[&id.as_str()]).await?;
                 boundary("retry.counter", id.as_str()).await?;
             }
@@ -412,6 +438,9 @@ impl RuntimePublication for PostgresPublication {
                 self.db.options.max_queue_rows,
             )
             .await?;
+            if let PublicationChange::DelayedRetry { delay, .. } = &change {
+                delay_delivery(&tx, id.as_str(), *delay).await?;
+            }
             tx.execute(
                 "DELETE FROM cc_arg_pairs WHERE invocation_id=$1",
                 &[&id.as_str()],

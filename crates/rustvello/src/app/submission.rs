@@ -123,6 +123,23 @@ impl RustvelloApp {
         Ok(record.status)
     }
 
+    /// Cancel an invocation that has not finished yet.
+    ///
+    /// Queued or backing-off invocations never run; a running attempt is
+    /// abandoned by its worker within `cancellation_check_interval_seconds`
+    /// and its late result is discarded. Finished invocations are left
+    /// untouched ([`CancelOutcome::AlreadyFinal`]). See the "Retries,
+    /// timeouts and cancellation" guide for side-effect semantics.
+    pub async fn cancel(
+        &self,
+        invocation_id: &InvocationId,
+    ) -> RustvelloResult<crate::orchestration::CancelOutcome> {
+        let runner_id = rustvello_core::context::get_or_create_runner_context().runner_id;
+        self.orchestrator
+            .cancel_invocation(invocation_id, &runner_id)
+            .await
+    }
+
     /// Get the result of a completed invocation.
     pub async fn get_result(
         &self,

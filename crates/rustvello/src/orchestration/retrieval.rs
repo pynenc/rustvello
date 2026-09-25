@@ -55,9 +55,12 @@ impl Orchestrator {
                     Ok(r) => r,
                     Err(_) => continue,
                 };
-                if !status_rec
-                    .status
-                    .can_transition_to(InvocationStatus::Pending)
+                // A Retry invocation may be in durable backoff: only its
+                // broker entry may deliver it, once it is due.
+                if status_rec.status == InvocationStatus::Retry
+                    || !status_rec
+                        .status
+                        .can_transition_to(InvocationStatus::Pending)
                 {
                     continue;
                 }
