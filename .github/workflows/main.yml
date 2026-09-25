@@ -171,6 +171,13 @@ jobs:
       - name: Run the Rust examples against the crate
         run: python scripts/readme_examples.py run --language rust
 
+      - name: Run the Celery migration example (before on Celery, after on the built wheel)
+        working-directory: py-rustvello/examples/celery_migration
+        run: |
+          "$RUNNER_TEMP/readme/bin/pip" install celery==5.6.3
+          "$RUNNER_TEMP/readme/bin/python" celery_app.py
+          "$RUNNER_TEMP/readme/bin/python" rustvello_app.py
+
   links:
     name: Link check
     runs-on: ubuntu-latest
@@ -185,7 +192,7 @@ jobs:
           fail: true
           args: >-
             --config lychee.toml --no-progress
-            README.md '*.md' py-rustvello/README.md 'crates/*/README.md' 'docs/**/*.md'
+            README.md '*.md' py-rustvello/README.md 'crates/*/README.md' 'docs/**/*.md' benchmarks/README.md
 
   publish-dry-run:
     name: Verify crates compile (all features)

@@ -1,0 +1,233 @@
+{
+    "started": "2026-09-25T17:23:59+00:00",
+    "command": "benchmarks/run.py",
+    "settings": {
+        "rate": 20.0,
+        "latency_tasks": 200,
+        "burst_tasks": 300,
+        "recovery_trials": 3,
+        "recover_after": 5,
+        "poll_ms": 5.0,
+        "idle_sleep_ms": 50,
+        "keep_workdir": false,
+        "one": null
+    },
+    "machine": {
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
+        "machine": "arm64",
+        "cpus": 11,
+        "memory_gb": 19.3,
+        "python": "3.12.10",
+        "load_average_at_start": [25.1, 13.1, 11.4],
+        "cpu": "Apple M3 Pro",
+        "load_average_at_end": [4.6, 6.9, 8.8]
+    },
+    "versions": {
+        "rustvello": "0.7.0",
+        "celery": "5.6.3",
+        "kombu": "5.6.2",
+        "redis": "8.1.0",
+        "SQLAlchemy": "2.1.1",
+        "psycopg": "3.3.6",
+        "psutil": "7.2.2"
+    },
+    "results": [
+        {
+            "system": "rustvello-sqlite (idle_sleep_ms=50)",
+            "worker_ready_s": 0.27,
+            "latency": {
+                "tasks": 200,
+                "rate_per_s": 20.0,
+                "end_to_end_ms": {
+                    "p50": 38.9,
+                    "p95": 56.9,
+                    "p99": 58.3,
+                    "max": 59.2,
+                    "mean": 36.2
+                },
+                "submit_to_executed_ms": {
+                    "p50": 36.6,
+                    "p95": 52.1,
+                    "p99": 53.9,
+                    "max": 55.1,
+                    "mean": 32.6
+                }
+            },
+            "throughput": {
+                "tasks": 300,
+                "submit_per_s": 1792.4,
+                "completed_per_s": 1379.9,
+                "all_results_read_s": 0.22,
+                "worker_cpu_s": 0.16,
+                "client_cpu_s": 0.09,
+                "worker_peak_rss_mb": 32.6,
+                "storage_cpu_s": {},
+                "storage_memory": {}
+            },
+            "idle": {
+                "seconds": 10,
+                "worker_cpu_s": 0.26,
+                "storage_cpu_s": {}
+            },
+            "recovery": {
+                "trials": 3,
+                "kill_to_result_s": [3.12, 7.15, 7.16],
+                "median_s": 7.15,
+                "body_executions": [2, 2, 2]
+            }
+        },
+        {
+            "system": "rustvello-postgres (idle_sleep_ms=50)",
+            "worker_ready_s": 0.58,
+            "latency": {
+                "tasks": 200,
+                "rate_per_s": 20.0,
+                "end_to_end_ms": {
+                    "p50": 57.6,
+                    "p95": 75.3,
+                    "p99": 82.1,
+                    "max": 84.4,
+                    "mean": 57.3
+                },
+                "submit_to_executed_ms": {
+                    "p50": 46.3,
+                    "p95": 63.9,
+                    "p99": 68.7,
+                    "max": 70.7,
+                    "mean": 46.5
+                }
+            },
+            "throughput": {
+                "tasks": 300,
+                "submit_per_s": 81.5,
+                "completed_per_s": 80.9,
+                "all_results_read_s": 4.5,
+                "worker_cpu_s": 0.83,
+                "client_cpu_s": 0.79,
+                "worker_peak_rss_mb": 36.0,
+                "storage_cpu_s": {
+                    "rvbench-postgres": 2.36
+                },
+                "storage_memory": {
+                    "rvbench-postgres": "73.08MiB / 7.661GiB"
+                }
+            },
+            "idle": {
+                "seconds": 10,
+                "worker_cpu_s": 0.43,
+                "storage_cpu_s": {
+                    "rvbench-postgres": 1.43
+                }
+            },
+            "recovery": {
+                "trials": 3,
+                "kill_to_result_s": [3.24, 7.24, 7.31],
+                "median_s": 7.24,
+                "body_executions": [2, 2, 2]
+            }
+        },
+        {
+            "system": "celery-redis",
+            "worker_ready_s": 0.69,
+            "latency": {
+                "tasks": 200,
+                "rate_per_s": 20.0,
+                "end_to_end_ms": {
+                    "p50": 11.1,
+                    "p95": 24.8,
+                    "p99": 35.1,
+                    "max": 49.9,
+                    "mean": 12.5
+                },
+                "submit_to_executed_ms": {
+                    "p50": 7.4,
+                    "p95": 16.6,
+                    "p99": 22.1,
+                    "max": 27.9,
+                    "mean": 8.3
+                }
+            },
+            "throughput": {
+                "tasks": 300,
+                "submit_per_s": 515.2,
+                "completed_per_s": 279.6,
+                "all_results_read_s": 1.07,
+                "worker_cpu_s": 0.31,
+                "client_cpu_s": 0.21,
+                "worker_peak_rss_mb": 136.9,
+                "storage_cpu_s": {
+                    "rvbench-redis": 0.09
+                },
+                "storage_memory": {
+                    "rvbench-redis": "10.54MiB / 7.661GiB"
+                }
+            },
+            "idle": {
+                "seconds": 10,
+                "worker_cpu_s": 0.0,
+                "storage_cpu_s": {
+                    "rvbench-redis": 0.07
+                }
+            },
+            "recovery": {
+                "trials": 3,
+                "kill_to_result_s": [102.47, 102.55, 102.66],
+                "median_s": 102.55,
+                "body_executions": [2, 2, 2]
+            }
+        },
+        {
+            "system": "celery-rabbitmq",
+            "worker_ready_s": 1.37,
+            "latency": {
+                "tasks": 200,
+                "rate_per_s": 20.0,
+                "end_to_end_ms": {
+                    "p50": 31.0,
+                    "p95": 51.7,
+                    "p99": 89.0,
+                    "max": 204.0,
+                    "mean": 34.7
+                },
+                "submit_to_executed_ms": {
+                    "p50": 1.6,
+                    "p95": 3.0,
+                    "p99": 4.2,
+                    "max": 17.4,
+                    "mean": 1.9
+                }
+            },
+            "throughput": {
+                "tasks": 300,
+                "submit_per_s": 435.8,
+                "completed_per_s": 153.5,
+                "all_results_read_s": 4.75,
+                "worker_cpu_s": 2.73,
+                "client_cpu_s": 1.49,
+                "worker_peak_rss_mb": 323.1,
+                "storage_cpu_s": {
+                    "rvbench-rabbitmq": 1.3,
+                    "rvbench-postgres": 3.29
+                },
+                "storage_memory": {
+                    "rvbench-rabbitmq": "191.2MiB / 7.661GiB",
+                    "rvbench-postgres": "61.5MiB / 7.661GiB"
+                }
+            },
+            "idle": {
+                "seconds": 10,
+                "worker_cpu_s": 0.0,
+                "storage_cpu_s": {
+                    "rvbench-rabbitmq": 1.79,
+                    "rvbench-postgres": 0.16
+                }
+            },
+            "recovery": {
+                "trials": 3,
+                "kill_to_result_s": [2.77, 2.85, 3.22],
+                "median_s": 2.85,
+                "body_executions": [2, 2, 2]
+            }
+        }
+    ]
+}

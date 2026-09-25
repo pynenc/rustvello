@@ -33,6 +33,11 @@
 
 Rustvello is a distributed task orchestration engine — broker, orchestrator, state backend, trigger system, client data store, and runner — implemented in Rust for performance and safety. It works standalone from both Rust and Python (via PyO3 bindings), and also integrates with [pynenc](https://github.com/pynenc/pynenc) as an optional high-performance backend plugin.
 
+Deciding whether it fits? Read [When to use Rustvello](docs/when-to-use.md),
+[Idempotency and the at-least-once contract](docs/idempotency.md),
+[Migrating from Celery](docs/migrating-from-celery.md) and the
+[benchmark against Celery](docs/benchmarks.md) (reproducible, with its limits).
+
 ## Repository Structure
 
 This is a **multi-crate Rust workspace** with Python bindings:
@@ -63,6 +68,7 @@ For the full architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 - **Typed Task System**: proc-macro `#[rustvello::task]` generates serializable params, deterministic call IDs, and compile-time auto-discovery via `inventory`
 - **Async Tasks**: `async fn` (Rust) and `async def` (Python) task bodies awaited natively on the worker's runtime or event loop, with the same retries, results and context propagation as synchronous tasks
+- **Idempotency Keys**: at-least-once execution with a stable invocation id per retry and recovery; `submit_with_key` / `submit_call_with_key` turn repeated submissions of one key into one invocation on SQLite and PostgreSQL
 - **Retries, Timeouts and Cancellation**: exponential backoff with jitter stored as durable delayed retries, per-attempt execution deadlines, and cooperative cancellation of queued or running invocations
 - **Invocation State Machine**: 14-state FSM with guarded transitions, ownership tracking, and automatic recovery
 - **Declared Guarantees**: a per-backend guarantee matrix (atomic publication, exactly-once trigger firings, stale-owner recovery, ordering, durability, delayed retries) served at `/api/capabilities`, with every guaranteed cell backed by process-kill tests that gate releases
