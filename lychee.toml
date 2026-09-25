@@ -1,0 +1,22 @@
+# Link checker configuration (https://lychee.cli.rs), used by `make links`
+# (offline: repository-relative links only) and `make links-online` / CI.
+
+# Markdown sources; generated output and dependencies are never checked.
+exclude_path = ["(^|/)target/", "(^|/)\\.venv/", "docs/_build/", "(^|/)fuzz/", "node_modules/"]
+
+# Local, templated and example endpoints that exist only at runtime.
+exclude_loopback = true
+exclude = [
+  '^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)',
+  '^https?://[^/]*\.(local|example|invalid)(/|$)',
+  '^https?://example\.(com|org)',
+  '^(amqp|redis|mongodb|postgres|postgresql)://',
+  '\$\{?[A-Z_]+',
+  '<[^>]+>',
+]
+
+# Transient failures and rate limits must not fail CI; broken links must.
+max_retries = 3
+retry_wait_time = 2
+timeout = 20
+accept = ["200..=299", "403", "429"]

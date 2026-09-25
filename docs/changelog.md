@@ -4,6 +4,22 @@ For detailed information on each version, please visit the [GitHub Releases page
 
 ## Unreleased
 
+- The README quick starts run as written: the Python one starts a worker (and
+  shows `dev_mode_force_sync` for inline runs), the Rust one starts a runner and
+  waits with `wait_timeout()` instead of `result()`. They live in
+  `py-rustvello/examples/` and `crates/rustvello/examples/readme_quickstart.rs`;
+  CI checks the README copies and runs them against the built wheel and crate.
+- `make test` and PR CI run the SQLite fault-injection suites
+  (`make test-fault`). The external-backend suite, now including the PostgreSQL
+  network and process-kill gates, also runs on pull requests that touch a
+  backend and gates every PyPI and crates.io release.
+- One documentation host, Read the Docs, in the README, `pyproject.toml`,
+  `Cargo.toml` and `rustvello info`; package descriptions, keywords and
+  classifiers describe the task queue and workflow runtime. Broken external
+  links fixed, and a link checker (`make links`, lychee) runs in CI.
+- `docs/workflows.md` documents the standalone Python workflow API
+  (`@app.workflow`, `workflow_root()`).
+
 ## 0.5.2 - 2026-09-17
 
 - `RUSTVELLO__DEV_MODE_FORCE_SYNC` reaches an `App` built with an explicit

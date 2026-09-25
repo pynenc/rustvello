@@ -114,7 +114,7 @@ This action is irreversible.
 rustvello info
 ```
 
-Prints version, compiled feature flags, and runtime information.
+Prints the version and the documentation and repository links.
 
 ---
 

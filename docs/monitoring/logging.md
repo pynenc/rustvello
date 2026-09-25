@@ -215,5 +215,5 @@ jq 'select(.system == "python")' app.log
 
 :::{admonition} See also: Pynenc Docs
 :class: seealso
-To see how logging behaves in the higher-level Python system and runners, check out the [Pynenc Getting Started](https://pynenc.github.io/getting_started/index.html) and [Pynenc Runner Usage Guide](https://pynenc.github.io/usage_guide/runner.html).
+To see how logging behaves in the higher-level Python system and runners, check out the [Pynenc Getting Started](https://docs.pynenc.org/en/latest/getting_started/index.html) and [Pynenc runner reference](https://docs.pynenc.org/en/latest/reference/runners.html).
 :::

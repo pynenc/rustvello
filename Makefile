@@ -1,6 +1,8 @@
 # Interpreter used by the Python compatibility metadata helper.
 PYTHON_BIN ?= $(CURDIR)/.venv/bin/python
 MONITORING_LOAD_LOG ?= rustvello=debug,rustvello_monitoring=debug
+# Markdown checked by `make links` / `make links-online` (and the CI link job).
+LINK_SOURCES = README.md '*.md' py-rustvello/README.md 'crates/*/README.md' 'docs/**/*.md'
 
 .PHONY: install
 install: ## Install dependencies, build the Python extension, and set up pre-commit hooks
@@ -45,8 +47,26 @@ test-rust: ## Run Rust tests
 	@echo "🚀 Testing Rust: Running cargo test"
 	@cargo test --workspace --exclude py-rustvello
 
+.PHONY: test-fault
+test-fault: ## Run the SQLite fault-injection suites (process kills at every publication boundary)
+	@echo "🚀 Testing Rust: SQLite fault-injection suites"
+	@cargo test -p rustvello --features sqlite-fault-injection \
+		--test publication_crash_acceptance --test stale_owner_concurrency -- --test-threads=1
+
 .PHONY: test
-test: test-rust test-python ## Run all tests (Rust + Python)
+test: test-rust test-fault test-python ## Run all tests (Rust + fault suites + Python)
+
+.PHONY: readme-examples
+readme-examples: develop ## Run the README quick starts (Python against the installed build, Rust via cargo)
+	@uv run python scripts/readme_examples.py run
+
+.PHONY: links
+links: ## Check repository-relative links in Markdown (offline, needs lychee)
+	@lychee --config lychee.toml --no-progress --offline $(LINK_SOURCES)
+
+.PHONY: links-online
+links-online: ## Check all Markdown links, including external ones (needs lychee)
+	@lychee --config lychee.toml --no-progress $(LINK_SOURCES)
 
 .PHONY: test-docker
 test-docker: ## Run ignored Docker backend compliance suites

@@ -20,12 +20,12 @@ fn cli_info_shows_version() {
 }
 
 #[test]
-fn cli_info_shows_homepage() {
+fn cli_info_shows_documentation() {
     cli()
         .arg("info")
         .assert()
         .success()
-        .stdout(predicate::str::contains("pynenc.org"));
+        .stdout(predicate::str::contains("https://rustvello.readthedocs.io"));
 }
 
 #[test]

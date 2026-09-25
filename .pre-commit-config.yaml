@@ -54,6 +54,12 @@ repos:
 
   - repo: local
     hooks:
+      - id: readme-examples
+        name: README examples match their files
+        entry: python3 scripts/readme_examples.py check
+        language: system
+        files: '(README\.md|/examples/.*\.(py|rs))$'
+        pass_filenames: false
       - id: cargo-fmt
         name: cargo fmt
         entry: cargo fmt --all

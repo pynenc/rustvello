@@ -17,7 +17,7 @@ cargo install rustvello-cli
 | `rustvello investigate <id>` | Print provenance, history, and runner context for one invocation |
 | `rustvello list`             | List invocations (optionally filtered by status or task)         |
 | `rustvello purge`            | Purge all data (broker queue, invocations, results)              |
-| `rustvello info`             | Show system information (version, homepage)                      |
+| `rustvello info`             | Show system information (version, documentation, repository)     |
 
 ## Common Options
 

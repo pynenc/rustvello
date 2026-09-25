@@ -136,6 +136,57 @@ jobs:
       - name: Build Rust API docs (docs.rs compat)
         run: cargo doc --workspace --all-features --no-deps --exclude py-rustvello
 
+  readme-examples:
+    name: README examples (built wheel and crate)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: README blocks match the example files
+        run: python scripts/readme_examples.py check
+
+      - name: Build the wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --manifest-path py-rustvello/Cargo.toml --interpreter python3.12 --out dist
+
+      - name: Run the Python examples against the built wheel
+        run: |
+          python -m venv "$RUNNER_TEMP/readme"
+          "$RUNNER_TEMP/readme/bin/pip" install --no-index --find-links dist rustvello
+          "$RUNNER_TEMP/readme/bin/python" scripts/readme_examples.py run --language python
+
+      - name: Run the Rust examples against the crate
+        run: python scripts/readme_examples.py run --language rust
+
+  links:
+    name: Link check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Check Markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          lycheeVersion: v0.24.2
+          fail: true
+          args: >-
+            --config lychee.toml --no-progress
+            README.md '*.md' py-rustvello/README.md 'crates/*/README.md' 'docs/**/*.md'
+
   publish-dry-run:
     name: Verify crates compile (all features)
     runs-on: ubuntu-latest

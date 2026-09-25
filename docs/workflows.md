@@ -58,11 +58,38 @@ The `random_async`, `utc_now_async`, and `uuid_async` variants are available to
 embedded async runtimes that establish an invocation context. Macro-generated
 workflow functions use the synchronous methods.
 
-## Python boundary
+## Python
 
-Standalone Python currently exposes distributed tasks, not the Rust-native
-root handle. Pynenc integration translates Pynenc's explicit workflow marker at
-the adapter boundary. Rustvello does not reintroduce implicit roots or a Python
+Standalone Python has the same model. `@app.workflow` registers a workflow
+root (blocking, like the Rust macro), and `rustvello.workflow_root()` inside its
+body returns the `WorkflowRoot` handle with the same deterministic operations:
+
+```python
+from rustvello import App, workflow_root
+
+app = App(backend="sqlite", db_path="./tasks.db")
+
+
+@app.workflow
+def prepare_order(order_id: str) -> str:
+    root = workflow_root()
+    return f"{order_id}:{root.uuid()}:{root.utc_now()}"
+```
+
+`random()`, `utc_now()` and `uuid()` are recorded by workflow ID, operation type
+and sequence exactly as in Rust, and the identity rules above apply unchanged:
+`workflow_root()` raises `RustvelloError` outside the invocation that defines
+the workflow, including in an ordinary task the workflow submitted. Tasks
+submitted from the workflow body join its workflow, and
+`get_current_workflow_info()` returns the workflow ID, workflow type and parent
+ID of the running invocation.
+
+Workflows need a runner (`app.run()` or `python -m rustvello.worker`). With
+`dev_mode_force_sync=True` the body runs inline without an invocation context,
+so `workflow_root()` raises `RustvelloError` ("workflow context is unavailable").
+
+Pynenc integration translates Pynenc's explicit workflow marker at the adapter
+boundary. Rustvello does not reintroduce implicit roots or a Python
 module-discovery layer to emulate that API.
 
 Monitoring labels a defining invocation as **Workflow root**. Ordinary members

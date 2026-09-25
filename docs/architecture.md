@@ -10,7 +10,7 @@ the invocation state machine, and the cross-language design.
 
 Rustvello also integrates with [Pynenc](https://docs.pynenc.org) as an optional high-performance
 backend plugin. While this page documents Rustvello's internal Rust design, Python users who access
-Rustvello through Pynenc can refer to the [Pynenc Architecture Docs](https://pynenc.github.io/architecture/index.html)
+Rustvello through Pynenc can refer to the [Pynenc overview](https://docs.pynenc.org/en/latest/overview.html)
 for the Python perspective.
 
 The Pynenc-specific adapter is an external consumer of Rustvello's Python and
@@ -128,12 +128,12 @@ Each layer has a single responsibility:
 └─────────────────────────────────────────────┘
 ```
 
-| Layer           | Package                                                        | Knows about pynenc?         | Contains logic?       |
-| --------------- | -------------------------------------------------------------- | --------------------------- | --------------------- |
-| Rust core       | `rustvello` (crates)                                           | No                          | All logic lives here  |
-| PyO3 bindings   | `rustvello` (wheel)                                            | No                          | Type conversion only  |
-| Python adapters | [`pynenc-rustvello`](https://pynenc-rustvello.readthedocs.io/) | Yes — satisfies pynenc ABCs | No — stateless bridge |
-| Framework       | `pynenc`                                                       | No rustvello knowledge      | Plugin discovery only |
+| Layer           | Package                                                          | Knows about pynenc?         | Contains logic?       |
+| --------------- | ---------------------------------------------------------------- | --------------------------- | --------------------- |
+| Rust core       | `rustvello` (crates)                                             | No                          | All logic lives here  |
+| PyO3 bindings   | `rustvello` (wheel)                                              | No                          | Type conversion only  |
+| Python adapters | [`pynenc-rustvello`](https://github.com/pynenc/pynenc_rustvello) | Yes — satisfies pynenc ABCs | No — stateless bridge |
+| Framework       | `pynenc`                                                         | No rustvello knowledge      | Plugin discovery only |
 
 ---
 
@@ -582,7 +582,7 @@ interfaces; no Pynenc-specific bridge classes live under `py-rustvello`.
 
 :::{admonition} See also: Pynenc Docs
 :class: seealso
-To see how these composites are used by the native Python orchestrator, see [Pynenc Architecture: Composites](https://pynenc.github.io/architecture/composites.html).
+To see how these composites are used by the native Python orchestrator, see the [Pynenc plugin reference](https://docs.pynenc.org/en/latest/reference/plugins.html).
 :::
 
 Composite operations bundle multiple trait calls (orchestrator, state backend,
@@ -638,7 +638,7 @@ Additional composites for less frequent but still critical operations:
 
 :::{admonition} See also: Pynenc Docs
 :class: seealso
-For details from the Python perspective, see [Pynenc Architecture: Dual Mode](https://pynenc.github.io/architecture/dual-mode.html).
+For details from the Python perspective, see the [Pynenc plugin reference](https://docs.pynenc.org/en/latest/reference/plugins.html).
 :::
 
 Rustvello supports two orchestration modes when used from Python (pynenc):
@@ -664,7 +664,7 @@ Mode selection is configuration-driven:
   (`orchestrator_cls`, `state_backend_cls`, `broker_cls`, `trigger_cls`,
   `client_data_store_cls`).
 
-See the [pynenc architecture docs](https://docs.pynenc.org/architecture/) for details.
+See the [Pynenc plugin reference](https://docs.pynenc.org/en/latest/reference/plugins.html) for details.
 
 ### Class Hierarchy (Python side)
 
@@ -783,7 +783,7 @@ structured fields such as `invocation_id` and `allowed_statuses`.
 
 :::{admonition} See also: Pynenc Docs
 :class: seealso
-To learn how runners are configured and deployed in Python, see [Pynenc Runner Usage Guide](https://pynenc.github.io/usage_guide/runner.html).
+To learn how runners are configured and deployed in Python, see [Pynenc runner reference](https://docs.pynenc.org/en/latest/reference/runners.html).
 :::
 
 In native mode, the Rust engine drives the runner loop:

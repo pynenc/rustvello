@@ -4,13 +4,31 @@
 name = "rustvello"
 # version = "0.0.1"
 dynamic = ["version"]
-description = "Python bindings for rustvello, the Rust core of pynenc"
+description = "Distributed task queue and workflow runtime with a Rust core: retries, priorities, triggers and pluggable backends for Python and Rust"
 authors = [{ name = "Luis Diaz" }]
 readme = "README.md"
-keywords = ['python']
+license = { text = "MIT" }
+keywords = [
+    "task queue",
+    "distributed tasks",
+    "background jobs",
+    "job queue",
+    "workflow",
+    "workflows",
+    "worker",
+    "scheduler",
+    "cron",
+    "rust",
+    "celery alternative",
+]
 requires-python = ">=3.9,<4.0"
 classifiers = [
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
@@ -18,16 +36,21 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+    "Typing :: Typed",
 ]
 
 [project.optional-dependencies]
 telemetry = ["opentelemetry-api==1.41.1"]
 
 [project.urls]
-Homepage = "https://pynenc.github.io/rustvello/"
+Homepage = "https://rustvello.readthedocs.io"
+Documentation = "https://rustvello.readthedocs.io"
 Repository = "https://github.com/pynenc/rustvello"
-Documentation = "https://pynenc.github.io/rustvello/"
+Changelog = "https://rustvello.readthedocs.io/en/latest/changelog.html"
+Issues = "https://github.com/pynenc/rustvello/issues"
 
 # Entry point moved to pynenc_repo (NB_00)
 

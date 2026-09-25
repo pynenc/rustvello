@@ -1,18 +1,52 @@
 name: Backend and Stress Tests
 
+# Fault-injection and external-backend suites. They run weekly, on pull requests
+# that touch a backend or the contracts backends implement, and as a gate in
+# release-python.yml / release-rust.yml (workflow_call) before anything is published.
 on:
   schedule:
     - cron: "30 3 * * 1"
   workflow_dispatch:
+  workflow_call:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "crates/rustvello-core/**"
+      - "crates/rustvello-proto/**"
+      - "crates/rustvello-test-suite/**"
+      - "crates/rustvello-sqlite/**"
+      - "crates/rustvello-postgres/**"
+      - "crates/rustvello-redis/**"
+      - "crates/rustvello-mongo/**"
+      - "crates/rustvello-mongo3/**"
+      - "crates/rustvello-rabbitmq/**"
+      - "crates/rustvello/src/orchestration/**"
+      - "crates/rustvello/tests/publication_crash_acceptance.rs"
+      - "crates/rustvello/tests/stale_owner_concurrency.rs"
+      - "Cargo.lock"
+      - ".github/workflows/backend-and-stress.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  # a distinct prefix: when called from a release workflow, github.workflow is the
+  # caller's name, and sharing the caller's group would block the release on itself
+  group: backend-suite-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  fault-injection:
+    name: SQLite fault-injection suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Process kills at every publication boundary
+        run: make test-fault
+
   docker-backends:
     name: Docker suite (${{ matrix.package }})
     runs-on: ubuntu-latest
@@ -26,15 +60,34 @@ jobs:
           - rustvello-mongo
           - rustvello-mongo3
           - rustvello-rabbitmq
+    services:
+      # the PostgreSQL network and process-kill gates connect to an isolated
+      # server; an empty image skips the service for the other packages
+      postgres:
+        image: ${{ matrix.package == 'rustvello-postgres' && 'postgres:17' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run ignored backend compliance tests
+        if: matrix.package != 'rustvello-postgres'
         run: cargo test -p "${{ matrix.package }}" -- --ignored --test-threads=1
+      - name: Run PostgreSQL compliance, network and fault-injection gates
+        if: matrix.package == 'rustvello-postgres'
+        env:
+          RUSTVELLO_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=postgres
+        run: cargo test -p rustvello-postgres --features fault-injection -- --ignored --test-threads=1
 
   soak:
     name: Persistent and runner soak tests
+    # long-running; weekly and before releases, not on every backend PR
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

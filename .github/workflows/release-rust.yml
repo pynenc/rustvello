@@ -72,10 +72,17 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --exclude py-rustvello
 
+  # fault-injection and external-backend suites gate every publication
+  backend-suite:
+    name: Release gate
+    needs: check-version
+    if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/backend-and-stress.yml
+
   rust-release:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    needs: [check-version, verify-docs, verify-tests]
+    needs: [check-version, verify-docs, verify-tests, backend-suite]
     if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4

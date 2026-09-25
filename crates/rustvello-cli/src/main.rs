@@ -505,8 +505,8 @@ async fn main() {
 
         Commands::Info => {
             println!("Rustvello v{}", env!("CARGO_PKG_VERSION"));
-            println!("Distributed task system for Rust");
-            println!("Homepage: https://pynenc.org");
+            println!("Distributed task queue and workflow runtime for Rust and Python");
+            println!("Documentation: https://rustvello.readthedocs.io");
             println!("Repository: https://github.com/pynenc/rustvello");
         }
 

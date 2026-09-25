@@ -78,7 +78,7 @@ The `#[rustvello::task]` attribute macro transforms a plain `fn` into a distribu
 task. For a function `fn add(x: i32, y: i32) -> i32`, it generates:
 
 - **`AddParams`** — a `serde::Serialize + Deserialize` struct with fields `x: i32, y: i32`
-- **`AddTask`** — a unit struct implementing the `Task` trait (carries `TaskId`, `TaskConfig`, serialization logic)
+- **`AddTask`** — a struct implementing the `Task` trait (build it with `AddTask::new()`) (carries `TaskId`, `TaskConfig`, serialization logic)
 - **A static `inventory::submit!`** — registers `AddTask` at link time so `auto_discover_tasks()` can find it
 
 The original `add` function is preserved unchanged for direct calls.

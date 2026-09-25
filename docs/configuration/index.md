@@ -9,7 +9,7 @@ Rustvello supports four configuration sources, applied from highest to lowest pr
 
 :::{admonition} See also: Pynenc Docs
 :class: seealso
-If you are configuring Rustvello as the backend for Pynenc, see the top-level [Pynenc Configuration Docs](https://pynenc.github.io/configuration/index.html).
+If you are configuring Rustvello as the backend for Pynenc, see the top-level [Pynenc Configuration Docs](https://docs.pynenc.org/en/latest/configuration/index.html).
 :::
 
 ---

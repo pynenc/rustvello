@@ -1,7 +1,7 @@
 # Getting Started
 
 :::{note}
-**Using pynenc?** Install [`pynenc-rustvello`](https://pynenc-rustvello.readthedocs.io/)
+**Using pynenc?** Install [`pynenc-rustvello`](https://github.com/pynenc/pynenc_rustvello)
 to use Rust-powered backends inside your pynenc app. The plugin handles everything.
 :::
 
@@ -56,7 +56,7 @@ fn divide(x: f64, y: f64) -> RustvelloResult<f64> {
 The macro generates:
 
 - `AddParams { x: i32, y: i32 }` — serializable parameter struct
-- `AddTask` — unit struct implementing `Task`
+- `AddTask` — struct implementing `Task` (`AddTask::new()`)
 - `DivideParams` / `DivideTask` — same pattern for `divide`
 
 ---
@@ -108,15 +108,22 @@ async fn main() -> RustvelloResult<()> {
         .build().await?;
 
     // Submit a task — returns an InvocationHandle
-    let handle = app.submit_call(&AddTask, AddParams { x: 3, y: 4 }).await?;
+    let handle = app.submit_call(&AddTask::new(), AddParams { x: 3, y: 4 }).await?;
 
-    // Poll until the result is available
-    let result = handle.result().await?;
+    // Poll until a worker (Step 4) has run it
+    let result = handle.wait(std::time::Duration::from_millis(50)).await?;
     println!("3 + 4 = {result}");  // 7
 
     Ok(())
 }
 ```
+
+Submitting only queues the invocation: a worker sharing the same backend must
+run it (Step 4), otherwise `wait()` polls forever; use `wait_timeout()` to bound
+it. `result()` reads a finished invocation and returns an error while it is
+still pending. With `.dev_mode(true)`, `app.call(...)` runs the task inline and
+needs no worker. The [README quick start](https://github.com/pynenc/rustvello#quick-start-rust)
+shows a producer and a worker in one runnable program.
 
 ---
 
@@ -155,7 +162,7 @@ Switch from in-memory to SQLite by enabling the feature flag and using the build
 
 ```toml
 # Cargo.toml
-rustvello = { version = "0.5.0", features = ["sqlite"] }
+rustvello = { version = "0.5", features = ["sqlite"] }
 ```
 
 ```bash
@@ -166,7 +173,7 @@ RUSTVELLO__DB_PATH=./my_app.db rustvello run --app-id my-app
 For Redis in production:
 
 ```toml
-rustvello = { version = "0.5.0", features = ["redis"] }
+rustvello = { version = "0.5", features = ["redis"] }
 ```
 
 ```bash
@@ -190,10 +197,16 @@ app = App(backend="sqlite", db_path="./tasks.db")
 def add(x: int, y: int) -> int:
     return x + y
 
-# Submit a task and get the result
+# Submit a task and wait for a worker to run it
 inv = add(1, 2)
 result = inv.result(timeout=30)  # 3
 ```
+
+`result()` waits for a worker: start one with `app.run()` (see _Running a
+persistent worker_ below) or
+`python -m rustvello.worker module:app`, otherwise it raises `TimeoutError`. For
+tests and local tries, `App(dev_mode_force_sync=True)` (or
+`RUSTVELLO__DEV_MODE_FORCE_SYNC=true`) runs every task inline in the caller.
 
 Standalone Python tasks must be synchronous callables declared with `def`.
 Use `@app.workflow` for explicit workflow roots; call `rustvello.workflow_root()`
@@ -332,7 +345,7 @@ result = add(1, 2).result  # 3
 ```
 
 See the [pynenc documentation](https://docs.pynenc.org) and
-[pynenc-rustvello documentation](https://pynenc-rustvello.readthedocs.io/) for the full guides.
+[pynenc-rustvello documentation](https://github.com/pynenc/pynenc_rustvello) for the full guides.
 
 ---
 

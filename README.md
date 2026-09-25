@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://pynenc.org/assets/img/pynenc_logo.png" alt="Rustvello" width="300">
+  <img src="https://raw.githubusercontent.com/pynenc/rustvello/main/docs/_static/logo.png" alt="Rustvello" width="300">
 </p>
 <h1 align="center">Rustvello</h1>
 <p align="center">
@@ -20,9 +20,6 @@
     </a>
     <a href="https://github.com/pynenc/rustvello/blob/main/LICENSE">
         <img src="https://img.shields.io/github/license/pynenc/rustvello" alt="License">
-    </a>
-    <a href="https://codspeed.io/pynenc/rustvello?utm_source=badge">
-        <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed Badge">
     </a>
 </p>
 
@@ -101,7 +98,8 @@ Feature flags:
 
 ```toml
 [dependencies]
-rustvello = { version = "0.5.2", features = ["full"] }
+rustvello = { version = "0.5.2", features = ["sqlite"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ### Python
@@ -118,57 +116,127 @@ cargo install rustvello-cli
 
 ## Quick Start (Rust)
 
+Tasks are submitted by producers and executed by workers that share a backend.
+This example runs both in one process on a local SQLite file:
+
+<!-- readme-example: crates/rustvello/examples/readme_quickstart.rs -->
+
 ```rust
+use std::time::Duration;
+
 use rustvello::prelude::*;
 
 // Define a task with the proc macro
-#[rustvello::task(max_retries = 2, concurrency = "task", queue = "orders", priority = 25.5)]
+#[rustvello::task(max_retries = 2, concurrency = "task", priority = 25.5)]
 fn process_order(order_id: String) -> String {
-    format!("processed {}", order_id)
+    format!("processed {order_id}")
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Build an app with in-memory backends and auto-discovered tasks
-    let mut app = Rustvello::builder()
-        .app_id("my-app")
-        .memory()
-        .auto_discover_tasks()
-        .build()?;
+    // Producers and workers share the same backend; here a local SQLite file
+    let db = std::env::temp_dir().join(format!("rustvello-quickstart-{}.db", std::process::id()));
+    let db = db.to_str().ok_or("temp path is not UTF-8")?;
+    let builder = || {
+        Rustvello::builder()
+            .app_id("my-app")
+            .sqlite(db, "my-app")
+            .auto_discover_tasks()
+    };
 
-    // Submit a task — unified call routing (sync/distributed)
-    let invocation = app.call(
-        &ProcessOrderTask,
-        ProcessOrderParams { order_id: "123".into() },
-    ).await?;
+    // Start a worker. In production it is its own process (a binary of yours
+    // calling `into_runner()`); here it runs in the background.
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let worker = tokio::spawn(
+        builder()
+            .build()
+            .await?
+            .into_runner()
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            }),
+    );
 
-    // Get result (async for distributed, immediate for dev mode)
-    let result: String = invocation.result().await?;
+    // Submit the task, then wait for the worker to finish it
+    let app = builder().build().await?;
+    let invocation = app
+        .call(
+            &ProcessOrderTask::new(),
+            ProcessOrderParams {
+                order_id: "123".into(),
+            },
+        )
+        .await?;
+    let result: String = invocation
+        .wait_timeout(Duration::from_secs(30), Duration::from_millis(50))
+        .await?;
     println!("Result: {result}");
+    assert_eq!(result, "processed 123");
 
+    let _ = stop.send(());
+    worker.await??;
     Ok(())
 }
 ```
 
+`call()` returns at once; `wait()`/`wait_timeout()` poll until a worker finishes
+the invocation. `result()` only reads a finished invocation and errors while it
+is still pending. For local tries without a worker, `.dev_mode(true)` on the
+builder makes `call()` run the task inline.
+
 ## Quick Start (Python)
+
+<!-- readme-example: py-rustvello/examples/quickstart.py -->
 
 ```python
 from rustvello import App, workflow_root
 
 app = App(backend="sqlite", db_path="./tasks.db")
 
+
 @app.task(max_retries=2)
 def add(x: int, y: int) -> int:
     return x + y
 
+
 @app.workflow
 def process_order(order_id: str) -> dict[str, str]:
-    root = workflow_root()
+    root = workflow_root()  # deterministic helpers, recorded for replay
     return {"order_id": order_id, "run_id": root.uuid()}
 
-# Submit and wait for result
-inv = add(1, 2)
-result = inv.result(timeout=30)  # 3
+
+if __name__ == "__main__":
+    # A worker executes what you submit. In production it is its own process:
+    #   python -m rustvello.worker my_module:app
+    # Here it runs in a background thread of this script.
+    app.run(block=False)
+    try:
+        print(add(1, 2).result(timeout=30))  # 3
+        print(process_order("order-1").result(timeout=30))
+    finally:
+        app.stop()
+```
+
+`result(timeout=...)` blocks until a worker finishes the task and raises
+`TimeoutError` if none does, so something must run `app.run()` or
+`python -m rustvello.worker`. For tests and local tries, run tasks inline instead:
+
+<!-- readme-example: py-rustvello/examples/quickstart_dev_mode.py -->
+
+```python
+from rustvello import App
+
+# Tasks run inline in the caller: no worker needed. Handy for tests and
+# local tries; RUSTVELLO__DEV_MODE_FORCE_SYNC=true does the same without code.
+app = App(dev_mode_force_sync=True)
+
+
+@app.task
+def add(x: int, y: int) -> int:
+    return x + y
+
+
+print(add(1, 2).result())  # 3
 ```
 
 ## Pynenc Integration
@@ -218,7 +286,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting bugs, submitt
 ## Contact or Support
 
 - **[GitHub Issues](https://github.com/pynenc/rustvello/issues)**: Bug reports and feature requests
-- **[GitHub Discussions](https://github.com/pynenc/rustvello/discussions)**: Questions and ideas
 
 ## License
 

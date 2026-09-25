@@ -1,6 +1,6 @@
 [package]
 name = "rustvello"
-description = "Distributed task library for Rust, inspired by pynenc"
+description = "Distributed task queue and workflow runtime for Rust and Python: typed tasks, retries, priorities, triggers and pluggable backends"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,8 @@ repository.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [features]
 default = ["mem"]
@@ -69,6 +71,11 @@ harness = false
 [[example]]
 name = "network_worker"
 required-features = ["postgres"]
+
+# Quick Start from the README; scripts/readme_examples.py keeps them identical
+[[example]]
+name = "readme_quickstart"
+required-features = ["sqlite"]
 
 [[bench]]
 name = "orchestrator_bench"
