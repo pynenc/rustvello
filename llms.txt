@@ -1,0 +1,39 @@
+# Rustvello
+
+> Rustvello is a distributed task queue and orchestration engine with a Rust core and Python bindings (`pip install rustvello`, `cargo add rustvello`). Producers submit invocations of registered tasks (`@app.task` in Python, `#[rustvello::task]` in Rust, sync or async) to a shared backend; workers (`python -m rustvello.worker module:app`, `App.run()`, `into_runner()`) execute them. It has retries with durable exponential backoff, per-attempt timeouts, cancellation, cron triggers with exactly-once firings, workflows, and a monitoring API. Backends: SQLite and PostgreSQL (every guarantee, process-kill tested), Redis, MongoDB, RabbitMQ and in-memory (see the guarantee matrix). Status: beta.
+
+Rules for agents:
+
+- Use the skill in `skills/rustvello/` (SKILL.md plus runnable examples); it matches the installed version only if `metadata.rustvello-version` equals the wheel's `major.minor`.
+- Every process of one application must use the same `app_id` and backend (for SQLite, the same file). Nothing runs unless a worker runs; `result(timeout=...)` raising `TimeoutError ... still PENDING` means no worker picked the invocation up.
+- Execution is at least once: give external side effects an idempotency key (`app.current_invocation().invocation_id` is stable across retries).
+- To debug an invocation, call `GET /api/capabilities` first, then `GET /invocations/<id>/investigation` (status, stored error, history, runners). On SQLite without a server: `rustvello investigate <id> --app-id <app> --db-path <db> --format json` or `python skills/rustvello/scripts/investigate.py <id> --db-path <db> --app-id <app>`.
+- Never run `app.purge()` / `rustvello purge`, cancel production invocations, or delete a database file without the owner's approval; never print connection strings with passwords.
+- Durable retries with backoff need SQLite or PostgreSQL; Redis, MongoDB and RabbitMQ retry at once.
+
+## Start here
+
+- [Using Rustvello from an agent](https://rustvello.readthedocs.io/en/latest/agents.html): the skill, commands safe to run, what never to do, errors, the investigation report
+- [Getting started](https://rustvello.readthedocs.io/en/latest/getting_started.html): Rust and Python apps, workers, backends, triggers
+- [Guarantee matrix](https://rustvello.readthedocs.io/en/latest/guarantees.html): what each backend promises when a process dies, with the tests that prove it
+- [Retries, timeouts and cancellation](https://rustvello.readthedocs.io/en/latest/retries-timeouts-cancellation.html): backoff options, durable delayed retries, deadlines per task body kind, cancellation, side effects and idempotency
+
+## Docs
+
+- [Installation](https://rustvello.readthedocs.io/en/latest/installation.html): wheels, crate features, CLI
+- [Async tasks](https://rustvello.readthedocs.io/en/latest/async_tasks.html): `async fn` / `async def` tasks, event loops, cancellation at `await`
+- [Workflows](https://rustvello.readthedocs.io/en/latest/workflows.html): workflow roots, child identity, deterministic replay helpers
+- [Configuration](https://rustvello.readthedocs.io/en/latest/configuration/index.html): `RUSTVELLO__*` environment variables, TOML, per-task settings
+- [Monitoring](https://rustvello.readthedocs.io/en/latest/monitoring/index.html): dashboard, trigger and event evidence, logging
+- [Monitoring investigation API](https://rustvello.readthedocs.io/en/latest/contributing/agent-monitoring.html): `/api/capabilities`, investigation, timeline and list endpoints, the `rustvello investigate` CLI
+- [CLI](https://rustvello.readthedocs.io/en/latest/cli/index.html): `run`, `status`, `cancel`, `list`, `purge` (plus `investigate`, see the investigation API)
+- [Architecture](https://rustvello.readthedocs.io/en/latest/architecture.html): ports, backends, invocation state machine
+- [FAQ](https://rustvello.readthedocs.io/en/latest/faq.html)
+
+## Optional
+
+- [API reference](https://rustvello.readthedocs.io/en/latest/api/index.html)
+- [Changelog](https://rustvello.readthedocs.io/en/latest/changelog.html)
+- [Agent skill source](https://github.com/pynenc/rustvello/tree/main/skills/rustvello)
+- [Cross-model evaluation](https://github.com/pynenc/rustvello/tree/main/evals): tasks, scoring and how to run it
+- [Contributing](https://github.com/pynenc/rustvello/blob/main/AGENTS.md): investigating this repository's own monitoring code

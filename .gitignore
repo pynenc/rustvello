@@ -152,3 +152,6 @@ pynenc_repo/
 pynenc_rustvello_repo/
 pynenc_redis/
 pynenc_mongo/
+
+# Eval runs (only evals/baselines/ is committed)
+evals/results/

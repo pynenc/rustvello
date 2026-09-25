@@ -75,6 +75,8 @@ html_favicon = "_static/favicon.ico"
 
 language = "en"
 html_static_path = ["_static"]
+# Served at the documentation root: https://rustvello.readthedocs.io/en/latest/llms.txt
+html_extra_path = ["../llms.txt"]
 html_css_files = ["custom.css"]
 html_js_files = ["logo-animations.js", "lightbox.js"]
 html_theme_options: dict[str, Any] = {

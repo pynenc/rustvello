@@ -4,6 +4,40 @@ For detailed information on each version, please visit the [GitHub Releases page
 
 ## Unreleased
 
+- Agent skill `skills/rustvello/` (`SKILL.md` format, no MCP needed): set up an
+  app on SQLite, sync and async tasks with retries, backoff, timeouts and
+  cancellation, workers, submit and wait, cron triggers, choosing a backend
+  from the guarantee matrix, and investigating a failure through
+  `/api/capabilities` and the investigation report, with helper scripts
+  (`guarantees.py`, `investigate.py`). CI copies the skill alone and runs its
+  examples against the built wheel (`make skill-examples`), and checks its
+  version pin and the API used by its snippets. New pages: `llms.txt` (served
+  at the docs root) and "Using Rustvello from an agent" (`docs/agents.md`).
+- Cross-model eval harness in `evals/`: install, implement and recover tasks
+  plus discovery prompts that do not name Rustvello, scored for task success,
+  wrong or nonexistent API use, interventions and recommendation rate. Calls
+  Anthropic, OpenAI(-compatible) or Gemini models when their key is in the
+  environment and skips them otherwise; mock models validate the harness in CI
+  (`make evals-check`).
+- Fix: Python `app.trigger(...).register()` stored nothing, so cron and
+  interval triggers never fired. It now registers the cron condition and the
+  trigger in the app's trigger store (idempotent), rejects an invalid cron
+  expression or a foreign task with `ValueError`, and accepts a task argument
+  named `kind`. `on_cron` takes `min_interval_seconds` (default 50 for 5-field
+  expressions, as in Rust, 0 for 6-field ones).
+- Fix: cron conditions fired only when an evaluation (every few seconds) landed
+  on the slot's exact second, so a minute cron such as `*/5 * * * *` rarely
+  fired. Evaluation now fires the latest due slot once, up to two minutes late
+  (`cron_slot_due`); older missed slots are skipped, not replayed.
+- The investigation report (`/invocations/{id}/investigation`) adds the
+  current `status` and the stored `error` of a failed invocation.
+- Python `App.start_monitor` binds before returning: `port=0` picks a free port
+  that `address` reports, requests made right after the call are served, and a
+  bind error raises `OSError`.
+- The in-memory trigger store indexes a trigger registered twice only once, and
+  `RuntimeError("Task failed: …")` no longer repeats the error type when the
+  stored message already starts with it.
+
 ## 0.7.0 - 2026-09-25
 
 - Native async tasks. `#[rustvello::task]` and `#[rustvello::workflow]` accept

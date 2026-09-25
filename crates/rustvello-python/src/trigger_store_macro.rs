@@ -509,6 +509,11 @@ macro_rules! impl_py_trigger_store {
             ) -> pyo3::PyResult<String> {
                 use rustvello_core::trigger::TriggerStore;
                 use rustvello_proto::trigger::{CronCondition, TriggerCondition};
+                // Reject an unparsable expression here instead of letting every
+                // runner log and skip it on each evaluation.
+                let _ = rustvello::trigger_builder::TriggerBuilder::new()
+                    .on_cron_with_interval(cron_expression, min_interval_seconds)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
                 let condition = TriggerCondition::Cron(CronCondition {
                     cron_expression: cron_expression.to_string(),
                     min_interval_seconds,

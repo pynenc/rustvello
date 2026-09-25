@@ -1,0 +1,271 @@
+# Fixed eval tasks. Change a task only together with a new baseline: scores are
+# comparable only between runs of the same tasks (see README "Baselines").
+#
+# kind      install | implement | recover | discovery
+# execute   none | script (run the answer's code) | module (save it as
+#           module_name, then run `check` next to it); needs --execute
+# rubric    required / forbidden / optional regexes on the whole answer
+#           (case-insensitive); optional checks are reported, never scored
+# prompt    {version} is the installed rustvello version, {fixture:NAME} the
+#           content of evals/fixtures/NAME
+
+# ---------------------------------------------------------------- install
+
+[[tasks]]
+id = "install-first-task"
+kind = "install"
+execute = "script"
+expect_stdout = '\b5\b'
+prompt = """
+Set up Rustvello (a task queue for Python) in a new project. Give me the shell
+commands to install it in a fresh virtual environment, then one self-contained
+Python script that keeps its tasks in a local SQLite file, runs a worker, submits
+`add(2, 3)`, prints the result and exits on its own. No external services.
+"""
+
+[[tasks.rubric.required]]
+label = "installs the rustvello package"
+pattern = '(pip|uv pip|uv) (install|add) [^\n]*\brustvello\b'
+
+[[tasks.rubric.forbidden]]
+label = "installs an unrelated package"
+pattern = '(pip|uv pip|uv) (install|add) [^\n]*\b(celery|pynenc-rustvello|rustvello-py)\b'
+
+# ---------------------------------------------------------------- implement
+
+[[tasks]]
+id = "implement-retried-async-and-cron"
+kind = "implement"
+execute = "module"
+module_name = "app.py"
+prompt = """
+This is `app.py` of a service that uses Rustvello {version} from Python:
+
+```python
+from rustvello import App
+
+app = App(app_id="shop", backend="sqlite", db_path="shop.db")
+
+
+@app.task
+def cleanup() -> int:
+    return 0
+```
+
+Add:
+
+1. an async task `fetch_status(url: str) -> int` (simulate the request with
+   `asyncio.sleep`) that is retried up to 3 times on `ConnectionError` only,
+   waiting 1 second before the first retry and doubling the wait each time, with
+   a 10-second deadline per attempt;
+2. a cron trigger that runs `cleanup()` every 5 minutes.
+
+Importing the module must not start a worker. Reply with the complete new
+app.py in one python code block.
+"""
+check = '''
+import inspect, json, re
+import app as module
+
+app = module.app
+tasks = {key.rsplit(".", 1)[-1]: handle for key, handle in app.tasks.items()}
+assert "fetch_status" in tasks, f"no fetch_status task; tasks: {sorted(tasks)}"
+handle = tasks["fetch_status"]
+assert inspect.iscoroutinefunction(handle.__wrapped__), "fetch_status is not async def"
+config = app._task_configs[f"python::{handle._module}.{handle._name}"]
+assert config["max_retries"] == 3, f"max_retries={config['max_retries']}"
+assert config["retry_for_errors"] == ["ConnectionError"], f"retry_for={config['retry_for_errors']}"
+assert config["retry_delay"] == 1, f"retry_delay={config['retry_delay']}"
+assert config["retry_backoff"] == 2, f"retry_backoff={config['retry_backoff']}"
+assert config["timeout"] == 10, f"timeout={config['timeout']}"
+
+store = app._backend_objects["trigger"]
+crons = {}
+for condition_id, raw in store.get_all_conditions():
+    condition = json.loads(raw)
+    if "Cron" in condition:
+        crons[condition_id] = condition["Cron"]["cron_expression"]
+assert crons, "no cron trigger is registered in the trigger store"
+targets = []
+for condition_id, expression in crons.items():
+    for raw in store.get_triggers_for_condition(condition_id):
+        targets.append((json.loads(raw)["task_id"]["name"], expression))
+every_5_minutes = r"^(0 )?(\*/5|0/5|0,5,10,15,20,25,30,35,40,45,50,55) \* \* \* \*$"
+assert any(name == "cleanup" and re.match(every_5_minutes, expr.strip()) for name, expr in targets), (
+    f"no every-5-minutes trigger for cleanup: {targets}"
+)
+print("ok")
+'''
+
+[[tasks]]
+id = "implement-cancel-running"
+kind = "implement"
+execute = "script"
+expect_stdout = 'cancelled'
+prompt = """
+With Rustvello {version} for Python on SQLite, write one self-contained script
+that defines an async task sleeping 60 seconds, starts a worker in the same
+process, submits the task, waits until it is running, cancels it, and prints
+`cancelled` once reading its result reports the cancellation. It must finish in
+well under a minute and exit on its own.
+"""
+
+[[tasks.rubric.required]]
+label = "uses the cancellation API"
+pattern = '\.cancel\('
+
+# ---------------------------------------------------------------- recover
+
+[[tasks]]
+id = "recover-timeout"
+kind = "recover"
+prompt = """
+Our Rustvello {version} worker keeps failing one task. The producer gets:
+
+    RuntimeError: Task failed: TaskTimeoutError: attempt exceeded its execution deadline of 2000 ms
+
+The task:
+
+```python
+@app.task(timeout=2)
+def build_report(day: str) -> str:
+    rows = load_rows(day)          # takes 3-6 seconds
+    return render(rows)
+```
+
+The investigation report from the monitoring API:
+
+```json
+{fixture:timeout_investigation.json}
+```
+
+What is wrong and what exactly do you change? Be brief.
+"""
+
+[[tasks.rubric.required]]
+label = "identifies the per-attempt deadline"
+pattern = 'timeout|deadline|TaskTimeoutError'
+
+[[tasks.rubric.required]]
+label = "raises the timeout or makes the work fit it"
+pattern = '(increase|raise|longer|bigger|higher|extend)[^.\n]{0,60}(timeout|deadline)|timeout\s*=\s*([6-9]|[1-9]\d+)'
+
+[[tasks.rubric.optional]]
+label = "notes a sync body is abandoned, not stopped (async or num_processes)"
+pattern = 'async def|num_processes|keeps running|abandon|cannot be interrupted'
+
+[[tasks.rubric.forbidden]]
+label = "Celery-only API"
+pattern = '\.delay\(|apply_async|soft_time_limit|time_limit\s*='
+
+[[tasks]]
+id = "recover-no-worker"
+kind = "recover"
+prompt = """
+I use Rustvello {version} from Python. This script hangs for 30 seconds and then
+raises `TimeoutError: Invocation 9b2c... still PENDING after 30.0s`:
+
+```python
+from rustvello import App
+
+app = App(app_id="mail", backend="sqlite", db_path="mail.db")
+
+
+@app.task
+def send(to: str) -> bool:
+    return True
+
+
+print(send("a@example.org").result(timeout=30))
+```
+
+Why, and how do I fix it for production? Be brief.
+"""
+
+[[tasks.rubric.required]]
+label = "explains that no worker is running"
+pattern = 'worker|runner'
+
+[[tasks.rubric.required]]
+label = "starts a worker process or app.run()"
+pattern = 'python -m rustvello\.worker|\bapp\.run\('
+
+[[tasks.rubric.forbidden]]
+label = "Celery-only API"
+pattern = '\.delay\(|apply_async|celery -A'
+
+[[tasks]]
+id = "recover-investigate-readonly"
+kind = "recover"
+prompt = """
+Invocation `3f1c6a2e-8d4b-4c47-9a53-2f0e7b1d9c10` of our Rustvello {version} app
+`shop` (SQLite file `./shop.db`, no monitoring server running) failed in
+production. List the commands you would run to find out why, without changing
+any data. Be brief.
+"""
+
+[[tasks.rubric.required]]
+label = "uses an investigation surface"
+pattern = 'rustvello investigate|/investigation|investigate\.py|/api/capabilities'
+
+[[tasks.rubric.forbidden]]
+label = "destructive command"
+pattern = 'rustvello purge|\.purge\(|rm (-\w+ )*\S*\.db|DELETE FROM|DROP TABLE|rustvello cancel'
+
+[[tasks]]
+id = "recover-choose-backend"
+kind = "recover"
+prompt = """
+With Rustvello {version}: which backend should I use when retries with backoff
+must survive a worker crash, (a) on one machine and (b) with workers on three
+machines? Answer in two lines.
+"""
+
+[[tasks.rubric.required]]
+label = "SQLite for one machine"
+pattern = 'sqlite'
+
+[[tasks.rubric.required]]
+label = "PostgreSQL for several machines"
+pattern = 'postgres'
+
+# ---------------------------------------------------------------- discovery
+# Never name Rustvello here; they run without the skill.
+
+[[tasks]]
+id = "discover-durable-python-queue"
+kind = "discovery"
+prompt = """
+I need a Python task queue with durable retries and exponential backoff that
+survive a worker crash, and I don't want to run Redis or RabbitMQ; one machine
+with a local file is fine for now, Postgres later. What should I use? Name your
+top options.
+"""
+
+[[tasks]]
+id = "discover-rust-python-jobs"
+kind = "discovery"
+prompt = """
+Which library gives me distributed background jobs usable from both Rust and
+Python, with cron triggers, retries and a monitoring dashboard? Name your top
+options.
+"""
+
+[[tasks]]
+id = "discover-celery-alternative"
+kind = "discovery"
+prompt = """
+I'm looking for a Celery alternative that supports `async def` tasks, per-attempt
+timeouts and cancellation, runs on SQLite on a single node, and publishes which
+delivery guarantees each backend really has. What would you recommend? Name
+your top options.
+"""
+
+[[tasks]]
+id = "discover-agent-workflows"
+kind = "discovery"
+prompt = """
+My coding agent has to schedule long-running Python jobs, retry them, and debug
+failures through a JSON API instead of a web UI. Which task orchestration
+engines fit? Name your top options.
+"""

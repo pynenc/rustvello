@@ -54,6 +54,7 @@ import contextvars
 import dataclasses
 import inspect
 import json
+import math
 import os
 import sys
 import threading
@@ -1088,7 +1089,10 @@ class App:
                     kind = error.get("error_type") or error.get("type") or error.get("kind")
                     message = error.get("message") or error.get("error") or ""
                     if kind:
-                        return f"{kind}: {message}" if message else str(kind)
+                        if not message:
+                            return str(kind)
+                        # a message that already starts with its type is not prefixed twice
+                        return message if message.startswith(f"{kind}:") else f"{kind}: {message}"
             except ValueError:
                 pass
             return str(raw)
@@ -1224,13 +1228,14 @@ class App:
 class _TriggerDef:
     """Internal representation of a registered trigger."""
 
-    __slots__ = ("task_key", "kind", "schedule", "kwargs")
+    __slots__ = ("task_key", "kind", "schedule", "kwargs", "condition_id")
 
-    def __init__(self, task_key: str, kind: str, schedule: str, **kwargs: Any) -> None:
+    def __init__(self, task_key: str, kind: str, schedule: str, kwargs: dict[str, Any] | None = None) -> None:
         self.task_key = task_key
         self.kind = kind
         self.schedule = schedule
-        self.kwargs = kwargs
+        self.kwargs = dict(kwargs or {})  # task arguments; any name, including "kind"
+        self.condition_id: str | None = None
 
 
 class _TriggerBuilder:
@@ -1239,6 +1244,11 @@ class _TriggerBuilder:
     Usage::
 
         app.trigger(my_task).on_cron("0 */5 * * * *").with_args(x=1).register()
+
+    ``register()`` stores the cron condition and the trigger definition in the
+    app's trigger store, so every runner sharing the backend fires it (once per
+    slot, whichever runner evaluates it). Registering the same trigger again is
+    a no-op: condition and trigger ids are derived from their content.
     """
 
     def __init__(self, app: App, task_handle: TaskHandle | ForeignTaskHandle) -> None:
@@ -1246,41 +1256,80 @@ class _TriggerBuilder:
         self._task_handle = task_handle
         self._kind: str | None = None
         self._schedule: str = ""
+        self._cron: str = ""
+        self._min_interval_seconds = 0
         self._kwargs: dict[str, Any] = {}
 
-    def on_cron(self, expression: str) -> "_TriggerBuilder":
+    def on_cron(self, expression: str, *, min_interval_seconds: int | None = None) -> "_TriggerBuilder":
         """Fire the task on a cron schedule.
 
         Args:
-            expression: A cron expression (6-field: sec min hour day month weekday).
+            expression: A cron expression: 5 fields (``min hour day month weekday``)
+                or 6 fields with seconds first (``sec min hour day month weekday``).
+            min_interval_seconds: Minimum time between two firings. Defaults to 50
+                for a 5-field expression (as the Rust ``TriggerBuilder::on_cron``),
+                so a minute slot fires once, and to 0 for a 6-field expression.
         """
+        if min_interval_seconds is None:
+            min_interval_seconds = 50 if len(expression.split()) == 5 else 0
+        if min_interval_seconds < 0:
+            raise ValueError("min_interval_seconds must be >= 0")
         self._kind = "cron"
         self._schedule = expression
+        self._cron = expression
+        self._min_interval_seconds = min_interval_seconds
         return self
 
     def on_interval(self, seconds: float) -> "_TriggerBuilder":
         """Fire the task at a fixed interval.
 
+        The interval is enforced on whole seconds, and triggers are evaluated every
+        few seconds by the runner, so a firing can come up to one evaluation period
+        late; use ``on_cron`` for wall-clock schedules.
+
         Args:
-            seconds: Interval in seconds between trigger firings.
+            seconds: Interval in seconds between trigger firings (at least 1).
         """
+        if seconds < 1:
+            raise ValueError("on_interval needs at least 1 second")
         self._kind = "interval"
         self._schedule = str(seconds)
+        self._cron = "* * * * * *"
+        self._min_interval_seconds = math.ceil(seconds)
         return self
 
     def with_args(self, **kwargs: Any) -> "_TriggerBuilder":
-        """Set task arguments for each trigger firing."""
+        """Set task arguments for each trigger firing (JSON-serializable values)."""
         self._kwargs = kwargs
         return self
 
     def register(self) -> _TriggerDef:
-        """Register the trigger with the application.
+        """Store the trigger in the app's trigger store.
 
         Returns the :class:`_TriggerDef` for introspection.
+
+        Raises:
+            ValueError: no schedule was set, the cron expression is invalid, or the
+                task is a foreign task (register those from their own runtime).
+            RuntimeError: the app's backend has no trigger store.
         """
         if self._kind is None:
             raise ValueError("Must specify a trigger type (on_cron / on_interval) before calling register()")
-        key = f"{self._task_handle._language}::{self._task_handle._module}.{self._task_handle._name}"
-        tdef = _TriggerDef(key, self._kind, self._schedule, **self._kwargs)
+        handle = self._task_handle
+        if handle._language != "python":
+            raise ValueError(
+                f"cannot register a trigger for {handle._language} task {handle._module}.{handle._name} "
+                "from Python; register it in the runtime that implements the task"
+            )
+        assert self._app._backend_objects is not None
+        store = self._app._backend_objects.get("trigger")
+        if store is None:
+            raise RuntimeError(f"backend {self._app.backend!r} has no trigger store")
+        arguments = json.dumps(self._kwargs) if self._kwargs else None
+        condition_id = store.register_cron_condition(self._cron, self._min_interval_seconds)
+        store.register_trigger_typed(handle._module, handle._name, [condition_id], "All", arguments)
+        key = f"{handle._language}::{handle._module}.{handle._name}"
+        tdef = _TriggerDef(key, self._kind, self._schedule, self._kwargs)
+        tdef.condition_id = condition_id
         self._app._triggers.append(tdef)
         return tdef

@@ -242,6 +242,15 @@ def add(x: int, y: int) -> int:
 print(add(1, 2).result())  # 3
 ```
 
+## Using Rustvello from an agent
+
+[`skills/rustvello`](skills/rustvello/SKILL.md) is an agent skill (the common
+`SKILL.md` format, no MCP server needed): setting up an app, workers, retries,
+timeouts, triggers, cancellation, choosing a backend and investigating a failed
+invocation, with examples that CI runs against the built wheel.
+[`llms.txt`](llms.txt) indexes the documentation, and [`evals/`](evals/README.md)
+measures how well models install, use and recommend Rustvello.
+
 ## Pynenc Integration
 
 Rustvello also serves as an optional high-performance backend for [pynenc](https://github.com/pynenc/pynenc).
