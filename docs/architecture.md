@@ -185,11 +185,14 @@ graph TD
 
     Killed -->|re-queue| Rerouted
 
-    Retry -->|schedule| Pending
+    Retry -->|schedule when due| Pending
+
+    Live[any non-final status] -->|user cancel| Cancelled
 
     Success --> End(( ))
     Failed --> End
     CCFinal --> End
+    Cancelled --> End
 
     classDef available fill:#22863a,color:#fff,stroke:#1a6e2e,stroke-width:2px
     classDef execution fill:#6f42c1,color:#fff,stroke:#5a32a3,stroke-width:2px
@@ -203,7 +206,7 @@ graph TD
     class Running,Paused execution
     class PR,RR,Killed recovery
     class Pending,CC queue
-    class Failed,CCFinal termFail
+    class Failed,CCFinal,Cancelled termFail
     class Success termSuccess
     class Start,End point
 ```
@@ -213,10 +216,12 @@ graph TD
 🟣 Purple: execution (Running, Paused) ·
 🟠 Orange: recovery / kill (PendingRecovery, RunningRecovery, Killed) ·
 🔵 Blue: queued (Pending, ConcurrencyControlled) ·
-🔴 Red: terminal failure (Failed, ConcurrencyControlledFinal) ·
+🔴 Red: terminal failure (Failed, ConcurrencyControlledFinal, Cancelled) ·
 ✅ Green: terminal success (Success)
 
-13 states. Terminal states: `Success`, `Failed`, `ConcurrencyControlledFinal`.
+14 states. Terminal states: `Success`, `Failed`, `Cancelled`, `ConcurrencyControlledFinal`.
+`Cancelled` is reachable from every non-final status and bypasses runner
+ownership; see {doc}`retries-timeouts-cancellation`.
 `Killed` and `Rerouted` are **not** terminal — they re-enter the lifecycle via `Rerouted` → `Pending`.
 Transitions are validated by `InvocationStatus::valid_transitions()` at runtime.
 
@@ -754,6 +759,7 @@ The `RustvelloError` enum defines all error variants in the Rust engine:
 | `ConcurrencyRetry`                                         | Concurrency control requested a retry                                   |
 | `TaskNotFound` / `TaskNotRegistered` / `TaskClassNotFound` | Task resolution and registry errors                                     |
 | `InvocationNotFound`                                       | Invocation ID does not exist                                            |
+| `InvocationCancelled`                                      | The invocation was cancelled by a user request                          |
 | `InvalidStatusTransition`                                  | Status transition violates the FSM                                      |
 | `OwnershipViolation`                                       | Runner ownership rules were violated                                    |
 | `StatusRaceCondition`                                      | Optimistic status write detected a race                                 |
@@ -770,6 +776,7 @@ The PyO3 layer maps `RustvelloError` to typed Python exceptions in the
 ```text
 RustvelloError::ConcurrencyRetry       → ConcurrencyRetryError
 RustvelloError::InvocationNotFound     → InvocationNotFoundError
+RustvelloError::InvocationCancelled    → InvocationCancelledError
 RustvelloError::InvalidStatusTransition→ StatusTransitionError
 RustvelloError::OwnershipViolation     → StatusOwnershipError
 RustvelloError::StatusRaceCondition    → StatusRaceConditionError

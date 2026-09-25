@@ -2,8 +2,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::PyResult;
 use rustvello_core::context::{
-    clear_thread_invocation_context, get_invocation_context, set_thread_invocation_context,
-    InvocationContext,
+    clear_thread_invocation_context, current_attempt_signal, get_invocation_context,
+    set_thread_invocation_context, InvocationContext,
 };
 use rustvello_proto::call::SerializedArguments;
 use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
@@ -94,6 +94,28 @@ pub fn clear_current_invocation_context() {
 #[pyfunction]
 pub fn get_current_invocation_id() -> Option<String> {
     get_invocation_context().map(|ctx| ctx.invocation_id.to_string())
+}
+
+/// Call `callback()` once if the runner abandons the running attempt.
+///
+/// The runner abandons an attempt when its execution deadline expires or its
+/// invocation is cancelled. `callback` runs on a runner thread (at once if the
+/// attempt was already abandoned); exceptions it raises are reported as
+/// unraisable. Returns `False`, registering nothing, outside a runner attempt
+/// (dev mode, worker processes that the runner kills instead).
+#[pyfunction]
+pub fn on_attempt_abandoned(callback: PyObject) -> bool {
+    let Some(signal) = current_attempt_signal() else {
+        return false;
+    };
+    signal.on_abandon(move || {
+        Python::with_gil(|py| {
+            if let Err(error) = callback.call0(py) {
+                error.write_unraisable_bound(py, None);
+            }
+        });
+    });
+    true
 }
 
 /// Return the running task as `module.name` from Rust's thread-local invocation context.

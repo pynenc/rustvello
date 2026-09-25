@@ -54,9 +54,10 @@ the defining invocation in the same order returns the recorded values. Changing
 operation order changes the replay contract, so treat that order as persisted
 workflow behavior.
 
-The `random_async`, `utc_now_async`, and `uuid_async` variants are available to
-embedded async runtimes that establish an invocation context. Macro-generated
-workflow functions use the synchronous methods.
+The `random_async`, `utc_now_async`, and `uuid_async` variants are for async
+workflow bodies (`#[rustvello::workflow] async fn`, see
+[Async tasks](async_tasks.md)) and for embedded async runtimes that establish an
+invocation context. Synchronous workflow functions use the blocking methods.
 
 ## Python
 

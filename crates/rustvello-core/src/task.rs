@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
@@ -15,6 +17,12 @@ use crate::error::{RustvelloError, RustvelloResult};
 // ---------------------------------------------------------------------------
 // Typed Task trait
 // ---------------------------------------------------------------------------
+
+/// Boxed, `Send` future returned by asynchronous task bodies.
+///
+/// `#[rustvello::task]` on an `async fn` produces this type from
+/// [`Task::run_async`]; the runner awaits it on its Tokio runtime.
+pub type TaskFuture<'a, R> = Pin<Box<dyn Future<Output = RustvelloResult<R>> + Send + 'a>>;
 
 /// A distributable task with typed parameters and results.
 ///
@@ -70,7 +78,62 @@ pub trait Task: Send + Sync + 'static {
     fn config(&self) -> &TaskConfig;
 
     /// Execute the task with the given parameters.
+    ///
+    /// For asynchronous tasks this is the blocking entry point used by
+    /// synchronous callers (the Rayon executor, `execute_sync`); implement it
+    /// with [`block_on_task_future`] over [`Task::run_async`].
     fn run(&self, params: Self::Params) -> RustvelloResult<Self::Result>;
+
+    /// Whether the task body is asynchronous.
+    ///
+    /// Asynchronous tasks are awaited natively on the runner's Tokio runtime:
+    /// they hold no blocking thread while they wait on I/O and ignore the
+    /// `blocking` flag. `#[rustvello::task]` sets this for `async fn`.
+    fn is_async(&self) -> bool {
+        false
+    }
+
+    /// Execute the task as a future.
+    ///
+    /// The default runs [`Task::run`] and returns its result as a ready future,
+    /// so synchronous tasks need not implement it. Asynchronous tasks override
+    /// it together with [`Task::is_async`].
+    fn run_async(&self, params: Self::Params) -> TaskFuture<'_, Self::Result> {
+        Box::pin(std::future::ready(self.run(params)))
+    }
+}
+
+/// Drive an asynchronous task body to completion from synchronous code.
+///
+/// Used by the synchronous [`Task::run`] of asynchronous tasks. Inside a
+/// multi-threaded Tokio runtime the current thread is handed over with
+/// `block_in_place` and the future runs on that runtime; on a current-thread
+/// runtime (whose only thread must not block) or outside any runtime, a
+/// private current-thread runtime drives it on a scoped thread. The invocation
+/// and runner contexts of the caller are carried into the future.
+pub fn block_on_task_future<'a, R: Send + 'a>(future: TaskFuture<'a, R>) -> RustvelloResult<R> {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+
+    let future = crate::context::scope_current_contexts(future);
+    match Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| handle.block_on(future))
+        }
+        _ => std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|error| RustvelloError::Internal {
+                        message: format!("failed to build a runtime for an async task: {error}"),
+                    })?
+                    .block_on(future)
+            });
+            worker
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -82,7 +145,7 @@ pub trait Task: Send + Sync + 'static {
 /// Every `T: Task` automatically implements `DynTask` via a blanket impl.
 /// The registry stores `Arc<dyn DynTask>`, which handles serialization
 /// and deserialization internally.
-pub trait DynTask: Send + Sync {
+pub trait DynTask: Send + Sync + 'static {
     /// The task's unique identifier.
     fn task_id(&self) -> &TaskId;
 
@@ -91,6 +154,16 @@ pub trait DynTask: Send + Sync {
 
     /// Execute with [`SerializedArguments`], returns serialized JSON result.
     fn execute(&self, args: &SerializedArguments) -> RustvelloResult<String>;
+
+    /// Whether [`DynTask::execute_async`] awaits a native async body.
+    fn is_async(&self) -> bool {
+        false
+    }
+
+    /// Execute as an owned future; the default wraps [`DynTask::execute`].
+    fn execute_async(self: Arc<Self>, args: SerializedArguments) -> TaskFuture<'static, String> {
+        Box::pin(async move { self.execute(&args) })
+    }
 }
 
 /// Reconstruct a single JSON string from per-key [`SerializedArguments`].
@@ -153,6 +226,25 @@ impl<T: Task> DynTask for T {
         let result = self.run(params)?;
         serde_json::to_string(&result).map_err(|e| RustvelloError::Serialization {
             message: e.to_string(),
+        })
+    }
+
+    #[inline]
+    fn is_async(&self) -> bool {
+        Task::is_async(self)
+    }
+
+    fn execute_async(self: Arc<Self>, args: SerializedArguments) -> TaskFuture<'static, String> {
+        Box::pin(async move {
+            let json_str = serialized_args_to_json(&args)?;
+            let params: T::Params =
+                serde_json::from_str(&json_str).map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })?;
+            let result = self.run_async(params).await?;
+            serde_json::to_string(&result).map_err(|e| RustvelloError::Serialization {
+                message: e.to_string(),
+            })
         })
     }
 }

@@ -266,6 +266,54 @@ pub async fn test_global_queue_language_fallback(broker: &dyn Broker) {
     assert_eq!(got, Some(inv));
 }
 
+/// Delayed delivery is either durable and honest (hidden until due, then
+/// delivered once) or explicitly refused; never silently immediate.
+pub async fn test_delayed_delivery_capability(broker: &dyn Broker) {
+    let task = test_task_id("delayed_task");
+    let inv = InvocationId::new();
+    let routed = broker
+        .route_invocation_after(
+            &inv,
+            Some(&task),
+            "default",
+            0.0,
+            std::time::Duration::from_millis(600),
+        )
+        .await;
+    if !broker.supports_delayed_delivery() {
+        assert!(
+            routed.is_err(),
+            "a broker without delayed delivery must refuse it"
+        );
+        assert_eq!(broker.retrieve_invocation(None).await.unwrap(), None);
+        return;
+    }
+    routed.unwrap();
+    assert_eq!(
+        broker
+            .retrieve_invocation_from_queue("default", None)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(broker.count_invocations(None).await.unwrap(), 0);
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    assert_eq!(
+        broker
+            .retrieve_invocation_from_queue("default", Some(&task))
+            .await
+            .unwrap(),
+        Some(inv)
+    );
+    assert_eq!(
+        broker
+            .retrieve_invocation_from_queue("default", None)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
 /// Macro to generate all broker suite tests for a given setup expression.
 ///
 /// # Example
@@ -355,6 +403,12 @@ macro_rules! broker_suite {
         async fn suite_broker_global_queue_language_fallback() {
             let broker = $setup;
             $crate::broker::test_global_queue_language_fallback(&broker).await;
+        }
+
+        #[tokio::test]
+        async fn suite_broker_delayed_delivery_capability() {
+            let broker = $setup;
+            $crate::broker::test_delayed_delivery_capability(&broker).await;
         }
     };
 }
@@ -478,6 +532,13 @@ macro_rules! async_broker_suite {
         async fn suite_broker_global_queue_language_fallback() {
             let (_c, broker) = $setup.await;
             $crate::broker::test_global_queue_language_fallback(&broker).await;
+        }
+
+        #[tokio::test]
+        #[ignore = "requires Docker"]
+        async fn suite_broker_delayed_delivery_capability() {
+            let (_c, broker) = $setup.await;
+            $crate::broker::test_delayed_delivery_capability(&broker).await;
         }
     };
 }

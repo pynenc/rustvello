@@ -586,6 +586,28 @@ pub(super) fn parse_task_config_override(
             o.parallel_batch_size = Some(n);
         }
     }
+    let millis = |key: &str| {
+        table
+            .get(key)
+            .and_then(toml::Value::as_integer)
+            .and_then(|v| u64::try_from(v).ok())
+    };
+    o.retry_delay_ms = millis("retry_delay_ms");
+    o.retry_max_delay_ms = millis("retry_max_delay_ms");
+    if let Some(ms) = millis("timeout_ms") {
+        o.timeout_ms = Some((ms > 0).then_some(ms));
+    }
+    o.retry_backoff = match table.get("retry_backoff") {
+        Some(toml::Value::Float(v)) => Some(*v),
+        Some(toml::Value::Integer(v)) => Some(*v as f64),
+        _ => None,
+    };
+    if let Some(toml::Value::String(v)) = table.get("retry_jitter") {
+        o.retry_jitter = v.parse().ok();
+    }
+    if let Some(toml::Value::Boolean(v)) = table.get("retry_on_timeout") {
+        o.retry_on_timeout = Some(*v);
+    }
 
     o
 }

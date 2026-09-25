@@ -79,6 +79,19 @@ pub fn extract_w3c_trace_context(carrier: &TraceContextCarrier) -> Context {
     TraceContextPropagator::new().extract_with_context(&Context::new(), &CarrierMap(values))
 }
 
+/// Attach a persisted W3C carrier to every poll of `future`.
+///
+/// The async counterpart of `extract_w3c_trace_context(..).attach()`: a guard
+/// attached on one poll must not leak onto whatever the thread polls next, so
+/// async task bodies carry the context on the future instead.
+pub fn in_w3c_trace_context<F: std::future::Future>(
+    carrier: &TraceContextCarrier,
+    future: F,
+) -> impl std::future::Future<Output = F::Output> {
+    use opentelemetry::trace::FutureExt;
+    future.with_context(extract_w3c_trace_context(carrier))
+}
+
 /// Allocate an execution identity without creating or exporting an SDK span.
 pub fn allocate_execution_trace_context(parent: &TraceContextCarrier) -> TraceContextCarrier {
     let extracted = extract_w3c_trace_context(parent);

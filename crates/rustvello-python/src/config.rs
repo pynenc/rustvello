@@ -3,8 +3,58 @@ use pyo3::prelude::*;
 use cistell_core::Resolver;
 
 use rustvello_core::broker::validate_routing;
-use rustvello_proto::config::{AppConfig, BrokerPriorityRule, QueueSelectionStrategy, TaskConfig};
+use rustvello_proto::config::{
+    AppConfig, BrokerPriorityRule, QueueSelectionStrategy, RetryJitter, TaskConfig,
+};
 use rustvello_proto::status::ConcurrencyControlType;
+
+fn seconds_to_ms(name: &str, seconds: f64) -> PyResult<u64> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "{name} must be a finite number of seconds >= 0"
+        )));
+    }
+    Ok((seconds * 1000.0).round() as u64)
+}
+
+/// Apply the retry backoff and execution deadline options (seconds) to a config.
+///
+/// Shared by `TaskConfig.with_retry_policy` and the runner's `register_task`,
+/// so both Python registration paths validate identically.
+pub(crate) fn apply_retry_policy(
+    config: &mut TaskConfig,
+    retry_delay: f64,
+    retry_max_delay: f64,
+    retry_backoff: f64,
+    retry_jitter: &str,
+    timeout: Option<f64>,
+    retry_on_timeout: bool,
+) -> PyResult<()> {
+    if !retry_backoff.is_finite() || retry_backoff < 1.0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "retry_backoff must be a finite number >= 1.0",
+        ));
+    }
+    config.retry_delay_ms = seconds_to_ms("retry_delay", retry_delay)?;
+    config.retry_max_delay_ms = seconds_to_ms("retry_max_delay", retry_max_delay)?;
+    config.retry_backoff = retry_backoff;
+    config.retry_jitter = retry_jitter
+        .parse::<RetryJitter>()
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    config.timeout_ms = match timeout {
+        None => None,
+        Some(seconds) if seconds.is_finite() && seconds > 0.0 => {
+            Some(((seconds * 1000.0).round() as u64).max(1))
+        }
+        Some(_) => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "timeout must be a positive number of seconds (or None for no deadline)",
+            ))
+        }
+    };
+    config.retry_on_timeout = retry_on_timeout;
+    Ok(())
+}
 
 /// Python wrapper for TaskConfig.
 #[pyclass(name = "TaskConfig")]
@@ -88,6 +138,68 @@ impl PyTaskConfig {
     #[getter]
     fn is_workflow_task(&self) -> bool {
         self.inner.is_workflow_task
+    }
+
+    /// Return a copy with retry backoff and an execution deadline (seconds).
+    ///
+    /// Defaults keep today's behaviour: immediate retries, no deadline.
+    #[pyo3(signature = (*, retry_delay=0.0, retry_max_delay=300.0, retry_backoff=2.0, retry_jitter="equal", timeout=None, retry_on_timeout=true))]
+    fn with_retry_policy(
+        &self,
+        retry_delay: f64,
+        retry_max_delay: f64,
+        retry_backoff: f64,
+        retry_jitter: &str,
+        timeout: Option<f64>,
+        retry_on_timeout: bool,
+    ) -> PyResult<Self> {
+        let mut inner = self.inner.clone();
+        apply_retry_policy(
+            &mut inner,
+            retry_delay,
+            retry_max_delay,
+            retry_backoff,
+            retry_jitter,
+            timeout,
+            retry_on_timeout,
+        )?;
+        Ok(Self { inner })
+    }
+
+    /// Delay before the first retry, in seconds (0 retries immediately).
+    #[getter]
+    fn retry_delay(&self) -> f64 {
+        self.inner.retry_delay_ms as f64 / 1000.0
+    }
+
+    /// Upper bound of the retry delay before jitter, in seconds.
+    #[getter]
+    fn retry_max_delay(&self) -> f64 {
+        self.inner.retry_max_delay_ms as f64 / 1000.0
+    }
+
+    /// Growth factor of the retry delay per attempt.
+    #[getter]
+    fn retry_backoff(&self) -> f64 {
+        self.inner.retry_backoff
+    }
+
+    /// Jitter strategy: ``"equal"``, ``"full"`` or ``"none"``.
+    #[getter]
+    fn retry_jitter(&self) -> String {
+        self.inner.retry_jitter.to_string()
+    }
+
+    /// Execution deadline of one attempt in seconds, or ``None``.
+    #[getter]
+    fn timeout(&self) -> Option<f64> {
+        self.inner.timeout_ms.map(|ms| ms as f64 / 1000.0)
+    }
+
+    /// Whether a timed-out attempt may be retried.
+    #[getter]
+    fn retry_on_timeout(&self) -> bool {
+        self.inner.retry_on_timeout
     }
 
     fn __repr__(&self) -> String {
@@ -319,6 +431,23 @@ impl PyAppConfig {
         self.inner.queue_selection_strategy = strategy
             .parse::<QueueSelectionStrategy>()
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        Ok(())
+    }
+
+    /// How often a worker checks whether its running invocation was cancelled (seconds).
+    #[getter]
+    fn cancellation_check_interval_seconds(&self) -> f64 {
+        self.inner.cancellation_check_interval_seconds
+    }
+
+    #[setter]
+    fn set_cancellation_check_interval_seconds(&mut self, value: f64) -> PyResult<()> {
+        if !value.is_finite() || value < 0.0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "cancellation_check_interval_seconds must be finite and >= 0",
+            ));
+        }
+        self.inner.cancellation_check_interval_seconds = value;
         Ok(())
     }
 

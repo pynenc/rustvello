@@ -41,7 +41,8 @@ pub mod prelude {
     pub use crate::call::Call;
     pub use crate::client_data_store::{ClientDataStore, ClientDataStoreManager};
     pub use crate::context::{
-        get_invocation_context, get_runner_context, InvocationContext, RunnerContext,
+        current_attempt_signal, get_invocation_context, get_runner_context, AttemptSignal,
+        InvocationContext, RunnerContext,
     };
     pub use crate::error::{RustvelloError, RustvelloResult};
     pub use crate::invocation::{Invocation, InvocationHandle, SyncInvocation};
@@ -60,8 +61,8 @@ pub mod prelude {
     pub use crate::serializer::{SerdeSerializer, Serializer};
     pub use crate::state_backend::StateBackend;
     pub use crate::task::{
-        CrossLanguageSafe, DynTask, ForeignTask, ForeignTaskProxy, Task, TaskDefinition,
-        TaskModule, TaskRegistry,
+        block_on_task_future, CrossLanguageSafe, DynTask, ForeignTask, ForeignTaskProxy, Task,
+        TaskDefinition, TaskFuture, TaskModule, TaskRegistry,
     };
     pub use crate::trigger::{TriggerManager, TriggerStore};
     pub use crate::workflow::WorkflowRoot;

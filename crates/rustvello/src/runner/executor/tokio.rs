@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use tokio::sync::Semaphore;
 
 use rustvello_core::context::{
-    clear_thread_invocation_context, clear_thread_runner_context, set_thread_invocation_context,
+    clear_thread_attempt_signal, clear_thread_invocation_context, clear_thread_runner_context,
+    current_attempt_signal, set_thread_attempt_signal, set_thread_invocation_context,
     set_thread_runner_context, InvocationContext, RunnerContext, INVOCATION_CTX, RUNNER_CTX,
 };
 use rustvello_core::error::{RustvelloError, RustvelloResult};
@@ -45,6 +46,10 @@ impl TaskExecutor for TokioExecutor {
         invocation_context: InvocationContext,
         runner_context: RunnerContext,
     ) -> RustvelloResult<String> {
+        if task.is_async() {
+            return super::execute_native_async(task, args, invocation_context, runner_context)
+                .await;
+        }
         if self.should_spawn_blocking(task.as_ref()) {
             let permit = Arc::clone(&self.blocking_permits)
                 .acquire_owned()
@@ -54,6 +59,7 @@ impl TaskExecutor for TokioExecutor {
                 })?;
             let thread_runner = runner_context.clone();
             let thread_invocation = invocation_context.clone();
+            let thread_signal = current_attempt_signal();
             return INVOCATION_CTX
                 .scope(
                     invocation_context,
@@ -62,6 +68,7 @@ impl TaskExecutor for TokioExecutor {
                             let _permit = permit;
                             set_thread_runner_context(thread_runner);
                             set_thread_invocation_context(thread_invocation);
+                            set_thread_attempt_signal(thread_signal);
                             let _trace_guard = extract_w3c_trace_context(
                                 &rustvello_core::context::get_invocation_context()
                                     .expect("invocation context set")
@@ -72,6 +79,7 @@ impl TaskExecutor for TokioExecutor {
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     task.execute(&args)
                                 }));
+                            clear_thread_attempt_signal();
                             clear_thread_invocation_context();
                             clear_thread_runner_context();
                             result.unwrap_or_else(|panic| {
@@ -89,12 +97,14 @@ impl TaskExecutor for TokioExecutor {
 
         let thread_runner = runner_context.clone();
         let thread_invocation = invocation_context.clone();
+        let thread_signal = current_attempt_signal();
         INVOCATION_CTX
             .scope(
                 invocation_context,
                 RUNNER_CTX.scope(runner_context, async move {
                     set_thread_runner_context(thread_runner);
                     set_thread_invocation_context(thread_invocation);
+                    set_thread_attempt_signal(thread_signal);
                     let _trace_guard = extract_w3c_trace_context(
                         &rustvello_core::context::get_invocation_context()
                             .expect("invocation context set")
@@ -104,6 +114,7 @@ impl TaskExecutor for TokioExecutor {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         task.execute(&args)
                     }));
+                    clear_thread_attempt_signal();
                     clear_thread_invocation_context();
                     clear_thread_runner_context();
                     result.unwrap_or_else(|panic| {

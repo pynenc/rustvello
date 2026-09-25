@@ -13,7 +13,9 @@
 installation
 getting_started
 architecture
+async_tasks
 workflows
+retries-timeouts-cancellation
 configuration/index
 monitoring/index
 guarantees
@@ -136,8 +138,8 @@ See the [pynenc documentation](https://docs.pynenc.org) for the full Python API.
 :gutter: 3
 
 ::::{grid-item-card} Invocation Lifecycle
-Every task call becomes a tracked **invocation** through a 13-state FSM:
-`Registered → Pending → Running → Success/Failed/Retry`. Ownership is
+Every task call becomes a tracked **invocation** through a 14-state FSM:
+`Registered → Pending → Running → Success/Failed/Retry/Cancelled`. Ownership is
 recorded per runner, and recovery re-queues stale invocations automatically.
 
 {doc}`architecture`

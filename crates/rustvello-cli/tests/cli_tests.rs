@@ -90,3 +90,56 @@ fn cli_investigate_invalid_uuid() {
 fn cli_unknown_subcommand() {
     cli().arg("nonexistent").assert().failure();
 }
+
+#[test]
+fn cli_cancel_queued_invocation_then_reports_already_final() {
+    use rustvello::prelude::*;
+
+    let dir = std::env::temp_dir().join(format!("rustvello-cli-cancel-{}", InvocationId::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("cli.db");
+    let db_path = db.to_str().unwrap().to_owned();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let invocation_id = runtime.block_on(async {
+        let mut app = Rustvello::builder()
+            .app_id("cli")
+            .sqlite(&db_path, "cli")
+            .build()
+            .await
+            .unwrap();
+        let task = TaskId::new("cli", "never_run");
+        app.register_task(
+            task.clone(),
+            TaskConfig::default(),
+            std::sync::Arc::new(|_| Ok("null".to_owned())),
+        )
+        .unwrap();
+        app.submit(&task, SerializedArguments::new()).await.unwrap()
+    });
+
+    cli()
+        .args([
+            "cancel",
+            invocation_id.as_str(),
+            "--app-id",
+            "cli",
+            "--db-path",
+        ])
+        .arg(&db_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cancelled"));
+    cli()
+        .args([
+            "cancel",
+            invocation_id.as_str(),
+            "--app-id",
+            "cli",
+            "--db-path",
+        ])
+        .arg(&db_path)
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("CANCELLED"));
+    let _ = std::fs::remove_dir_all(dir);
+}

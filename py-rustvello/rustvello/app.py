@@ -25,10 +25,32 @@ Running a persistent worker::
 
     app.run()                      # in-process workers (I/O-bound Python)
     app.run(num_processes=8)       # one interpreter per worker (CPU-bound Python)
+
+Async tasks::
+
+    @app.task
+    async def fetch(url: str) -> int:
+        reader, writer = await asyncio.open_connection(...)
+        ...
+
+An ``async def`` task runs on an event loop owned by the worker that executes
+it: one loop per worker thread (``app.run()``) or per worker process
+(``app.run(num_processes=...)``), created on first use and reused. The loop
+runs on the worker's own thread, so the invocation context
+(:meth:`App.current_invocation`, child submissions, ``workflow_root()``) and
+the OpenTelemetry context are the same as for a synchronous task. While the
+loop waits on I/O it releases the GIL, so other workers keep running; CPU-bound
+code inside a coroutine still holds the GIL and stalls that worker's loop.
+Tasks a coroutine leaves running when it returns are cancelled before the
+worker takes its next invocation. When the attempt times out or its invocation
+is cancelled, the coroutine is cancelled on its loop (``CancelledError`` at the
+next ``await``).
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import dataclasses
 import inspect
 import json
@@ -44,6 +66,7 @@ from typing import Any, Callable, TypeVar
 from rustvello.backends import create_backends as _create_backends
 from rustvello.rustvello import (
     AppConfig,
+    InvocationCancelledError,
     InvocationId,
     InvocationStatus,
     RustTaskRunnerBuilder,
@@ -52,6 +75,7 @@ from rustvello.rustvello import (
     get_current_invocation_id,
     get_current_num_retries,
     get_current_trace_context,
+    on_attempt_abandoned,
 )
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -116,11 +140,99 @@ def _mongo_url_from_parts(
     return f"mongodb://{credentials}{host or 'localhost'}:{port or 27017}{query}"
 
 
+class _WorkerLoop:
+    """The event loop of one worker thread; closed when the thread goes away."""
+
+    def __init__(self) -> None:
+        self.loop = asyncio.new_event_loop()
+
+    def __del__(self) -> None:
+        loop = self.loop
+        if not loop.is_closed() and not loop.is_running():
+            loop.close()
+
+
+_worker_loops = threading.local()
+
+
+def _worker_event_loop() -> asyncio.AbstractEventLoop:
+    """This thread's reusable worker event loop (one per worker thread or process)."""
+    holder: _WorkerLoop | None = getattr(_worker_loops, "holder", None)
+    if holder is None or holder.loop.is_closed():
+        holder = _WorkerLoop()
+        _worker_loops.holder = holder
+    return holder.loop
+
+
+def _cancel_leftover_tasks(loop: asyncio.AbstractEventLoop) -> None:
+    """Cancel tasks a finished coroutine left behind, as ``asyncio.run`` does."""
+    leftovers = [task for task in asyncio.all_tasks(loop) if not task.done()]
+    if not leftovers:
+        return
+    for task in leftovers:
+        task.cancel()
+    loop.run_until_complete(asyncio.gather(*leftovers, return_exceptions=True))
+
+
+def _cancel_from_runner(loop: asyncio.AbstractEventLoop, task: asyncio.Task[Any]) -> None:
+    """Cancel a task body from a runner thread (its attempt timed out or was cancelled)."""
+    try:
+        loop.call_soon_threadsafe(task.cancel)
+    except RuntimeError:
+        pass  # the worker loop is already closed: nothing left to stop
+
+
+def _run_coroutine(coro: Any) -> Any:
+    """Drive a task coroutine to completion from synchronous worker code.
+
+    Runs on this thread's worker loop, keeping the thread's invocation context. If a
+    loop is already running here (a dev-mode call made from async code), the
+    coroutine runs to completion on a helper thread with its own loop instead.
+
+    When the runner abandons the attempt (execution deadline or cancellation), the
+    coroutine's task is cancelled on its loop, so the body stops at its next ``await``.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        loop = _worker_event_loop()
+        task = loop.create_task(coro)
+        on_attempt_abandoned(lambda: _cancel_from_runner(loop, task))
+        try:
+            return loop.run_until_complete(task)
+        finally:
+            _cancel_leftover_tasks(loop)
+
+    outcome: dict[str, Any] = {}
+    context = contextvars.copy_context()
+
+    def _in_helper_thread() -> None:
+        try:
+            outcome["value"] = context.run(asyncio.run, coro)
+        except BaseException as error:  # noqa: BLE001 - re-raised in the caller
+            outcome["error"] = error
+
+    helper = threading.Thread(target=_in_helper_thread, name="rustvello-async-dev")
+    helper.start()
+    helper.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
+
+
+def _call_task_function(fn: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
+    """Call a task body; an ``async def`` body is awaited on the worker's event loop."""
+    result = fn(**kwargs)
+    if inspect.iscoroutine(result):
+        return _run_coroutine(result)
+    return result
+
+
 def _run_python_task(fn: Callable[..., Any], args_json: str) -> str:
     args_dict: dict[str, str] = json.loads(args_json)
     deserialized = {key: json.loads(value) for key, value in args_dict.items()}
     with _invocation_trace_context():
-        return json.dumps(fn(**deserialized))
+        return json.dumps(_call_task_function(fn, deserialized))
 
 
 class TaskLanguage(str, Enum):
@@ -173,39 +285,79 @@ class Invocation:
             return self._sync_status
         return self._app._engine.get_status(self._invocation_id)
 
+    def cancel(self) -> bool:
+        """Cancel this invocation if it has not finished.
+
+        Returns ``True`` when this call cancelled it, ``False`` when it had
+        already finished. Queued or backing-off invocations never run; a
+        running attempt is abandoned by its worker (an ``async def`` body is
+        cancelled at its next ``await``; a synchronous function keeps running in
+        its thread but its result is discarded). Side effects already performed are not undone.
+        """
+        if self._sync_status is not None:
+            return False  # dev mode: already executed inline
+        return bool(self._app._engine.cancel(self._invocation_id))
+
     def result(self, timeout: float = 60.0, poll_interval: float = 0.05) -> Any:
         """Block until the result is available or *timeout* seconds have elapsed.
 
         Returns the deserialized result (parsed from JSON).
 
         Raises:
-            RuntimeError: if the invocation reached a FAILED terminal state.
+            RuntimeError: if the invocation reached a FAILED terminal state
+                (a task that exceeded its ``timeout`` fails with
+                ``TaskTimeoutError`` in the message).
+            InvocationCancelledError: if the invocation was cancelled.
             TimeoutError: if the timeout is reached before a terminal state.
         """
         # Fast path: sync mode — result already computed
         if self._sync_result is not _SENTINEL:
             return self._sync_result
+        self._mark_waiting()
+        deadline = time.monotonic() + timeout
+        while True:
+            done, value = self._poll(deadline, timeout)
+            if done:
+                return value
+            time.sleep(poll_interval)
 
+    async def result_async(self, timeout: float = 60.0, poll_interval: float = 0.05) -> Any:
+        """Await the result without blocking the event loop (for ``async def`` tasks).
+
+        Same contract as :meth:`result`; polls with ``asyncio.sleep``.
+        """
+        if self._sync_result is not _SENTINEL:
+            return self._sync_result
+        self._mark_waiting()
+        deadline = time.monotonic() + timeout
+        while True:
+            done, value = self._poll(deadline, timeout)
+            if done:
+                return value
+            await asyncio.sleep(poll_interval)
+
+    def _mark_waiting(self) -> None:
+        """Inside a running task, record that it waits on this invocation."""
         current_invocation_id = get_current_invocation_id()
         if current_invocation_id is not None:
             current = InvocationId.from_string(current_invocation_id)
             if str(current) != str(self._invocation_id):
                 self._app._engine.set_waiting_for(current, self._invocation_id)
 
-        deadline = time.monotonic() + timeout
-        while True:
-            status = self.status
-            if status.is_terminal():
-                str_status = str(status)
-                if str_status == "FAILED":
-                    raise RuntimeError(f"Task failed: {self._app._failure_message(self._invocation_id)}")
-                raw = self._app._engine.get_result(self._invocation_id)
-                if raw is None:
-                    return None
-                return json.loads(raw)
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"Invocation {self._invocation_id} still {status} after {timeout}s")
-            time.sleep(poll_interval)
+    def _poll(self, deadline: float, timeout: float) -> tuple[bool, Any]:
+        """One status check: ``(True, result)`` when terminal; raises on failure, cancel or timeout."""
+        status = self.status
+        if status.is_terminal():
+            str_status = str(status)
+            if str_status == "FAILED":
+                raise RuntimeError(f"Task failed: {self._app._failure_message(self._invocation_id)}")
+            if str_status == "CANCELLED":
+                raise InvocationCancelledError(f"invocation {self._invocation_id} was cancelled")
+            raw = self._app._engine.get_result(self._invocation_id)
+            return True, None if raw is None else json.loads(raw)
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Invocation {self._invocation_id} still {status} after {timeout}s")
+        return False, None
 
 
 class TaskHandle:
@@ -270,7 +422,7 @@ class TaskHandle:
         """Route to call_sync or submit depending on the app mode."""
         if self._app._dev_mode_force_sync:
             deserialized = {key: json.loads(value) for key, value in serialized.items()}
-            result = self._func(**deserialized)
+            result = _call_task_function(self._func, deserialized)
             raw = json.dumps(result)
             value = json.loads(raw)
             return Invocation(
@@ -485,6 +637,12 @@ class App:
         priority: float = 0.0,
         retry_for: tuple[type[BaseException], ...] = (),
         replace: bool = False,
+        retry_delay: float = 0.0,
+        retry_max_delay: float = 300.0,
+        retry_backoff: float = 2.0,
+        retry_jitter: str = "equal",
+        timeout: float | None = None,
+        retry_on_timeout: bool = True,
         _is_workflow_task: bool = False,
     ) -> Any:
         """Register a function as a distributed task.
@@ -493,6 +651,9 @@ class App:
 
             @app.task
             def simple(x: int) -> int: ...
+
+            @app.task
+            async def fetch(url: str) -> str: ...  # awaited on the worker's event loop
 
             @app.task(max_retries=3, cache_results=True)
             def resilient(x: int) -> int: ...
@@ -519,6 +680,20 @@ class App:
                 ``max_retries`` allows.
             replace: Re-register a task already known under the same ``module.name``
                 (module reloads, tests redefining a task) instead of raising.
+            retry_delay: Seconds before the first retry (default 0: retry at once).
+                Retry ``n`` waits ``min(retry_max_delay, retry_delay * retry_backoff**n)``
+                with jitter. The wait is stored in the backend, not slept in a worker.
+            retry_max_delay: Upper bound of the retry delay before jitter (seconds).
+            retry_backoff: Growth factor of the delay per retry (>= 1.0).
+            retry_jitter: ``"equal"`` (default: half the delay plus a random half),
+                ``"full"`` (random in ``[0, delay]``) or ``"none"``.
+            timeout: Execution deadline of one attempt in seconds (``None`` = none).
+                An expired attempt fails with ``TaskTimeoutError``. An ``async def``
+                body is cancelled at its next ``await``; a synchronous function
+                cannot be interrupted, so its thread keeps running and its result
+                is discarded (use ``num_processes`` to have the worker process
+                killed instead).
+            retry_on_timeout: Whether a timed-out attempt may be retried.
 
         Returns:
             A :class:`TaskHandle` that submits the task when called.
@@ -536,11 +711,17 @@ class App:
             "queue": queue,
             "priority": priority,
             "retry_for_errors": [cls.__name__ for cls in retry_for],
+            "retry_delay": retry_delay,
+            "retry_max_delay": retry_max_delay,
+            "retry_backoff": retry_backoff,
+            "retry_jitter": retry_jitter,
+            "timeout": timeout,
+            "retry_on_timeout": retry_on_timeout,
         }
 
         def decorator(fn: Callable[..., Any]) -> TaskHandle:
-            if inspect.iscoroutinefunction(fn) or inspect.isasyncgenfunction(fn):
-                raise TypeError("Rustvello standalone tasks must be a synchronous callable")
+            if inspect.isasyncgenfunction(fn):
+                raise TypeError("Rustvello tasks must be a function or an async function, not an async generator")
 
             module = fn.__module__
             name = fn.__name__
@@ -553,6 +734,13 @@ class App:
                 queue=queue,
                 priority=priority,
                 retry_for_errors=[cls.__name__ for cls in retry_for],
+            ).with_retry_policy(
+                retry_delay=retry_delay,
+                retry_max_delay=retry_max_delay,
+                retry_backoff=retry_backoff,
+                retry_jitter=retry_jitter,
+                timeout=timeout,
+                retry_on_timeout=retry_on_timeout,
             )
 
             def _rust_wrapper(args_json: str) -> str:
@@ -586,6 +774,12 @@ class App:
         priority: float = 0.0,
         retry_for: tuple[type[BaseException], ...] = (),
         replace: bool = False,
+        retry_delay: float = 0.0,
+        retry_max_delay: float = 300.0,
+        retry_backoff: float = 2.0,
+        retry_jitter: str = "equal",
+        timeout: float | None = None,
+        retry_on_timeout: bool = True,
     ) -> Any:
         """Register a function as an explicit workflow root.
 
@@ -608,6 +802,12 @@ class App:
             priority=priority,
             retry_for=retry_for,
             replace=replace,
+            retry_delay=retry_delay,
+            retry_max_delay=retry_max_delay,
+            retry_backoff=retry_backoff,
+            retry_jitter=retry_jitter,
+            timeout=timeout,
+            retry_on_timeout=retry_on_timeout,
             _is_workflow_task=True,
         )
 
@@ -796,6 +996,12 @@ class App:
                 is_workflow_task=extra.get("is_workflow_task", False),
                 queue=extra.get("queue", "default"),
                 priority=extra.get("priority", 0.0),
+                retry_delay=extra.get("retry_delay", 0.0),
+                retry_max_delay=extra.get("retry_max_delay", 300.0),
+                retry_backoff=extra.get("retry_backoff", 2.0),
+                retry_jitter=extra.get("retry_jitter", "equal"),
+                timeout=extra.get("timeout"),
+                retry_on_timeout=extra.get("retry_on_timeout", True),
             )
 
         for handle in self._foreign_tasks.values():
@@ -890,6 +1096,11 @@ class App:
             return str(state_backend.get_error(str(invocation_id)))
         except Exception:  # noqa: BLE001
             return str(self._engine.get_result(invocation_id))
+
+    def cancel(self, invocation: "Invocation | InvocationId") -> bool:
+        """Cancel an invocation that has not finished; see :meth:`Invocation.cancel`."""
+        invocation_id = invocation.id if isinstance(invocation, Invocation) else invocation
+        return bool(self._engine.cancel(invocation_id))
 
     def queue_depth(self, queue: str = "default") -> int:
         """Number of queued Python invocations waiting in one logical queue."""

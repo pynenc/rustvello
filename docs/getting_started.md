@@ -208,13 +208,14 @@ persistent worker_ below) or
 tests and local tries, `App(dev_mode_force_sync=True)` (or
 `RUSTVELLO__DEV_MODE_FORCE_SYNC=true`) runs every task inline in the caller.
 
-Standalone Python tasks must be synchronous callables declared with `def`.
-Use `@app.workflow` for explicit workflow roots; call `rustvello.workflow_root()`
-inside the workflow body for deterministic `random()`, `utc_now()`, and `uuid()`
-operations. Use the pynenc integration when a Python application needs
-framework-level import discovery or asynchronous task declarations. Argument
-binding follows the Python function signature, and arguments and results must be
-JSON serializable.
+Standalone Python tasks are functions declared with `def` or `async def`; an
+`async def` task is awaited on its worker's event loop (see
+[Async tasks](async_tasks.md)). Use `@app.workflow` for explicit workflow roots;
+call `rustvello.workflow_root()` inside the workflow body for deterministic
+`random()`, `utc_now()`, and `uuid()` operations. Use the pynenc integration when
+a Python application needs framework-level import discovery. Argument binding
+follows the Python function signature, and arguments and results must be JSON
+serializable.
 
 ```python
 from rustvello import workflow_root

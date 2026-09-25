@@ -106,6 +106,9 @@ impl<R: DeserializeOwned> InvocationHandle<R> {
                     |e| e.to_string(),
                 )))
             }
+            InvocationStatus::Cancelled => Err(RustvelloError::InvocationCancelled {
+                invocation_id: self.invocation_id.clone(),
+            }),
             other => Err(RustvelloError::Internal {
                 message: format!(
                     "invocation {} is not finished (status: {})",

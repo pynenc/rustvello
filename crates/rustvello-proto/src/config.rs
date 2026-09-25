@@ -144,6 +144,71 @@ impl std::str::FromStr for ArgumentPrintMode {
     }
 }
 
+/// Randomization applied to the exponential retry delay.
+///
+/// `d` is the capped exponential delay `min(max, initial * multiplier^n)`.
+/// The default is [`RetryJitter::Equal`]: it keeps a floor of half the
+/// computed delay (so a configured delay is never collapsed to zero) while
+/// still spreading simultaneous retries of many failed invocations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RetryJitter {
+    /// Exactly `d` (deterministic; useful for tests).
+    None,
+    /// Uniform in `[0, d]` ("full jitter").
+    Full,
+    /// `d / 2` plus uniform in `[0, d / 2]` ("equal jitter").
+    #[default]
+    Equal,
+}
+
+impl std::str::FromStr for RetryJitter {
+    type Err = ConfigParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "none" => Ok(Self::None),
+            "full" => Ok(Self::Full),
+            "equal" => Ok(Self::Equal),
+            _ => Err(ConfigParseError(format!(
+                "invalid RetryJitter: {value}; expected none, full or equal"
+            ))),
+        }
+    }
+}
+
+impl std::fmt::Display for RetryJitter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::None => "none",
+            Self::Full => "full",
+            Self::Equal => "equal",
+        })
+    }
+}
+
+/// Error type recorded when an attempt exceeds its execution deadline.
+pub const TASK_TIMEOUT_ERROR: &str = "TaskTimeoutError";
+
+/// Default cap of the exponential retry delay (5 minutes).
+pub const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 300_000;
+
+/// Default growth factor of the retry delay between attempts.
+pub const DEFAULT_RETRY_BACKOFF: f64 = 2.0;
+
+fn default_retry_max_delay_ms() -> u64 {
+    DEFAULT_RETRY_MAX_DELAY_MS
+}
+
+fn default_retry_backoff() -> f64 {
+    DEFAULT_RETRY_BACKOFF
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// Per-task configuration options.
 ///
 /// Mirrors pynenc's `ConfigTask` with settings for retries, concurrency,
@@ -185,6 +250,68 @@ pub struct TaskConfig {
     /// Whether to run this task on a blocking thread (`tokio::task::spawn_blocking`).
     /// Use for CPU-bound or synchronous I/O tasks that could starve the async executor.
     pub blocking: bool,
+    /// Delay before the first retry, in milliseconds. `0` (default) routes
+    /// the retry immediately, exactly as before retry backoff existed.
+    #[serde(default)]
+    pub retry_delay_ms: u64,
+    /// Upper bound of the retry delay before jitter, in milliseconds.
+    #[serde(default = "default_retry_max_delay_ms")]
+    pub retry_max_delay_ms: u64,
+    /// Growth factor applied per retry: `retry_delay_ms * retry_backoff^n`.
+    /// Values below 1.0 (or non-finite) are treated as 1.0.
+    #[serde(default = "default_retry_backoff")]
+    pub retry_backoff: f64,
+    /// Randomization of the computed delay.
+    #[serde(default)]
+    pub retry_jitter: RetryJitter,
+    /// Execution deadline of one attempt, in milliseconds. `None` (default)
+    /// means no deadline. An expired attempt fails with [`TASK_TIMEOUT_ERROR`].
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// Whether a timed-out attempt may be retried (subject to `max_retries`
+    /// and `retry_for_errors`). `false` makes a timeout terminal.
+    #[serde(default = "default_true")]
+    pub retry_on_timeout: bool,
+}
+
+impl TaskConfig {
+    /// Delay before retry number `retry_count + 1` (`retry_count` retries
+    /// already happened).
+    ///
+    /// `random_unit` must be uniform in `[0, 1)`; it is taken as a parameter
+    /// so the policy stays deterministic and testable. Returns zero when
+    /// `retry_delay_ms` is zero.
+    pub fn retry_delay(&self, retry_count: u32, random_unit: f64) -> std::time::Duration {
+        if self.retry_delay_ms == 0 {
+            return std::time::Duration::ZERO;
+        }
+        let factor = if self.retry_backoff.is_finite() && self.retry_backoff >= 1.0 {
+            self.retry_backoff
+        } else {
+            1.0
+        };
+        let cap = self.retry_max_delay_ms.max(1) as f64;
+        let exponent = i32::try_from(retry_count).unwrap_or(i32::MAX);
+        let base = (self.retry_delay_ms as f64 * factor.powi(exponent)).min(cap);
+        let unit = if random_unit.is_finite() {
+            random_unit.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let millis = match self.retry_jitter {
+            RetryJitter::None => base,
+            RetryJitter::Full => base * unit,
+            RetryJitter::Equal => base / 2.0 + (base / 2.0) * unit,
+        };
+        std::time::Duration::from_millis(millis.round() as u64)
+    }
+
+    /// The per-attempt execution deadline, if any.
+    pub fn timeout(&self) -> Option<std::time::Duration> {
+        self.timeout_ms
+            .filter(|ms| *ms > 0)
+            .map(std::time::Duration::from_millis)
+    }
 }
 
 impl Default for TaskConfig {
@@ -205,6 +332,12 @@ impl Default for TaskConfig {
             is_workflow_task: false,
             reroute_on_cc: false,
             blocking: false,
+            retry_delay_ms: 0,
+            retry_max_delay_ms: DEFAULT_RETRY_MAX_DELAY_MS,
+            retry_backoff: DEFAULT_RETRY_BACKOFF,
+            retry_jitter: RetryJitter::Equal,
+            timeout_ms: None,
+            retry_on_timeout: true,
         }
     }
 }
@@ -300,6 +433,15 @@ pub struct AppConfig {
     /// global services (minutes). Should be less than `atomic_service_interval_minutes`.
     #[config(default = 0.5f64)]
     pub atomic_service_check_interval_minutes: f64,
+    /// How often a worker re-reads the status of an invocation it is running
+    /// to notice a user cancellation (seconds; 0 disables the check).
+    #[config(default = 1.0f64)]
+    #[serde(default = "default_cancellation_check_interval_seconds")]
+    pub cancellation_check_interval_seconds: f64,
+}
+
+fn default_cancellation_check_interval_seconds() -> f64 {
+    1.0
 }
 
 impl Default for AppConfig {
@@ -333,6 +475,7 @@ impl Default for AppConfig {
             atomic_service_interval_minutes: 5.0,
             atomic_service_spread_margin_minutes: 1.0,
             atomic_service_check_interval_minutes: 0.5,
+            cancellation_check_interval_seconds: 1.0,
         }
     }
 }
@@ -438,6 +581,12 @@ mod tests {
             is_workflow_task: true,
             reroute_on_cc: true,
             blocking: false,
+            retry_delay_ms: 250,
+            retry_max_delay_ms: 10_000,
+            retry_backoff: 3.0,
+            retry_jitter: RetryJitter::Full,
+            timeout_ms: Some(1_500),
+            retry_on_timeout: false,
         };
         let json = serde_json::to_string(&tc).unwrap();
         let back: TaskConfig = serde_json::from_str(&json).unwrap();
@@ -455,6 +604,78 @@ mod tests {
         assert!(back.is_workflow_task);
         assert!(back.reroute_on_cc);
         assert!(!back.blocking);
+        assert_eq!(back.retry_delay_ms, 250);
+        assert_eq!(back.retry_max_delay_ms, 10_000);
+        assert_eq!(back.retry_backoff, 3.0);
+        assert_eq!(back.retry_jitter, RetryJitter::Full);
+        assert_eq!(back.timeout_ms, Some(1_500));
+        assert!(!back.retry_on_timeout);
+    }
+
+    /// Configs serialized before retry backoff and deadlines existed keep
+    /// today's behaviour: immediate retries and no execution deadline.
+    #[test]
+    fn legacy_task_config_json_keeps_immediate_retries_and_no_deadline() {
+        let mut legacy = serde_json::to_value(TaskConfig::default()).unwrap();
+        let object = legacy.as_object_mut().unwrap();
+        for key in [
+            "retry_delay_ms",
+            "retry_max_delay_ms",
+            "retry_backoff",
+            "retry_jitter",
+            "timeout_ms",
+            "retry_on_timeout",
+        ] {
+            object.remove(key).unwrap();
+        }
+        let back: TaskConfig = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.retry_delay_ms, 0);
+        assert_eq!(back.retry_delay(0, 0.5), std::time::Duration::ZERO);
+        assert_eq!(back.timeout(), None);
+        assert!(back.retry_on_timeout);
+        assert_eq!(back.retry_jitter, RetryJitter::Equal);
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn retry_delay_grows_exponentially_and_is_capped() {
+        let mut tc = TaskConfig::default();
+        tc.retry_delay_ms = 100;
+        tc.retry_max_delay_ms = 1_000;
+        tc.retry_jitter = RetryJitter::None;
+        let ms = |n| tc.retry_delay(n, 0.3).as_millis();
+        assert_eq!(
+            [ms(0), ms(1), ms(2), ms(3), ms(4), ms(40)],
+            [100, 200, 400, 800, 1_000, 1_000]
+        );
+        tc.retry_backoff = 0.5; // below 1.0: constant delay
+        assert_eq!(tc.retry_delay(5, 0.0).as_millis(), 100);
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn retry_jitter_bounds() {
+        let mut tc = TaskConfig::default();
+        tc.retry_delay_ms = 1_000;
+        tc.retry_jitter = RetryJitter::Full;
+        assert_eq!(tc.retry_delay(0, 0.0).as_millis(), 0);
+        assert_eq!(tc.retry_delay(0, 1.0).as_millis(), 1_000);
+        tc.retry_jitter = RetryJitter::Equal;
+        assert_eq!(tc.retry_delay(0, 0.0).as_millis(), 500);
+        assert_eq!(tc.retry_delay(0, 0.5).as_millis(), 750);
+        assert_eq!(tc.retry_delay(0, f64::NAN).as_millis(), 500);
+        assert_eq!("FULL".parse::<RetryJitter>().unwrap(), RetryJitter::Full);
+        assert!("decorrelated".parse::<RetryJitter>().is_err());
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn timeout_zero_means_no_deadline() {
+        let mut tc = TaskConfig::default();
+        tc.timeout_ms = Some(0);
+        assert_eq!(tc.timeout(), None);
+        tc.timeout_ms = Some(20);
+        assert_eq!(tc.timeout(), Some(std::time::Duration::from_millis(20)));
     }
 
     #[test]

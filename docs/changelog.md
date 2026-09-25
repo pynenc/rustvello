@@ -4,6 +4,52 @@ For detailed information on each version, please visit the [GitHub Releases page
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-25
+
+- Native async tasks. `#[rustvello::task]` and `#[rustvello::workflow]` accept
+  `async fn`: the runner awaits the body on its Tokio runtime without a blocking
+  thread, bounded by `num_workers`. The invocation, runner and W3C trace contexts
+  and the worker's tracing span follow the body across `.await` points.
+  `Task`/`DynTask` gain `is_async` and `run_async`/`execute_async` with defaults,
+  so existing implementations are unchanged; `block_on_task_future` serves the
+  synchronous entry points. A panicking or aborted body fails the attempt
+  (`TaskCancelled`) instead of hanging, and a dropped worker aborts its body so
+  stale recovery can re-run the invocation. `blocking = true` on an `async fn` is
+  a compile error.
+- Python `@app.task` accepts `async def`. Each worker thread (or worker process)
+  owns one reusable event loop, so the invocation context and OpenTelemetry context
+  work unchanged. Tasks a coroutine leaves running are cancelled when it returns.
+  `Invocation.result_async()` awaits a child without blocking the loop, and dev
+  mode awaits async bodies inline. See [Async tasks](async_tasks.md).
+- Retry backoff: `retry_delay_ms`, `retry_max_delay_ms`, `retry_backoff` and
+  `retry_jitter` (equal by default; full or none) on `TaskConfig`, on the task
+  macros and on Python `@app.task`/`@app.workflow` (seconds). Delayed retries are
+  stored durably in the backend on SQLite and PostgreSQL. The in-memory backend
+  keeps them only for the life of the process. Redis, MongoDB and RabbitMQ
+  declare no support and retry immediately. A worker killed during the backoff
+  loses nothing, and the retry fires once when due (kill test).
+- Execution deadlines: `timeout_ms` / `timeout` fail an attempt with
+  `TaskTimeoutError`. `retry_on_timeout` decides whether the attempt is
+  retried. Rust async bodies are aborted, Python `async def` bodies are
+  cancelled on their worker event loop (`CancelledError` at the next `await`)
+  and process-pool workers are killed. Sync threads are abandoned and their
+  late result is discarded.
+- Cancellation: new terminal status `CANCELLED`, `RustvelloApp::cancel`,
+  Python `Invocation.cancel()`/`App.cancel()` and `rustvello cancel`. Running
+  attempts are abandoned within `cancellation_check_interval_seconds`, with
+  the same per-body rules as deadlines.
+- `AttemptSignal` / `current_attempt_signal()`: a sync task body can check
+  whether the runner abandoned its attempt (deadline or cancel) and stop
+  cooperatively, or register an `on_abandon` hook.
+- The guarantee matrix (`/api/capabilities`, `docs/guarantees.md`) gains a
+  _delayed retry_ column: guaranteed on SQLite and PostgreSQL (kill-tested),
+  process-local (best effort) in memory, not supported on Redis, MongoDB and
+  RabbitMQ. The release gate runs the delayed-retry kill tests
+  (`make test-fault`, `make test-fault-postgres`).
+- Defaults keep the previous behaviour, and task configs serialized before this
+  release deserialize unchanged. See the "Retries, timeouts and cancellation"
+  guide for the per-backend guarantees and the side-effect semantics.
+
 ## 0.6.0 - 2026-09-25
 
 - Trigger firings can no longer be lost. A firing is claimed into a trigger

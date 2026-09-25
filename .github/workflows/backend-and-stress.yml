@@ -26,6 +26,7 @@ on:
       - "crates/rustvello/tests/stale_owner_concurrency.rs"
       - "crates/rustvello/tests/trigger_crash_acceptance.rs"
       - "crates/rustvello/tests/trigger_fallback_faults.rs"
+      - "crates/rustvello/tests/durable_retry_kill.rs"
       - "docs/guarantees.md"
       - "Cargo.lock"
       - "Makefile"

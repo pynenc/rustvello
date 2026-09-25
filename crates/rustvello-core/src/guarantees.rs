@@ -69,17 +69,21 @@ pub struct BackendGuarantees {
     pub ordering: Guarantee,
     /// Committed state survives process death.
     pub durability: Guarantee,
+    /// A retry backoff is stored in the backend, so a worker killed during
+    /// the delay neither loses nor duplicates the retry.
+    pub delayed_retry: Guarantee,
 }
 
 impl BackendGuarantees {
     /// The properties in matrix column order.
-    pub fn properties(&self) -> [(&'static str, &Guarantee); 5] {
+    pub fn properties(&self) -> [(&'static str, &Guarantee); 6] {
         [
             ("atomic_publication", &self.atomic_publication),
             ("trigger_atomicity", &self.trigger_atomicity),
             ("stale_owner_recovery", &self.stale_owner_recovery),
             ("ordering", &self.ordering),
             ("durability", &self.durability),
+            ("delayed_retry", &self.delayed_retry),
         ]
     }
 }
@@ -93,6 +97,11 @@ const ORDERING_SUITE: &[&str] = &[
 const FALLBACK_TRIGGER_FAULTS: &[&str] = &[
     "crates/rustvello/tests/trigger_fallback_faults.rs::fallback_trigger_publication_is_exactly_once_after_failure_at_every_boundary",
 ];
+const DELAYED_DELIVERY_REFUSAL: &[&str] =
+    &["crates/rustvello-test-suite/src/broker.rs::suite_broker_delayed_delivery_capability"];
+const NO_DELAYED_RETRY_NOTE: &str =
+    "no durable delayed delivery: the backend refuses it and the runner retries immediately, \
+     logging a warning";
 const OUTBOX_NOTE: &str =
     "trigger outbox: claim, run record and condition clear are separate writes \
      that the next evaluator repairs; publication is idempotent by the run-derived invocation id; \
@@ -134,6 +143,14 @@ pub fn guarantee_matrix() -> Vec<BackendGuarantees> {
                 "file databases only (WAL); an in-memory database is not durable",
                 &["crates/rustvello/tests/publication_crash_acceptance.rs::terminal_payload_and_cleanup_survive_every_kill_boundary"],
             ),
+            delayed_retry: g(
+                Guaranteed,
+                "queue row with its not-before time committed with RETRY in one transaction (local clock); kill-tested during the backoff",
+                &[
+                    "crates/rustvello/tests/durable_retry_kill.rs::sqlite_retry_survives_worker_kill_during_backoff_and_fires_once",
+                    "crates/rustvello-test-suite/src/broker.rs::suite_broker_delayed_delivery_capability",
+                ],
+            ),
         },
         BackendGuarantees {
             backend: "postgres",
@@ -161,6 +178,14 @@ pub fn guarantee_matrix() -> Vec<BackendGuarantees> {
                 "committed transactions; relies on the server's fsync settings",
                 &["crates/rustvello-postgres/src/acceptance.rs::process_kills_at_every_publication_boundary"],
             ),
+            delayed_retry: g(
+                Guaranteed,
+                "queue row reserved until the not-before time on the database clock, committed with RETRY; kill-tested during the backoff",
+                &[
+                    "crates/rustvello/tests/durable_retry_kill.rs::postgres_retry_survives_worker_kill_during_backoff_and_fires_once",
+                    "crates/rustvello-test-suite/src/broker.rs::suite_broker_delayed_delivery_capability",
+                ],
+            ),
         },
         BackendGuarantees {
             backend: "redis",
@@ -177,6 +202,7 @@ pub fn guarantee_matrix() -> Vec<BackendGuarantees> {
                 "depends on Redis persistence (AOF with appendfsync)",
                 &[],
             ),
+            delayed_retry: g(NotSupported, NO_DELAYED_RETRY_NOTE, DELAYED_DELIVERY_REFUSAL),
         },
         BackendGuarantees {
             backend: "mongodb",
@@ -189,6 +215,7 @@ pub fn guarantee_matrix() -> Vec<BackendGuarantees> {
             stale_owner_recovery: g(BestEffort, "heartbeat-based recovery; not kill-tested", &[]),
             ordering: g(Guaranteed, "priority, then FIFO, per queue", ORDERING_SUITE),
             durability: g(BestEffort, "depends on the write concern", &[]),
+            delayed_retry: g(NotSupported, NO_DELAYED_RETRY_NOTE, DELAYED_DELIVERY_REFUSAL),
         },
         BackendGuarantees {
             backend: "mongodb3",
@@ -201,6 +228,7 @@ pub fn guarantee_matrix() -> Vec<BackendGuarantees> {
             stale_owner_recovery: g(BestEffort, "heartbeat-based recovery; not kill-tested", &[]),
             ordering: g(Guaranteed, "priority, then FIFO, per queue", ORDERING_SUITE),
             durability: g(BestEffort, "depends on the write concern", &[]),
+            delayed_retry: g(NotSupported, NO_DELAYED_RETRY_NOTE, DELAYED_DELIVERY_REFUSAL),
         },
         BackendGuarantees {
             backend: "rabbitmq",
@@ -213,6 +241,7 @@ pub fn guarantee_matrix() -> Vec<BackendGuarantees> {
             stale_owner_recovery: g(NotApplicable, "broker only; recovery lives in the paired control backend", &[]),
             ordering: g(Guaranteed, "priority, then FIFO, per queue", ORDERING_SUITE),
             durability: g(BestEffort, "durable queues; depends on the broker configuration", &[]),
+            delayed_retry: g(NotSupported, NO_DELAYED_RETRY_NOTE, DELAYED_DELIVERY_REFUSAL),
         },
         BackendGuarantees {
             backend: "memory",
@@ -225,6 +254,14 @@ pub fn guarantee_matrix() -> Vec<BackendGuarantees> {
             stale_owner_recovery: g(NotApplicable, "single process; nothing outlives the runner", &[]),
             ordering: g(Guaranteed, "priority, then FIFO, per queue", ORDERING_SUITE),
             durability: g(NotSupported, "all state is lost when the process exits", &[]),
+            delayed_retry: g(
+                BestEffort,
+                "process-local: the delay is honoured and survives a runner restart in the same process, not a process exit",
+                &[
+                    "crates/rustvello-mem/src/broker.rs::delayed_delivery_is_invisible_until_due_and_delivered_once",
+                    "crates/rustvello-test-suite/src/broker.rs::suite_broker_delayed_delivery_capability",
+                ],
+            ),
         },
     ]
 }
@@ -253,8 +290,8 @@ pub fn render_markdown() -> String {
          suites in `release-gate.yml`), which also runs on pull requests that touch\n\
          a backend, so a failing one blocks the release.\n\n",
     );
-    out.push_str("| Backend | Atomic publication | Trigger atomicity | Stale-owner recovery | Ordering | Durability |\n");
-    out.push_str("| --- | --- | --- | --- | --- | --- |\n");
+    out.push_str("| Backend | Atomic publication | Trigger atomicity | Stale-owner recovery | Ordering | Durability | Delayed retry |\n");
+    out.push_str("| --- | --- | --- | --- | --- | --- | --- |\n");
     for row in &matrix {
         out.push_str(&format!("| {} ", row.backend));
         for (_, guarantee) in row.properties() {
@@ -265,7 +302,10 @@ pub fn render_markdown() -> String {
     out.push_str(
         "\n*Mixed backends* (for example a RabbitMQ broker with another control\n\
          backend) never qualify for atomic publication: every port must share one\n\
-         database transaction domain.\n",
+         database transaction domain. *Delayed retry* follows the component that\n\
+         queues the retry: the transactional publication when the backend has one,\n\
+         otherwise the broker; see\n\
+         [Retries, timeouts and cancellation](retries-timeouts-cancellation.md).\n",
     );
     for row in &matrix {
         out.push_str(&format!("\n## {}\n\n", row.backend));

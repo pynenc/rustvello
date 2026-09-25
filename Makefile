@@ -48,11 +48,12 @@ test-rust: ## Run Rust tests
 	@cargo test --workspace --exclude py-rustvello
 
 .PHONY: test-fault
-test-fault: ## Run the fault-injection suites (SQLite process kills at every publication and trigger boundary, in-process trigger faults)
-	@echo "🚀 Testing Rust: SQLite process kills and trigger outbox faults"
+test-fault: ## Run the fault-injection suites (SQLite process kills at every publication, trigger and delayed-retry boundary, in-process trigger faults)
+	@echo "🚀 Testing Rust: SQLite process kills, trigger outbox faults and durable retries"
 	@cargo test -p rustvello --features sqlite-fault-injection \
 		--test publication_crash_acceptance --test trigger_crash_acceptance \
-		--test stale_owner_concurrency --test trigger_fallback_faults -- --test-threads=1
+		--test stale_owner_concurrency --test trigger_fallback_faults \
+		--test durable_retry_kill -- --test-threads=1
 	@echo "🚀 Testing Rust: SQLite backend with failpoints compiled in"
 	@cargo test -p rustvello-sqlite --features fault-injection -- --test-threads=1
 
@@ -61,9 +62,10 @@ test-fault-postgres: ## Run the PostgreSQL suites and process kills (needs RUSTV
 	@test -n "$$RUSTVELLO_POSTGRES_DSN" || { echo "set RUSTVELLO_POSTGRES_DSN to an isolated PostgreSQL database"; exit 1; }
 	@echo "🚀 Testing Rust: PostgreSQL compliance, network gates and publication process kills"
 	@cargo test -p rustvello-postgres --features fault-injection -- --include-ignored --test-threads=1
-	@echo "🚀 Testing Rust: PostgreSQL trigger process kills"
-	@cargo test -p rustvello --features postgres-fault-injection \
-		--test trigger_crash_acceptance -- --include-ignored --test-threads=1
+	@echo "🚀 Testing Rust: PostgreSQL trigger and delayed-retry process kills"
+	@cargo test -p rustvello --features sqlite,postgres-fault-injection \
+		--test trigger_crash_acceptance --test durable_retry_kill \
+		-- --include-ignored --test-threads=1 postgres_
 
 .PHONY: test
 test: test-rust test-fault test-python ## Run all tests (Rust + fault suites + Python)

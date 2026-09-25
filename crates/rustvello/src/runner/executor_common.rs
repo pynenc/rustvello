@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use rustvello_core::context::{InvocationContext, RunnerContext};
+use rustvello_core::context::{AttemptSignal, InvocationContext, RunnerContext, ATTEMPT_SIGNAL};
 use rustvello_core::error::{RustvelloError, RustvelloResult, TaskError};
 use rustvello_core::middleware::TaskMiddleware;
 use rustvello_core::observability::{
@@ -22,6 +22,7 @@ use rustvello_proto::identifiers::{InvocationId, RunnerId};
 use rustvello_proto::status::InvocationStatus;
 
 use crate::orchestration::Orchestrator as InvocationOrchestrator;
+use crate::runner::attempt::{supervise, AttemptLimits, Interruption};
 use crate::runner::executor::TaskExecutor;
 use crate::task_catalog::TaskCatalog;
 
@@ -191,15 +192,35 @@ pub(crate) async fn execute_invocation_common(
         mw.before(invocation_id, &inv_dto.task_id).await?;
     }
 
-    // --- 6. Execute the task (runner-specific) ---
-    let exec_result = executor
-        .execute(
-            Arc::clone(&task),
-            call_dto.serialized_arguments.clone(),
-            inv_ctx,
-            run_ctx,
-        )
-        .await;
+    // --- 6. Execute the task (runner-specific) under deadline and cancellation ---
+    let limits = AttemptLimits::new(
+        resolved_task_config.timeout(),
+        deps.app_config.cancellation_check_interval_seconds,
+    );
+    let attempt_signal = AttemptSignal::new();
+    let (exec_result, interruption) = supervise(
+        ATTEMPT_SIGNAL.scope(
+            attempt_signal.clone(),
+            executor.execute(
+                Arc::clone(&task),
+                call_dto.serialized_arguments.clone(),
+                inv_ctx,
+                run_ctx,
+            ),
+        ),
+        &limits,
+        &deps.lifecycle,
+        invocation_id,
+    )
+    .await;
+    if interruption.is_some() {
+        // Tell code the runner could not preempt (a Python coroutine on its
+        // worker loop, a cooperative sync body) to stop. Hooks may take the GIL,
+        // so they run off the async runtime.
+        drop(tokio::task::spawn_blocking(move || {
+            attempt_signal.abandon()
+        }));
+    }
 
     // --- 7. Post-execution middleware ---
     for mw in deps.middlewares.iter().rev() {
@@ -212,9 +233,22 @@ pub(crate) async fn execute_invocation_common(
     }
 
     // --- 8. Handle result ---
+    if interruption == Some(Interruption::Cancelled) {
+        finish_cancelled(
+            deps,
+            invocation_id,
+            worker_runner_id,
+            &inv_dto.task_id,
+            Some(telemetry_context),
+            exec_start.elapsed(),
+        )
+        .await;
+        return Ok(());
+    }
     match exec_result {
         Ok(result) => {
-            deps.lifecycle
+            let written = deps
+                .lifecycle
                 .set_invocation_result_with_context(
                     invocation_id,
                     &result,
@@ -222,7 +256,19 @@ pub(crate) async fn execute_invocation_common(
                     &inv_dto.task_id,
                     call_dto.serialized_arguments.0.clone(),
                 )
-                .await?;
+                .await;
+            if discard_if_cancelled(deps, invocation_id, written).await? {
+                finish_cancelled(
+                    deps,
+                    invocation_id,
+                    worker_runner_id,
+                    &inv_dto.task_id,
+                    Some(telemetry_context),
+                    exec_start.elapsed(),
+                )
+                .await;
+                return Ok(());
+            }
 
             // Remove from CC index now that invocation is complete
             if let Err(e) = deps
@@ -278,7 +324,9 @@ pub(crate) async fn execute_invocation_common(
             let retry_count = num_retries;
             let max_retries = task.config().max_retries;
             let retry_for_errors = &task.config().retry_for_errors;
+            let timed_out = matches!(interruption, Some(Interruption::TimedOut(_)));
             let should_retry = retry_count < max_retries
+                && (!timed_out || resolved_task_config.retry_on_timeout)
                 && (retry_for_errors.is_empty()
                     || retry_for_errors
                         .iter()
@@ -298,25 +346,46 @@ pub(crate) async fn execute_invocation_common(
                 deps.lifecycle
                     .release_nontransactional_concurrency_slot(invocation_id)
                     .await?;
-                deps.lifecycle
-                    .set_invocation_retry_with_context(
+                let delay = resolved_task_config.retry_delay(retry_count, rand::random::<f64>());
+                let written = deps
+                    .lifecycle
+                    .set_invocation_retry_after_with_context(
                         invocation_id,
                         worker_runner_id,
                         &inv_dto.task_id,
                         call_dto.serialized_arguments.0.clone(),
                         &resolved_task_config.queue,
                         resolved_task_config.priority,
+                        delay,
                     )
-                    .await?;
+                    .await;
+                if discard_if_cancelled(deps, invocation_id, written).await? {
+                    finish_cancelled(
+                        deps,
+                        invocation_id,
+                        worker_runner_id,
+                        &inv_dto.task_id,
+                        None,
+                        exec_duration,
+                    )
+                    .await;
+                    return Ok(());
+                }
 
-                tracing::warn!("Failed status:retry {}/{}", retry_count + 1, max_retries);
+                tracing::warn!(
+                    delay_ms = delay.as_millis() as u64,
+                    "Failed status:retry {}/{}",
+                    retry_count + 1,
+                    max_retries
+                );
                 deps.emitter
                     .on_task_lifecycle(&TaskLifecycleEvent::retry_scheduled(
                         telemetry_context,
                         next_attempt,
                     ));
             } else {
-                deps.lifecycle
+                let written = deps
+                    .lifecycle
                     .set_invocation_exception_with_context(
                         invocation_id,
                         &task_error.error_type,
@@ -325,7 +394,19 @@ pub(crate) async fn execute_invocation_common(
                         &inv_dto.task_id,
                         call_dto.serialized_arguments.0.clone(),
                     )
-                    .await?;
+                    .await;
+                if discard_if_cancelled(deps, invocation_id, written).await? {
+                    finish_cancelled(
+                        deps,
+                        invocation_id,
+                        worker_runner_id,
+                        &inv_dto.task_id,
+                        None,
+                        exec_duration,
+                    )
+                    .await;
+                    return Ok(());
+                }
 
                 tracing::error!("Invocation status:failed permanently: {}", err);
 
@@ -357,4 +438,68 @@ pub(crate) async fn execute_invocation_common(
     }
 
     Ok(())
+}
+
+/// `Ok(true)` when a lifecycle write failed only because a user cancelled the
+/// invocation meanwhile: the attempt's outcome is discarded, not an error.
+async fn discard_if_cancelled(
+    deps: &ExecutionDeps,
+    invocation_id: &InvocationId,
+    written: RustvelloResult<()>,
+) -> RustvelloResult<bool> {
+    match written {
+        Ok(()) => Ok(false),
+        Err(
+            error @ (RustvelloError::InvalidStatusTransition { .. }
+            | RustvelloError::OwnershipViolation { .. }
+            | RustvelloError::StatusRaceCondition { .. }),
+        ) => {
+            if deps.lifecycle.is_cancelled(invocation_id).await {
+                tracing::info!(%invocation_id, "invocation was cancelled; late attempt outcome discarded");
+                Ok(true)
+            } else {
+                Err(error)
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Bookkeeping for an attempt whose invocation was cancelled by a user.
+async fn finish_cancelled(
+    deps: &ExecutionDeps,
+    invocation_id: &InvocationId,
+    worker_runner_id: &RunnerId,
+    task_id: &rustvello_proto::identifiers::TaskId,
+    telemetry_context: Option<TaskAttemptContext>,
+    duration: std::time::Duration,
+) {
+    if let Err(e) = deps
+        .lifecycle
+        .release_nontransactional_concurrency_slot(invocation_id)
+        .await
+    {
+        tracing::warn!("Failed to remove from CC index: {}", e);
+    }
+    if let Some(context) = telemetry_context {
+        deps.emitter.on_task_lifecycle(&TaskLifecycleEvent::failed(
+            context,
+            "InvocationCancelled",
+            duration,
+        ));
+    }
+    if let Some(ref ws) = deps.worker_states {
+        if let Ok(mut ws) = ws.lock() {
+            if let Some(state) = ws.get_mut(worker_runner_id) {
+                state.current_invocation = None;
+                state.current_task = None;
+                state.started_at = None;
+                state.last_result = Some(LastResult::Failed {
+                    task_id: task_id.clone(),
+                    error: "invocation cancelled".to_owned(),
+                });
+                state.invocations_completed += 1;
+            }
+        }
+    }
 }

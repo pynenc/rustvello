@@ -110,6 +110,7 @@ fn terminal_states() {
         &[
             InvocationStatus::Success,
             InvocationStatus::Failed,
+            InvocationStatus::Cancelled,
             InvocationStatus::ConcurrencyControlledFinal,
         ]
     );
@@ -374,4 +375,28 @@ fn serde_round_trip_new_statuses() {
         let back: InvocationStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status, back);
     }
+}
+
+#[test]
+fn cancelled_is_final_reachable_from_every_live_status_and_overrides_ownership() {
+    use InvocationStatus::*;
+    assert!(Cancelled.is_terminal());
+    assert_eq!(Cancelled.to_string(), "CANCELLED");
+    assert_eq!("cancelled".parse::<InvocationStatus>().unwrap(), Cancelled);
+    for status in ALL_STATUSES {
+        assert_eq!(
+            status.can_transition_to(Cancelled),
+            !status.is_terminal(),
+            "{status}"
+        );
+    }
+    // A client (not the owner) may cancel a Running invocation.
+    let owner = RunnerId::from_string("owner");
+    let client = RunnerId::from_string("client");
+    let running = InvocationStatusRecord::new(Running, Some(owner));
+    let cancelled = status_record_transition(Some(&running), Cancelled, Some(&client)).unwrap();
+    assert_eq!(cancelled.status, Cancelled);
+    assert!(cancelled.runner_id.is_none());
+    // Nothing leaves Cancelled.
+    assert!(Cancelled.valid_transitions().is_empty());
 }

@@ -343,6 +343,12 @@ impl PyTaskRunnerBuilder {
         is_workflow_task = false,
         queue = "default",
         priority = 0.0,
+        retry_delay = 0.0,
+        retry_max_delay = 300.0,
+        retry_backoff = 2.0,
+        retry_jitter = "equal",
+        timeout = None,
+        retry_on_timeout = true,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn register_task(
@@ -365,6 +371,12 @@ impl PyTaskRunnerBuilder {
         is_workflow_task: bool,
         queue: &str,
         priority: f64,
+        retry_delay: f64,
+        retry_max_delay: f64,
+        retry_backoff: f64,
+        retry_jitter: &str,
+        timeout: Option<f64>,
+        retry_on_timeout: bool,
     ) -> PyResult<()> {
         validate_routing(queue, priority)
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
@@ -415,6 +427,15 @@ impl PyTaskRunnerBuilder {
         config.is_workflow_task = is_workflow_task;
         config.queue = queue.to_owned();
         config.priority = priority;
+        crate::config::apply_retry_policy(
+            &mut config,
+            retry_delay,
+            retry_max_delay,
+            retry_backoff,
+            retry_jitter,
+            timeout,
+            retry_on_timeout,
+        )?;
 
         self.task_registry
             .register(TaskDefinition::new(task_id, config, task_fn))
