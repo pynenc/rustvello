@@ -4,6 +4,8 @@ For detailed information on each version, please visit the [GitHub Releases page
 
 ## Unreleased
 
+## 0.5.3 - 2026-09-25
+
 - The README quick starts run as written: the Python one starts a worker (and
   shows `dev_mode_force_sync` for inline runs), the Rust one starts a runner and
   waits with `wait_timeout()` instead of `result()`. They live in
