@@ -63,23 +63,23 @@ PYNENC__CLIENT_DATA_STORE_CLS=RustSqliteClientDataStore
 
 Application-level settings that apply to the entire `RustvelloApp`.
 
-| Field                                 | Type                      | Default       | Description                                                                             |
-| ------------------------------------- | ------------------------- | ------------- | --------------------------------------------------------------------------------------- |
-| `app_id`                              | `String`                  | `"rustvello"` | Unique identifier for the application                                                   |
-| `broker_queues`                       | `Vec<String>`             | `["default"]` | Logical queues available for routing; `default` is inserted when omitted                |
-| `runner_queues`                       | `Vec<String>`             | `[]`          | Queues consumed by runners; empty consumes every broker queue                           |
-| `queue_selection_strategy`            | `enum`                    | `RoundRobin`  | Queue attempt order: `round_robin`, `random`, or `ordered`                              |
-| `priority_rules`                      | `Vec<BrokerPriorityRule>` | `[]`          | Task-ID wildcard rules; the highest matching priority overrides task priority           |
-| `dev_mode_force_sync`                 | `bool`                    | `false`       | Execute tasks synchronously in-process (for testing)                                    |
-| `max_pending_seconds`                 | `f64`                     | `300.0`       | Max seconds an invocation can stay `Pending` before recovery re-queues it               |
-| `heartbeat_interval_seconds`          | `f64`                     | `30.0`        | How often a runner publishes its heartbeat                                              |
-| `runner_dead_after_seconds`           | `u64`                     | `300`         | Heartbeat age threshold after which a runner is considered dead                         |
-| `recovery_check_interval_seconds`     | `f64`                     | `60.0`        | How often the management loop scans for stale invocations                               |
-| `num_workers`                         | `usize`                   | CPU count     | Number of concurrent async workers per runner                                           |
-| `idle_sleep_ms`                       | `u64`                     | `100`         | Milliseconds a worker sleeps when the broker queue is empty                             |
-| `logging_level`                       | `String`                  | `"info"`      | Log level for both Rust and Python runtimes (`trace`, `debug`, `info`, `warn`, `error`) |
-| `log_format`                          | `LogFormat`               | `Text`        | Log output format: `Text` (human-readable) or `Json` (NDJSON)                           |
-| `cancellation_check_interval_seconds` | `f64`                     | `1.0`         | How often a worker re-reads a running invocation's status to notice a cancel (0 = off)  |
+| Field                                 | Type                      | Default       | Description                                                                                                                        |
+| ------------------------------------- | ------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `app_id`                              | `String`                  | `"rustvello"` | Unique identifier for the application                                                                                              |
+| `broker_queues`                       | `Vec<String>`             | `["default"]` | Logical queues available for routing; `default` is inserted when omitted                                                           |
+| `runner_queues`                       | `Vec<String>`             | `[]`          | Queues consumed by runners; empty consumes every broker queue                                                                      |
+| `queue_selection_strategy`            | `enum`                    | `RoundRobin`  | Queue attempt order: `round_robin`, `random`, or `ordered`                                                                         |
+| `priority_rules`                      | `Vec<BrokerPriorityRule>` | `[]`          | Task-ID wildcard rules; the highest matching priority overrides task priority                                                      |
+| `dev_mode_force_sync`                 | `bool`                    | `false`       | Execute tasks synchronously in-process (for testing)                                                                               |
+| `max_pending_seconds`                 | `f64`                     | `300.0`       | Max seconds an invocation can stay `Pending` before recovery re-queues it                                                          |
+| `heartbeat_interval_seconds`          | `f64`                     | `30.0`        | How often a runner publishes its heartbeat                                                                                         |
+| `runner_dead_after_seconds`           | `u64`                     | `300`         | Heartbeat age threshold after which a runner is considered dead                                                                    |
+| `recovery_check_interval_seconds`     | `f64`                     | `60.0`        | How often the management loop scans for stale invocations                                                                          |
+| `num_workers`                         | `usize`                   | CPU count     | Number of concurrent async workers per runner                                                                                      |
+| `idle_sleep_ms`                       | `u64`                     | `100`         | Longest a worker waits after finding its queues empty before it polls again (brokers that notify, like memory, may wake it sooner) |
+| `logging_level`                       | `String`                  | `"info"`      | Log level for both Rust and Python runtimes (`trace`, `debug`, `info`, `warn`, `error`)                                            |
+| `log_format`                          | `LogFormat`               | `Text`        | Log output format: `Text` (human-readable) or `Json` (NDJSON)                                                                      |
+| `cancellation_check_interval_seconds` | `f64`                     | `1.0`         | How often a worker re-reads a running invocation's status to notice a cancel (0 = off)                                             |
 
 See {doc}`../monitoring/logging` for details on the unified logging format.
 
