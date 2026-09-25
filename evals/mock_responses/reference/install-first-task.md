@@ -1,7 +1,7 @@
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-pip install "rustvello>=0.7,<0.8"
+pip install "rustvello>=0.8,<0.9"
 ```
 
 ```python

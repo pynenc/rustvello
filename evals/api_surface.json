@@ -33,7 +33,8 @@
     "TaskHandle": [
       "is_workflow_task",
       "submit",
-      "submit_with_id"
+      "submit_with_id",
+      "submit_with_key"
     ],
     "TriggerBuilder": [
       "on_cron",
@@ -210,5 +211,5 @@
       "seconds"
     ]
   },
-  "version": "0.7.0"
+  "version": "0.8.0"
 }
