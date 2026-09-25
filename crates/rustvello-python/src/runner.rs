@@ -385,6 +385,8 @@ impl PyTaskRunnerBuilder {
 
         let py_func = func.clone_ref(py);
         let task_fn: TaskFn = Arc::new(move |args_json: String| {
+            // Counted until the GIL is released: see `RunnerPythonCall`.
+            let _calling = crate::utils::RunnerPythonCall::enter();
             Python::with_gil(|py| match py_func.call1(py, (args_json,)) {
                 Ok(result) => {
                     result

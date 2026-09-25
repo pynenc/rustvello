@@ -232,3 +232,55 @@ def test_cancel_running_async_invocation_cancels_the_coroutine() -> None:
         assert ticker.starts == 1
     finally:
         app.stop()
+
+
+_CANCEL_AND_EXIT = """
+import asyncio, os, sys, tempfile, time
+from rustvello import App, InvocationCancelledError
+
+app = App(app_id="exit", backend="sqlite", db_path=os.path.join(tempfile.mkdtemp(), "e.db"))
+
+@app.task
+async def nap() -> str:
+    await asyncio.sleep(60)
+    return "done"
+
+app.run(block=False)
+try:
+    inv = nap()
+    deadline = time.monotonic() + 30
+    while str(inv.status) != "RUNNING":
+        assert time.monotonic() < deadline, inv.status
+        time.sleep(0.05)
+    inv.cancel()
+    try:
+        inv.result(timeout=30)
+    except InvocationCancelledError:
+        print("cancelled")
+finally:
+    app.stop()
+"""
+
+
+def test_process_exits_cleanly_after_cancelling_a_running_async_task(tmp_path) -> None:
+    """The interpreter must not finalize while a runner thread is still in Python.
+
+    Regression: on Linux the process aborted at exit with ``Fatal Python error:
+    PyGILState_Release`` because ``stop()`` returned before the abandoned
+    coroutine's thread (and the thread delivering the cancel) left Python.
+    """
+    import subprocess
+    import sys
+
+    script = tmp_path / "cancel_and_exit.py"
+    script.write_text(_CANCEL_AND_EXIT)
+    for _ in range(3):  # the race showed up on every run on Linux
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr[-2000:]
+        assert result.stdout.strip() == "cancelled"

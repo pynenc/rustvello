@@ -151,6 +151,11 @@ fn rustvello(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     )?)?;
 
     m.add_function(wrap_pyfunction!(
+        rustvello_python::utils::wait_runner_python_calls,
+        m
+    )?)?;
+
+    m.add_function(wrap_pyfunction!(
         rustvello_python::utils::get_current_trace_context,
         m
     )?)?;

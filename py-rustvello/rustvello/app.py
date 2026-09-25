@@ -50,6 +50,7 @@ next ``await``).
 from __future__ import annotations
 
 import asyncio
+import atexit
 import contextvars
 import dataclasses
 import inspect
@@ -59,6 +60,7 @@ import os
 import sys
 import threading
 import time
+import warnings
 from collections.abc import Sequence
 from contextlib import contextmanager
 from enum import Enum
@@ -77,6 +79,7 @@ from rustvello.rustvello import (
     get_current_num_retries,
     get_current_trace_context,
     on_attempt_abandoned,
+    wait_runner_python_calls,
 )
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -156,6 +159,19 @@ class _WorkerLoop:
 _worker_loops = threading.local()
 
 
+# Runner threads may still be in Python after a timeout or cancellation abandoned
+# their attempt; the interpreter must not finalize under them (see
+# ``wait_runner_python_calls``). ``App.stop()`` and this exit hook wait, bounded.
+_BODY_DRAIN_SECONDS = 10.0
+
+
+def _drain_runner_python_calls_at_exit() -> None:
+    wait_runner_python_calls(_BODY_DRAIN_SECONDS)
+
+
+atexit.register(_drain_runner_python_calls_at_exit)
+
+
 def _worker_event_loop() -> asyncio.AbstractEventLoop:
     """This thread's reusable worker event loop (one per worker thread or process)."""
     holder: _WorkerLoop | None = getattr(_worker_loops, "holder", None)
@@ -198,6 +214,7 @@ def _run_coroutine(coro: Any) -> Any:
     except RuntimeError:
         loop = _worker_event_loop()
         task = loop.create_task(coro)
+
         on_attempt_abandoned(lambda: _cancel_from_runner(loop, task))
         try:
             return loop.run_until_complete(task)
@@ -923,6 +940,15 @@ class App:
             if self._runner_thread.is_alive():
                 raise TimeoutError("runner shutdown timed out; task execution is still draining")
             self._runner_thread = None
+        # Abandoned (timed-out or cancelled) bodies are not part of the runner's
+        # drain; a cancelled coroutine stops at its next await.
+        if not wait_runner_python_calls(_BODY_DRAIN_SECONDS):
+            warnings.warn(
+                "rustvello: a timed-out or cancelled synchronous task body is still "
+                "running after stop(); it keeps its thread until it returns",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         if self._runner is not None:
             if self._runner.is_running():
                 return

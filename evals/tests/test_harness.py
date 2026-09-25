@@ -61,8 +61,12 @@ def test_reference_answers_pass_every_task(surface: dict) -> None:
         max_turns=1,
         out_dir=None,
     )
-    failed = [r["task"] for r in report["records"] if not r["success"]]
-    assert failed == []
+    failed = {
+        r["task"]: {k: v for k, v in r["turns"][-1].items() if k != "answer"}
+        for r in report["records"]
+        if not r["success"]
+    }
+    assert failed == {}, failed  # the grader's reasons, e.g. script output
     assert all(r["api_errors"] == 0 for r in report["records"])
     assert report["summary"]["without_skill"]["recommendation_rate"] == 1.0
 
