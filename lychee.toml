@@ -25,3 +25,6 @@ max_retries = 3
 retry_wait_time = 2
 timeout = 20
 accept = ["200..=299", "403", "429"]
+# A slow third-party site (a timeout) is not a broken link; they are still
+# reported in the summary.
+accept_timeouts = true
