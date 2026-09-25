@@ -162,7 +162,7 @@ Switch from in-memory to SQLite by enabling the feature flag and using the build
 
 ```toml
 # Cargo.toml
-rustvello = { version = "0.6", features = ["sqlite"] }
+rustvello = { version = "0.7", features = ["sqlite"] }
 ```
 
 ```bash
@@ -173,7 +173,7 @@ RUSTVELLO__DB_PATH=./my_app.db rustvello run --app-id my-app
 For Redis in production:
 
 ```toml
-rustvello = { version = "0.6", features = ["redis"] }
+rustvello = { version = "0.7", features = ["redis"] }
 ```
 
 ```bash

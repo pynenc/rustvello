@@ -6,7 +6,7 @@ from typing import Any
 # -- Project information -----------------------------------------------------
 project = "rustvello"
 author = "Luis Diaz"
-version = "0.6.0"
+version = "0.7.0"
 release = version
 current_year = datetime.datetime.now(datetime.timezone.utc).year
 copyright = f"{current_year}, {author}"
