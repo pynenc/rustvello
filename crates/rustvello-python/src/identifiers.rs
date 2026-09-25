@@ -74,6 +74,20 @@ impl PyInvocationId {
         })
     }
 
+    /// Deterministic id for an idempotency ``key`` submitted to ``task_id``.
+    ///
+    /// ``task_id`` is the full task key (``"python::module.name"``). Rust's
+    /// ``InvocationId::from_key`` returns the same id for the same inputs.
+    #[staticmethod]
+    fn from_key(task_id: &str, key: &str) -> PyResult<Self> {
+        let task_id: rustvello_proto::identifiers::TaskId = task_id
+            .parse()
+            .map_err(|e| PyValueError::new_err(format!("invalid task_id {task_id:?}: {e}")))?;
+        Ok(Self {
+            inner: rustvello_proto::identifiers::InvocationId::from_key(&task_id, key),
+        })
+    }
+
     fn __str__(&self) -> String {
         self.inner.to_string()
     }

@@ -428,11 +428,31 @@ impl InvocationId {
         Ok(Self(s))
     }
 
+    /// Deterministic invocation id for an idempotency key submitted to `task_id`.
+    ///
+    /// The id is a UUID v5 of the task id and the key, so the same key always
+    /// names the same invocation of that task, from Rust or Python, and the same
+    /// key used with two different tasks names two different invocations. Pass it
+    /// to an idempotent durable submission (`submit_with_id`) to turn a repeated
+    /// request (a client retry, a redelivered webhook) into one invocation.
+    pub fn from_key(task_id: &TaskId, key: &str) -> Self {
+        let name = format!("{task_id}\n{key}");
+        Self(Arc::from(
+            uuid::Uuid::new_v5(&IDEMPOTENCY_KEY_NAMESPACE, name.as_bytes()).to_string(),
+        ))
+    }
+
     /// Get the inner string value.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
+
+/// Namespace of invocation ids derived from idempotency keys (UUID v5).
+/// Changing it changes every derived id: never do that.
+const IDEMPOTENCY_KEY_NAMESPACE: uuid::Uuid = uuid::Uuid::from_bytes([
+    0x9b, 0x3f, 0x51, 0x0c, 0x6e, 0x2a, 0x4c, 0x7d, 0xa4, 0x18, 0x02, 0x5e, 0xd7, 0x93, 0x6b, 0x41,
+]);
 
 impl Default for InvocationId {
     fn default() -> Self {
@@ -572,6 +592,19 @@ mod tests {
         let id1 = InvocationId::new();
         let id2 = InvocationId::new();
         assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn invocation_id_from_key_is_stable_and_scoped_by_task() {
+        let task = TaskId::for_language(TaskLanguage::Python, "orders", "charge");
+        let id = InvocationId::from_key(&task, "order-42");
+        // Golden value: the Python binding asserts the same string.
+        assert_eq!(id.as_str(), "ecc07e8a-6a66-50be-8251-7657613e539d");
+        assert_eq!(id, InvocationId::from_key(&task, "order-42"));
+        assert!(InvocationId::try_from_string(id.as_str().to_owned()).is_ok());
+        assert_ne!(id, InvocationId::from_key(&task, "order-43"));
+        let other = TaskId::for_language(TaskLanguage::Python, "orders", "refund");
+        assert_ne!(id, InvocationId::from_key(&other, "order-42"));
     }
 
     #[test]
