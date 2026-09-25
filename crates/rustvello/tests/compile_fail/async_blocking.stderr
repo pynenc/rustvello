@@ -1,0 +1,5 @@
+error: async tasks run natively on the runner's async runtime; `blocking = true` is not supported on an `async fn` (use `tokio::task::spawn_blocking` inside the body)
+ --> tests/compile_fail/async_blocking.rs:2:1
+  |
+2 | async fn my_async_task(x: i32) -> i32 {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

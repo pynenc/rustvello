@@ -10,7 +10,7 @@ the invocation state machine, and the cross-language design.
 
 Rustvello also integrates with [Pynenc](https://docs.pynenc.org) as an optional high-performance
 backend plugin. While this page documents Rustvello's internal Rust design, Python users who access
-Rustvello through Pynenc can refer to the [Pynenc Architecture Docs](https://pynenc.github.io/architecture/index.html)
+Rustvello through Pynenc can refer to the [Pynenc overview](https://docs.pynenc.org/en/latest/overview.html)
 for the Python perspective.
 
 The Pynenc-specific adapter is an external consumer of Rustvello's Python and
@@ -128,12 +128,12 @@ Each layer has a single responsibility:
 └─────────────────────────────────────────────┘
 ```
 
-| Layer           | Package                                                        | Knows about pynenc?         | Contains logic?       |
-| --------------- | -------------------------------------------------------------- | --------------------------- | --------------------- |
-| Rust core       | `rustvello` (crates)                                           | No                          | All logic lives here  |
-| PyO3 bindings   | `rustvello` (wheel)                                            | No                          | Type conversion only  |
-| Python adapters | [`pynenc-rustvello`](https://pynenc-rustvello.readthedocs.io/) | Yes — satisfies pynenc ABCs | No — stateless bridge |
-| Framework       | `pynenc`                                                       | No rustvello knowledge      | Plugin discovery only |
+| Layer           | Package                                                          | Knows about pynenc?         | Contains logic?       |
+| --------------- | ---------------------------------------------------------------- | --------------------------- | --------------------- |
+| Rust core       | `rustvello` (crates)                                             | No                          | All logic lives here  |
+| PyO3 bindings   | `rustvello` (wheel)                                              | No                          | Type conversion only  |
+| Python adapters | [`pynenc-rustvello`](https://github.com/pynenc/pynenc_rustvello) | Yes — satisfies pynenc ABCs | No — stateless bridge |
+| Framework       | `pynenc`                                                         | No rustvello knowledge      | Plugin discovery only |
 
 ---
 
@@ -185,11 +185,14 @@ graph TD
 
     Killed -->|re-queue| Rerouted
 
-    Retry -->|schedule| Pending
+    Retry -->|schedule when due| Pending
+
+    Live[any non-final status] -->|user cancel| Cancelled
 
     Success --> End(( ))
     Failed --> End
     CCFinal --> End
+    Cancelled --> End
 
     classDef available fill:#22863a,color:#fff,stroke:#1a6e2e,stroke-width:2px
     classDef execution fill:#6f42c1,color:#fff,stroke:#5a32a3,stroke-width:2px
@@ -203,7 +206,7 @@ graph TD
     class Running,Paused execution
     class PR,RR,Killed recovery
     class Pending,CC queue
-    class Failed,CCFinal termFail
+    class Failed,CCFinal,Cancelled termFail
     class Success termSuccess
     class Start,End point
 ```
@@ -213,10 +216,12 @@ graph TD
 🟣 Purple: execution (Running, Paused) ·
 🟠 Orange: recovery / kill (PendingRecovery, RunningRecovery, Killed) ·
 🔵 Blue: queued (Pending, ConcurrencyControlled) ·
-🔴 Red: terminal failure (Failed, ConcurrencyControlledFinal) ·
+🔴 Red: terminal failure (Failed, ConcurrencyControlledFinal, Cancelled) ·
 ✅ Green: terminal success (Success)
 
-13 states. Terminal states: `Success`, `Failed`, `ConcurrencyControlledFinal`.
+14 states. Terminal states: `Success`, `Failed`, `Cancelled`, `ConcurrencyControlledFinal`.
+`Cancelled` is reachable from every non-final status and bypasses runner
+ownership; see {doc}`retries-timeouts-cancellation`.
 `Killed` and `Rerouted` are **not** terminal — they re-enter the lifecycle via `Rerouted` → `Pending`.
 Transitions are validated by `InvocationStatus::valid_transitions()` at runtime.
 
@@ -300,6 +305,16 @@ backend. `EventRecord` and `TriggerRunRecord` are persisted and queried through
 the backend's native storage primitives; the shared evidence contract has no
 unsupported implementation path. RabbitMQ is a broker-only component and does
 not expose a trigger store.
+
+Trigger firings go through an outbox. `claim_trigger_runs_with_records` claims a
+run, stores its record with the planned invocation id and consumes its valid
+conditions; stores that commit these together report
+`atomic_trigger_claims() == true`, the others use the trait's ordered default,
+which the next evaluator repairs. `get_pending_trigger_runs` lists claimed runs
+without an attached invocation, and the orchestrator's trigger loop publishes
+them under the run-derived invocation id, through the atomic publication port
+when the backend has one and through ordered idempotent writes otherwise. See
+{doc}`guarantees` for which backends are proven under process death.
 
 The stable monitoring DTOs live in `rustvello-proto`. Events retain payload,
 emitter, matched-condition, and produced-invocation links. Trigger runs retain
@@ -582,7 +597,7 @@ interfaces; no Pynenc-specific bridge classes live under `py-rustvello`.
 
 :::{admonition} See also: Pynenc Docs
 :class: seealso
-To see how these composites are used by the native Python orchestrator, see [Pynenc Architecture: Composites](https://pynenc.github.io/architecture/composites.html).
+To see how these composites are used by the native Python orchestrator, see the [Pynenc plugin reference](https://docs.pynenc.org/en/latest/reference/plugins.html).
 :::
 
 Composite operations bundle multiple trait calls (orchestrator, state backend,
@@ -638,7 +653,7 @@ Additional composites for less frequent but still critical operations:
 
 :::{admonition} See also: Pynenc Docs
 :class: seealso
-For details from the Python perspective, see [Pynenc Architecture: Dual Mode](https://pynenc.github.io/architecture/dual-mode.html).
+For details from the Python perspective, see the [Pynenc plugin reference](https://docs.pynenc.org/en/latest/reference/plugins.html).
 :::
 
 Rustvello supports two orchestration modes when used from Python (pynenc):
@@ -664,7 +679,7 @@ Mode selection is configuration-driven:
   (`orchestrator_cls`, `state_backend_cls`, `broker_cls`, `trigger_cls`,
   `client_data_store_cls`).
 
-See the [pynenc architecture docs](https://docs.pynenc.org/architecture/) for details.
+See the [Pynenc plugin reference](https://docs.pynenc.org/en/latest/reference/plugins.html) for details.
 
 ### Class Hierarchy (Python side)
 
@@ -744,6 +759,7 @@ The `RustvelloError` enum defines all error variants in the Rust engine:
 | `ConcurrencyRetry`                                         | Concurrency control requested a retry                                   |
 | `TaskNotFound` / `TaskNotRegistered` / `TaskClassNotFound` | Task resolution and registry errors                                     |
 | `InvocationNotFound`                                       | Invocation ID does not exist                                            |
+| `InvocationCancelled`                                      | The invocation was cancelled by a user request                          |
 | `InvalidStatusTransition`                                  | Status transition violates the FSM                                      |
 | `OwnershipViolation`                                       | Runner ownership rules were violated                                    |
 | `StatusRaceCondition`                                      | Optimistic status write detected a race                                 |
@@ -760,6 +776,7 @@ The PyO3 layer maps `RustvelloError` to typed Python exceptions in the
 ```text
 RustvelloError::ConcurrencyRetry       → ConcurrencyRetryError
 RustvelloError::InvocationNotFound     → InvocationNotFoundError
+RustvelloError::InvocationCancelled    → InvocationCancelledError
 RustvelloError::InvalidStatusTransition→ StatusTransitionError
 RustvelloError::OwnershipViolation     → StatusOwnershipError
 RustvelloError::StatusRaceCondition    → StatusRaceConditionError
@@ -783,7 +800,7 @@ structured fields such as `invocation_id` and `allowed_statuses`.
 
 :::{admonition} See also: Pynenc Docs
 :class: seealso
-To learn how runners are configured and deployed in Python, see [Pynenc Runner Usage Guide](https://pynenc.github.io/usage_guide/runner.html).
+To learn how runners are configured and deployed in Python, see [Pynenc runner reference](https://docs.pynenc.org/en/latest/reference/runners.html).
 :::
 
 In native mode, the Rust engine drives the runner loop:

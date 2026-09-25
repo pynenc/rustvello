@@ -28,6 +28,7 @@ create_exception!(rustvello, TaskClassNotFoundError, TaskError);
 // Invocation hierarchy
 create_exception!(rustvello, InvocationError, RustvelloError);
 create_exception!(rustvello, InvocationNotFoundError, InvocationError);
+create_exception!(rustvello, InvocationCancelledError, InvocationError);
 
 // Status hierarchy (under Invocation)
 create_exception!(rustvello, InvocationStatusError, InvocationError);
@@ -117,6 +118,16 @@ fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
         CoreError::InvocationNotFound { invocation_id } => {
             let err =
                 InvocationNotFoundError::new_err(format!("invocation not found: {invocation_id}"));
+            let _ = err
+                .value_bound(py)
+                .setattr("invocation_id", invocation_id.to_string());
+            err
+        }
+
+        CoreError::InvocationCancelled { invocation_id } => {
+            let err = InvocationCancelledError::new_err(format!(
+                "invocation {invocation_id} was cancelled"
+            ));
             let _ = err
                 .value_bound(py)
                 .setattr("invocation_id", invocation_id.to_string());
@@ -270,6 +281,10 @@ pub fn register_exceptions(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<
     m.add(
         "InvocationNotFoundError",
         py.get_type_bound::<InvocationNotFoundError>(),
+    )?;
+    m.add(
+        "InvocationCancelledError",
+        py.get_type_bound::<InvocationCancelledError>(),
     )?;
 
     // Status

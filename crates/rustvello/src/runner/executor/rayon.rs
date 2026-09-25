@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use tokio::sync::Semaphore;
 
 use rustvello_core::context::{
-    clear_thread_invocation_context, clear_thread_runner_context, set_thread_invocation_context,
+    clear_thread_attempt_signal, clear_thread_invocation_context, clear_thread_runner_context,
+    current_attempt_signal, set_thread_attempt_signal, set_thread_invocation_context,
     set_thread_runner_context, InvocationContext, RunnerContext,
 };
 use rustvello_core::error::{RustvelloError, RustvelloResult};
@@ -57,11 +58,20 @@ impl TaskExecutor for RayonExecutor {
             .map_err(|error| RustvelloError::Internal {
                 message: format!("rayon executor closed: {error}"),
             })?;
+        if task.is_async() {
+            // Async bodies wait on I/O, not CPU: await them on the runtime and
+            // keep the Rayon threads for compute. The permit still bounds them.
+            let _permit = permit;
+            return super::execute_native_async(task, args, invocation_context, runner_context)
+                .await;
+        }
         let (sender, receiver) = tokio::sync::oneshot::channel();
+        let thread_signal = current_attempt_signal();
         self.pool.spawn(move || {
             let _permit = permit;
             set_thread_runner_context(runner_context);
             set_thread_invocation_context(invocation_context);
+            set_thread_attempt_signal(thread_signal);
             let _trace_guard = extract_w3c_trace_context(
                 &rustvello_core::context::get_invocation_context()
                     .expect("invocation context set")
@@ -70,6 +80,7 @@ impl TaskExecutor for RayonExecutor {
             .attach();
             let result =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task.execute(&args)));
+            clear_thread_attempt_signal();
             clear_thread_invocation_context();
             clear_thread_runner_context();
             let _ =

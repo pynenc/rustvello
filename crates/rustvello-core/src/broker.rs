@@ -56,6 +56,39 @@ pub trait Broker: Send + Sync {
         priority: f64,
     ) -> RustvelloResult<()>;
 
+    /// Whether [`Self::route_invocation_after`] stores the delay durably in
+    /// the broker, so a delayed delivery survives a worker restart.
+    ///
+    /// Brokers returning `false` keep the default implementation, which
+    /// fails; callers must then decide how to degrade (the runner retries
+    /// immediately and logs a warning).
+    fn supports_delayed_delivery(&self) -> bool {
+        false
+    }
+
+    /// Queue an invocation that must not be delivered before `delay` has
+    /// elapsed.
+    ///
+    /// The not-before time is persisted with the queued entry and measured
+    /// on the broker's clock where the backend has one (database time), so
+    /// a worker crash or restart during the delay neither loses nor
+    /// duplicates the delivery. Delayed entries are invisible to retrieval
+    /// and to queue counts until they are due.
+    async fn route_invocation_after(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: Option<&TaskId>,
+        queue_name: &str,
+        priority: f64,
+        delay: std::time::Duration,
+    ) -> RustvelloResult<()> {
+        let _ = (invocation_id, task_id, queue_name, priority, delay);
+        Err(RustvelloError::NotSupported {
+            backend: "broker".to_owned(),
+            method: "route_invocation_after (durable delayed delivery)".to_owned(),
+        })
+    }
+
     /// Retrieve from one logical queue, optionally filtered by task.
     async fn retrieve_invocation_from_queue(
         &self,

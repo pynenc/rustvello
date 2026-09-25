@@ -56,6 +56,26 @@ use syn::{
 /// }
 /// ```
 ///
+/// # Async tasks
+///
+/// An `async fn` becomes a task whose body the runner awaits natively on its
+/// Tokio runtime: it holds no blocking thread while it waits on I/O, and the
+/// worker count still bounds how many run at once. The invocation context,
+/// W3C trace context and tracing span follow the future across `.await`
+/// points, and retries, results and errors behave as for synchronous tasks.
+/// The future must be `Send`.
+///
+/// ```rust,ignore
+/// #[rustvello::task(max_retries = 2)]
+/// async fn fetch_length(url: String) -> RustvelloResult<usize> {
+///     let body = http_get(&url).await?;
+///     Ok(body.len())
+/// }
+/// ```
+///
+/// `blocking = true` is rejected on an `async fn`; move blocking sections into
+/// `tokio::task::spawn_blocking` inside the body instead.
+///
 /// # Supported attributes
 ///
 /// | Attribute       | Type       | Description                                     |
@@ -74,6 +94,12 @@ use syn::{
 /// | `blocking`      | `bool`     | Run on a blocking thread                         |
 /// | `queue`         | `&str`     | Logical broker queue                             |
 /// | `priority`      | `f64`      | Broker priority from -100.0 through 100.0       |
+/// | `retry_delay_ms` | `u64`     | First retry delay; 0 (default) retries at once   |
+/// | `retry_max_delay_ms` | `u64` | Cap of the exponential delay (default 300000)    |
+/// | `retry_backoff` | `f64`      | Delay growth factor per retry (default 2.0)      |
+/// | `retry_jitter`  | `&str`     | "equal" (default), "full" or "none"              |
+/// | `timeout_ms`    | `u64`      | Execution deadline of one attempt                |
+/// | `retry_on_timeout` | `bool`  | Whether timed-out attempts may retry (default true) |
 #[proc_macro_attribute]
 pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attrs = parse_macro_input!(attr as TaskAttrs);
@@ -122,6 +148,18 @@ struct TaskAttrs {
     blocking: Option<bool>,
     queue: Option<String>,
     priority: Option<f64>,
+    retry: RetryAttrs,
+}
+
+/// Retry backoff and deadline attributes (all optional).
+#[derive(Default)]
+struct RetryAttrs {
+    retry_delay_ms: Option<u64>,
+    retry_max_delay_ms: Option<u64>,
+    retry_backoff: Option<f64>,
+    retry_jitter: Option<String>,
+    timeout_ms: Option<u64>,
+    retry_on_timeout: Option<bool>,
 }
 
 impl Parse for TaskAttrs {
@@ -140,6 +178,7 @@ impl Parse for TaskAttrs {
         let mut blocking = None;
         let mut queue = None;
         let mut priority = None;
+        let mut retry = RetryAttrs::default();
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -258,6 +297,63 @@ impl Parse for TaskAttrs {
                     let lit: LitInt = input.parse()?;
                     parallel_batch_size = Some(lit.base10_parse()?);
                 }
+                "retry_delay_ms" => {
+                    check_dup!(retry.retry_delay_ms);
+                    let lit: LitInt = input.parse()?;
+                    retry.retry_delay_ms = Some(lit.base10_parse()?);
+                }
+                "retry_max_delay_ms" => {
+                    check_dup!(retry.retry_max_delay_ms);
+                    let lit: LitInt = input.parse()?;
+                    retry.retry_max_delay_ms = Some(lit.base10_parse()?);
+                }
+                "timeout_ms" => {
+                    check_dup!(retry.timeout_ms);
+                    let lit: LitInt = input.parse()?;
+                    let value: u64 = lit.base10_parse()?;
+                    if value == 0 {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "timeout_ms must be greater than 0 (omit it for no deadline)",
+                        ));
+                    }
+                    retry.timeout_ms = Some(value);
+                }
+                "retry_backoff" => {
+                    check_dup!(retry.retry_backoff);
+                    let lit: syn::Lit = input.parse()?;
+                    let value = match lit {
+                        syn::Lit::Float(lit) => lit.base10_parse::<f64>()?,
+                        syn::Lit::Int(lit) => lit.base10_parse::<f64>()?,
+                        other => {
+                            return Err(syn::Error::new_spanned(
+                                other,
+                                "retry_backoff must be a numeric literal",
+                            ));
+                        }
+                    };
+                    if !value.is_finite() || value < 1.0 {
+                        return Err(syn::Error::new(key.span(), "retry_backoff must be >= 1.0"));
+                    }
+                    retry.retry_backoff = Some(value);
+                }
+                "retry_jitter" => {
+                    check_dup!(retry.retry_jitter);
+                    let lit: LitStr = input.parse()?;
+                    let value = lit.value();
+                    if !matches!(value.as_str(), "none" | "full" | "equal") {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "retry_jitter must be \"none\", \"full\" or \"equal\"",
+                        ));
+                    }
+                    retry.retry_jitter = Some(value);
+                }
+                "retry_on_timeout" => {
+                    check_dup!(retry.retry_on_timeout);
+                    let lit: LitBool = input.parse()?;
+                    retry.retry_on_timeout = Some(lit.value());
+                }
                 other => {
                     let known = [
                         "max_retries",
@@ -274,6 +370,12 @@ impl Parse for TaskAttrs {
                         "blocking",
                         "queue",
                         "priority",
+                        "retry_delay_ms",
+                        "retry_max_delay_ms",
+                        "retry_backoff",
+                        "retry_jitter",
+                        "timeout_ms",
+                        "retry_on_timeout",
                     ];
                     let suggestion = known
                         .iter()
@@ -323,6 +425,7 @@ impl Parse for TaskAttrs {
             blocking,
             queue,
             priority,
+            retry,
         })
     }
 }
@@ -347,6 +450,14 @@ fn validate_concurrency_str(lit: &LitStr) -> syn::Result<()> {
 fn expand_task(attrs: TaskAttrs, func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
     validate_function(&func)?;
     validate_attrs_against_params(&attrs, &func)?;
+    let is_async = func.sig.asyncness.is_some();
+    if is_async && attrs.blocking == Some(true) {
+        return Err(syn::Error::new_spanned(
+            &func.sig,
+            "async tasks run natively on the runner's async runtime; `blocking = true` is not \
+             supported on an `async fn` (use `tokio::task::spawn_blocking` inside the body)",
+        ));
+    }
 
     let fn_name = &func.sig.ident;
     let fn_name_str = fn_name.to_string();
@@ -371,7 +482,7 @@ fn expand_task(attrs: TaskAttrs, func: ItemFn) -> syn::Result<proc_macro2::Token
     let param_names: Vec<&Ident> = params.iter().map(|(name, _)| name).collect();
 
     // Config builder
-    let config_body = build_config(&attrs, &proto_path);
+    let config_body = build_config(&attrs, &proto_path, is_async);
 
     // Module for TaskId
     let module_expr = match &attrs.module {
@@ -384,11 +495,61 @@ fn expand_task(attrs: TaskAttrs, func: ItemFn) -> syn::Result<proc_macro2::Token
     } else {
         quote! { #fn_name(#(#param_names),*) }
     };
+    let fn_call = if is_async {
+        quote! { #fn_call.await }
+    } else {
+        fn_call
+    };
 
     let run_body = if wrap_ok {
         quote! { Ok(#fn_call) }
     } else {
         quote! { #fn_call }
+    };
+
+    let params_type = if params.is_empty() {
+        quote! { () }
+    } else {
+        quote! { #params_struct }
+    };
+    let destructure = if params.is_empty() {
+        quote! { let _: () = params; }
+    } else {
+        quote! { let #params_struct { #(#param_names),* } = params; }
+    };
+    let run_methods = if is_async {
+        quote! {
+            fn is_async(&self) -> bool {
+                true
+            }
+
+            fn run(
+                &self,
+                params: #params_type,
+            ) -> #core_path::error::RustvelloResult<#result_type> {
+                #core_path::task::block_on_task_future(
+                    #core_path::task::Task::run_async(self, params),
+                )
+            }
+
+            fn run_async(
+                &self,
+                params: #params_type,
+            ) -> #core_path::task::TaskFuture<'_, #result_type> {
+                #destructure
+                ::std::boxed::Box::pin(async move { #run_body })
+            }
+        }
+    } else {
+        quote! {
+            fn run(
+                &self,
+                params: #params_type,
+            ) -> #core_path::error::RustvelloResult<#result_type> {
+                #destructure
+                #run_body
+            }
+        }
     };
 
     let generated = if params.is_empty() {
@@ -403,7 +564,7 @@ fn expand_task(attrs: TaskAttrs, func: ItemFn) -> syn::Result<proc_macro2::Token
             fn_name_str.as_str(),
             &result_type,
             &config_body,
-            &run_body,
+            &run_methods,
         )
     } else {
         generate_with_params(
@@ -420,23 +581,16 @@ fn expand_task(attrs: TaskAttrs, func: ItemFn) -> syn::Result<proc_macro2::Token
             fn_name_str.as_str(),
             &result_type,
             &config_body,
-            &run_body,
+            &run_methods,
             &params,
-            &param_names,
         )
     };
 
     Ok(generated)
 }
 
-/// Reject unsupported function forms (async, unsafe, generic).
+/// Reject unsupported function forms (unsafe, generic).
 fn validate_function(func: &ItemFn) -> syn::Result<()> {
-    if func.sig.asyncness.is_some() {
-        return Err(syn::Error::new_spanned(
-            &func.sig,
-            "#[rustvello::task] does not support async functions yet",
-        ));
-    }
     if func.sig.unsafety.is_some() {
         return Err(syn::Error::new_spanned(
             &func.sig,
@@ -504,7 +658,7 @@ fn generate_no_params(
     fn_name_str: &str,
     result_type: &proc_macro2::TokenStream,
     config_body: &proc_macro2::TokenStream,
-    run_body: &proc_macro2::TokenStream,
+    run_methods: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     quote! {
         #func
@@ -542,12 +696,7 @@ fn generate_no_params(
                 &self.config
             }
 
-            fn run(
-                &self,
-                _params: (),
-            ) -> #core_path::error::RustvelloResult<#result_type> {
-                #run_body
-            }
+            #run_methods
         }
 
         fn #fn_name_register(
@@ -580,9 +729,8 @@ fn generate_with_params(
     fn_name_str: &str,
     result_type: &proc_macro2::TokenStream,
     config_body: &proc_macro2::TokenStream,
-    run_body: &proc_macro2::TokenStream,
+    run_methods: &proc_macro2::TokenStream,
     params: &[(Ident, Type)],
-    param_names: &[&Ident],
 ) -> proc_macro2::TokenStream {
     let param_fields: Vec<_> = params
         .iter()
@@ -631,13 +779,7 @@ fn generate_with_params(
                 &self.config
             }
 
-            fn run(
-                &self,
-                params: #params_struct,
-            ) -> #core_path::error::RustvelloResult<#result_type> {
-                let #params_struct { #(#param_names),* } = params;
-                #run_body
-            }
+            #run_methods
         }
 
         fn #fn_name_register(
@@ -723,6 +865,7 @@ fn unwrap_result_type(ty: &Type) -> Option<&Type> {
 fn build_config(
     attrs: &TaskAttrs,
     proto_path: &proc_macro2::TokenStream,
+    is_async: bool,
 ) -> proc_macro2::TokenStream {
     let base = quote! { let mut config = #proto_path::config::TaskConfig::default(); };
     let mut setters = Vec::new();
@@ -772,9 +915,12 @@ fn build_config(
     }
 
     if attrs.is_workflow_task {
+        // Synchronous workflow bodies block on child results, so they need a
+        // blocking thread; async workflow bodies await them on the runtime.
+        let blocking = !is_async;
         setters.push(quote! {
             config.is_workflow_task = true;
-            config.blocking = true;
+            config.blocking = #blocking;
         });
     }
 
@@ -796,6 +942,33 @@ fn build_config(
 
     if let Some(batch) = attrs.parallel_batch_size {
         setters.push(quote! { config.parallel_batch_size = #batch; });
+    }
+
+    let retry = &attrs.retry;
+    if let Some(ms) = retry.retry_delay_ms {
+        setters.push(quote! { config.retry_delay_ms = #ms; });
+    }
+    if let Some(ms) = retry.retry_max_delay_ms {
+        setters.push(quote! { config.retry_max_delay_ms = #ms; });
+    }
+    if let Some(factor) = retry.retry_backoff {
+        setters.push(quote! { config.retry_backoff = #factor; });
+    }
+    if let Some(ref jitter) = retry.retry_jitter {
+        let variant = match jitter.as_str() {
+            "none" => quote! { None },
+            "full" => quote! { Full },
+            _ => quote! { Equal },
+        };
+        setters.push(quote! {
+            config.retry_jitter = #proto_path::config::RetryJitter::#variant;
+        });
+    }
+    if let Some(ms) = retry.timeout_ms {
+        setters.push(quote! { config.timeout_ms = ::core::option::Option::Some(#ms); });
+    }
+    if let Some(flag) = retry.retry_on_timeout {
+        setters.push(quote! { config.retry_on_timeout = #flag; });
     }
 
     quote! {

@@ -291,6 +291,7 @@ fn trigger_run_round_trip_preserves_participant_mapping() {
         }],
         claimed_at: chrono::Utc::now(),
         executed_at: None,
+        planned_invocation_id: None,
         triggered_invocation_id: None,
         atomic_service_run_id: None,
         atomic_service_runner_id: None,

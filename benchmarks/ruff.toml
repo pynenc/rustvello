@@ -1,0 +1,7 @@
+# The benchmark harness is a standalone script set, linted like py-rustvello.
+target-version = "py310"
+line-length = 120
+
+[lint]
+select = ["E", "W", "F", "I", "C", "B", "UP"]
+ignore = ["E501", "C901"]

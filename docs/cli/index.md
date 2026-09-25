@@ -69,17 +69,36 @@ unrelated `status render` subcommand under the same public command name.
 
 ---
 
+### `cancel` — Cancel an Invocation
+
+```bash
+rustvello cancel <INVOCATION_ID> --db-path <PATH> [OPTIONS]
+```
+
+| Option                 | Description                                 |
+| ---------------------- | ------------------------------------------- |
+| `-a, --app-id <ID>`    | Application namespace (default `rustvello`) |
+| `-d, --db-path <PATH>` | SQLite database path                        |
+
+Moves an unfinished invocation (queued, backing off before a retry, or running)
+to `CANCELLED`. A running attempt is abandoned by its worker within
+`cancellation_check_interval_seconds`. An invocation that already finished is
+left unchanged and the command exits with code `3`. See
+{doc}`../retries-timeouts-cancellation`.
+
+---
+
 ### `list` — List Invocations
 
 ```bash
 rustvello list [OPTIONS]
 ```
 
-| Option                  | Description                                                                        |
-| ----------------------- | ---------------------------------------------------------------------------------- |
-| `-s, --status <STATUS>` | Filter by status: `REGISTERED`, `PENDING`, `RUNNING`, `SUCCESS`, `FAILED`, `RETRY` |
-| `-t, --task <TASK_ID>`  | Filter by task ID (format: `module.name`)                                          |
-| `-d, --db-path <PATH>`  | SQLite database path                                                               |
+| Option                  | Description                                                                                     |
+| ----------------------- | ----------------------------------------------------------------------------------------------- |
+| `-s, --status <STATUS>` | Filter by status: `REGISTERED`, `PENDING`, `RUNNING`, `SUCCESS`, `FAILED`, `RETRY`, `CANCELLED` |
+| `-t, --task <TASK_ID>`  | Filter by task ID (format: `module.name`)                                                       |
+| `-d, --db-path <PATH>`  | SQLite database path                                                                            |
 
 **Example:**
 
@@ -114,7 +133,7 @@ This action is irreversible.
 rustvello info
 ```
 
-Prints version, compiled feature flags, and runtime information.
+Prints the version and the documentation and repository links.
 
 ---
 

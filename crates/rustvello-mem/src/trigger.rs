@@ -168,13 +168,15 @@ impl TriggerStore for MemTriggerStore {
             .triggers
             .insert(trigger.trigger_id.as_str().to_owned(), trigger.clone());
 
-        // Index condition -> trigger
+        // Index condition -> trigger; registering the same trigger again is a no-op.
         for cid in &trigger.condition_ids {
-            state
+            let ids = state
                 .condition_triggers
                 .entry(cid.as_str().to_owned())
-                .or_default()
-                .push(trigger.trigger_id.clone());
+                .or_default();
+            if !ids.contains(&trigger.trigger_id) {
+                ids.push(trigger.trigger_id.clone());
+            }
         }
 
         Ok(())
@@ -396,6 +398,34 @@ impl TriggerStore for MemTriggerStore {
         Ok(runs)
     }
 
+    async fn claim_trigger_runs_with_records(
+        &self,
+        records: &[TriggerRunRecord],
+        consumed: &[String],
+    ) -> RustvelloResult<Vec<bool>> {
+        let mut state = self.state.lock().await;
+        let mut claimed = Vec::with_capacity(records.len());
+        for record in records {
+            let key = record.trigger_run_id.as_str().to_owned();
+            let first = !state.trigger_run_claims.contains_key(&key);
+            if first {
+                state.trigger_run_claims.insert(key.clone(), Utc::now());
+            }
+            if first || !state.trigger_runs.contains_key(&key) {
+                state.trigger_runs.insert(key, record.clone());
+            }
+            claimed.push(first);
+        }
+        for id in consumed {
+            state.valid_conditions.remove(id);
+        }
+        Ok(claimed)
+    }
+
+    fn atomic_trigger_claims(&self) -> bool {
+        true
+    }
+
     async fn purge(&self) -> RustvelloResult<()> {
         let mut state = self.state.lock().await;
         state.conditions.clear();
@@ -507,6 +537,34 @@ mod tests {
 
         let got = store.get_trigger(&trigger_id).await.unwrap();
         assert!(got.is_some());
+    }
+
+    #[tokio::test]
+    async fn registering_a_trigger_twice_indexes_it_once() {
+        let store = MemTriggerStore::new();
+        let cond_id = ConditionId::from("c1".to_string());
+        let task_id = TaskId::new("mod", "target");
+        let trigger = TriggerDefinitionDTO {
+            trigger_id: TriggerDefinitionDTO::compute_trigger_id(
+                &task_id,
+                &[cond_id.clone()],
+                TriggerLogic::And,
+            ),
+            task_id,
+            condition_ids: vec![cond_id.clone()],
+            logic: TriggerLogic::And,
+            argument_template: None,
+        };
+        store.register_trigger(&trigger).await.unwrap();
+        store.register_trigger(&trigger).await.unwrap();
+        assert_eq!(
+            store
+                .get_triggers_for_condition(&cond_id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

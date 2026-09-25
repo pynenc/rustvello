@@ -64,14 +64,14 @@ class TestDecorator:
         assert sync_app._task_configs[key]["max_retries"] == 3
         assert sync_app._task_configs[key]["cache_results"] is True
 
-    def test_async_task_is_rejected_at_registration(self, sync_app: App) -> None:
-        """The standalone runner accepts synchronous Python callables only."""
+    def test_async_task_is_awaited(self, sync_app: App) -> None:
+        """``async def`` tasks are accepted; dev mode awaits the coroutine inline."""
 
-        with pytest.raises(TypeError, match="synchronous callable"):
+        @sync_app.task
+        async def async_task(x: int) -> int:
+            return x
 
-            @sync_app.task
-            async def async_task(x: int) -> int:
-                return x
+        assert async_task(3).result(timeout=5) == 3
 
 
 # ---------------------------------------------------------------------------

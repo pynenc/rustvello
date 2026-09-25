@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
-use rustvello_monitoring::{start_monitor as serve, AppInstance, MonitorConfig};
+use rustvello_monitoring::{serve_on, AppInstance};
 use rustvello_proto::config::AppConfig;
 
 use crate::backend_extract::{
@@ -72,6 +72,8 @@ pub fn start_monitor(
     log_level: &str,
     config: Option<PyAppConfig>,
 ) -> PyResult<PyMonitorServer> {
+    // Logging is configured process-wide (`init_logging`); kept for compatibility.
+    let _ = log_level;
     let bind: SocketAddr = format!("{host}:{port}").parse().map_err(|error| {
         pyo3::exceptions::PyValueError::new_err(format!(
             "invalid bind address {host}:{port}: {error}"
@@ -98,18 +100,23 @@ pub fn start_monitor(
     };
     let mut apps = HashMap::new();
     apps.insert(app_id.to_owned(), instance);
-    let monitor_config = MonitorConfig {
-        bind,
-        log_level: log_level.to_owned(),
-    };
     let selected = app_id.to_owned();
-    let handle = shared_runtime()?.spawn(async move {
-        if let Err(error) = serve(apps, &selected, monitor_config).await {
+    let runtime = shared_runtime()?;
+    // Bind before returning: bind errors raise here, requests made right after
+    // this call are accepted, and port 0 reports the port actually chosen.
+    let listener = runtime
+        .block_on(tokio::net::TcpListener::bind(bind))
+        .map_err(|error| {
+            pyo3::exceptions::PyOSError::new_err(format!("cannot bind {bind}: {error}"))
+        })?;
+    let address = listener.local_addr().map_or(bind, |address| address);
+    let handle = runtime.spawn(async move {
+        if let Err(error) = serve_on(apps, &selected, listener).await {
             eprintln!("rustvello monitoring server stopped: {error}");
         }
     });
     Ok(PyMonitorServer {
         handle: Some(handle),
-        address: bind.to_string(),
+        address: address.to_string(),
     })
 }

@@ -4,7 +4,7 @@
 //! lifecycle management and task registration.
 
 use rustvello_proto::call::SerializedArguments;
-use rustvello_proto::config::TaskConfig;
+use rustvello_proto::config::{RetryJitter, TaskConfig};
 use rustvello_proto::status::ConcurrencyControlType;
 
 /// Partial task config overrides (each field is optional).
@@ -27,6 +27,19 @@ pub struct TaskConfigOverride {
     pub is_workflow_task: Option<bool>,
     pub reroute_on_cc: Option<bool>,
     pub blocking: Option<bool>,
+    #[serde(default)]
+    pub retry_delay_ms: Option<u64>,
+    #[serde(default)]
+    pub retry_max_delay_ms: Option<u64>,
+    #[serde(default)]
+    pub retry_backoff: Option<f64>,
+    #[serde(default)]
+    pub retry_jitter: Option<RetryJitter>,
+    /// `Some(None)` clears a deadline set in code.
+    #[serde(default)]
+    pub timeout_ms: Option<Option<u64>>,
+    #[serde(default)]
+    pub retry_on_timeout: Option<bool>,
 }
 
 pub(crate) fn concurrency_arguments(
@@ -100,6 +113,24 @@ impl TaskConfigOverride {
         if let Some(v) = self.blocking {
             config.blocking = v;
         }
+        if let Some(v) = self.retry_delay_ms {
+            config.retry_delay_ms = v;
+        }
+        if let Some(v) = self.retry_max_delay_ms {
+            config.retry_max_delay_ms = v;
+        }
+        if let Some(v) = self.retry_backoff {
+            config.retry_backoff = v;
+        }
+        if let Some(v) = self.retry_jitter {
+            config.retry_jitter = v;
+        }
+        if let Some(v) = self.timeout_ms {
+            config.timeout_ms = v;
+        }
+        if let Some(v) = self.retry_on_timeout {
+            config.retry_on_timeout = v;
+        }
     }
 }
 
@@ -156,6 +187,35 @@ pub(crate) fn apply_task_env_overrides(prefix: &str, config: &mut TaskConfig) {
     if let Some(val) = env(prefix, "REROUTE_ON_CC") {
         if let Ok(b) = val.parse::<bool>() {
             config.reroute_on_cc = b;
+        }
+    }
+    if let Some(val) = env(prefix, "RETRY_DELAY_MS") {
+        if let Ok(ms) = val.parse::<u64>() {
+            config.retry_delay_ms = ms;
+        }
+    }
+    if let Some(val) = env(prefix, "RETRY_MAX_DELAY_MS") {
+        if let Ok(ms) = val.parse::<u64>() {
+            config.retry_max_delay_ms = ms;
+        }
+    }
+    if let Some(val) = env(prefix, "RETRY_BACKOFF") {
+        if let Ok(factor) = val.parse::<f64>() {
+            config.retry_backoff = factor;
+        }
+    }
+    if let Some(val) = env(prefix, "RETRY_JITTER") {
+        if let Ok(jitter) = val.parse::<RetryJitter>() {
+            config.retry_jitter = jitter;
+        }
+    }
+    if let Some(val) = env(prefix, "TIMEOUT_MS") {
+        // 0 or an empty value clears the deadline.
+        config.timeout_ms = val.parse::<u64>().ok().filter(|ms| *ms > 0);
+    }
+    if let Some(val) = env(prefix, "RETRY_ON_TIMEOUT") {
+        if let Ok(b) = val.parse::<bool>() {
+            config.retry_on_timeout = b;
         }
     }
 }

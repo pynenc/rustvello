@@ -1,0 +1,103 @@
+{
+  "invocation": {
+    "id": "d9358ccb-de9e-40ef-bd12-28ecbdc1eaf2",
+    "task_id": "python::reports.build_report",
+    "call_id": "python::reports.build_report:26307c8f9de9d4f138485900fbe4fe6cf5e1828c984ea86d6954682a45476e4f",
+    "status": "Failed",
+    "parent_invocation_id": null,
+    "workflow": null
+  },
+  "error": {
+    "error_type": "TaskTimeoutError",
+    "message": "attempt exceeded its execution deadline of 2000 ms",
+    "traceback": null
+  },
+  "registration": {
+    "timestamp": "2026-09-25T16:32:43.450350+00:00",
+    "runner_id": "worker-1-4242",
+    "runner": {
+      "class": "ExternalRunner",
+      "language": "rust",
+      "executor": "tokio",
+      "hostname": "worker-1",
+      "pid": 4242
+    },
+    "atomic_service_execution": null,
+    "trigger_runs": []
+  },
+  "history": [
+    {
+      "status": "Registered",
+      "timestamp": "2026-09-25T16:32:43.450350+00:00",
+      "message": null,
+      "runner_id": "worker-1-4242",
+      "runner": {
+        "class": "ExternalRunner",
+        "language": "rust",
+        "executor": "tokio",
+        "hostname": "worker-1",
+        "pid": 4242,
+        "thread_id": 1,
+        "parent_runner_id": null,
+        "parent_runner_class": null
+      },
+      "registered_by_invocation_id": null
+    },
+    {
+      "status": "Pending",
+      "timestamp": "2026-09-25T16:32:43.530844+00:00",
+      "message": null,
+      "runner_id": "69ec7557-9611-4c1c-853a-e7ca80d6c2cd",
+      "runner": {
+        "class": "PersistentTokioWorker",
+        "language": "python",
+        "executor": "python",
+        "hostname": "worker-1",
+        "pid": 4242,
+        "thread_id": 13,
+        "parent_runner_id": "46f1f165-867b-4434-8f28-352a8a5df3f3",
+        "parent_runner_class": "PersistentTokioRunner"
+      },
+      "registered_by_invocation_id": null
+    },
+    {
+      "status": "Running",
+      "timestamp": "2026-09-25T16:32:43.531102+00:00",
+      "message": null,
+      "runner_id": "69ec7557-9611-4c1c-853a-e7ca80d6c2cd",
+      "runner": {
+        "class": "PersistentTokioWorker",
+        "language": "python",
+        "executor": "python",
+        "hostname": "worker-1",
+        "pid": 4242,
+        "thread_id": 13,
+        "parent_runner_id": "46f1f165-867b-4434-8f28-352a8a5df3f3",
+        "parent_runner_class": "PersistentTokioRunner"
+      },
+      "registered_by_invocation_id": null
+    },
+    {
+      "status": "Failed",
+      "timestamp": "2026-09-25T16:32:45.534108+00:00",
+      "message": null,
+      "runner_id": "69ec7557-9611-4c1c-853a-e7ca80d6c2cd",
+      "runner": {
+        "class": "PersistentTokioWorker",
+        "language": "python",
+        "executor": "python",
+        "hostname": "worker-1",
+        "pid": 4242,
+        "thread_id": 13,
+        "parent_runner_id": "46f1f165-867b-4434-8f28-352a8a5df3f3",
+        "parent_runner_class": "PersistentTokioRunner"
+      },
+      "registered_by_invocation_id": null
+    }
+  ],
+  "integrity": {
+    "has_registered_event": true,
+    "registration_runner_known": true,
+    "registration_in_atomic_service_window": false
+  }
+}

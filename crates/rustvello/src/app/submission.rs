@@ -123,6 +123,23 @@ impl RustvelloApp {
         Ok(record.status)
     }
 
+    /// Cancel an invocation that has not finished yet.
+    ///
+    /// Queued or backing-off invocations never run; a running attempt is
+    /// abandoned by its worker within `cancellation_check_interval_seconds`
+    /// and its late result is discarded. Finished invocations are left
+    /// untouched ([`CancelOutcome::AlreadyFinal`]). See the "Retries,
+    /// timeouts and cancellation" guide for side-effect semantics.
+    pub async fn cancel(
+        &self,
+        invocation_id: &InvocationId,
+    ) -> RustvelloResult<crate::orchestration::CancelOutcome> {
+        let runner_id = rustvello_core::context::get_or_create_runner_context().runner_id;
+        self.orchestrator
+            .cancel_invocation(invocation_id, &runner_id)
+            .await
+    }
+
     /// Get the result of a completed invocation.
     pub async fn get_result(
         &self,
@@ -192,6 +209,27 @@ impl RustvelloApp {
         ))
     }
 
+    /// Submit a typed task at most once per idempotency `key`.
+    ///
+    /// The invocation id is [`InvocationId::from_key`] of the task and the key,
+    /// and the submission is [`submit_call_with_id`](Self::submit_call_with_id):
+    /// repeating it with the same key, arguments and lineage returns the same
+    /// invocation instead of creating another one; the same key with different
+    /// arguments fails. Needs a backend with atomic publication (SQLite or
+    /// PostgreSQL); others fail closed. The key deduplicates *submissions*:
+    /// the task body still runs at least once (see the idempotency guide).
+    pub async fn submit_call_with_key<T: Task>(
+        &self,
+        key: &str,
+        task: &T,
+        params: T::Params,
+        trace_context: Option<TraceContextCarrier>,
+    ) -> RustvelloResult<InvocationHandle<T::Result>> {
+        let invocation_id = InvocationId::from_key(task.task_id(), key);
+        self.submit_call_with_id(invocation_id, task, params, trace_context)
+            .await
+    }
+
     /// Submit a typed foreign task for distributed execution.
     ///
     /// The task is registered and routed exactly like any other task, but only
@@ -219,7 +257,9 @@ impl RustvelloApp {
     /// Execute a typed task synchronously (dev mode).
     ///
     /// Bypasses the broker/runner — executes immediately in the current thread.
-    /// Returns the typed result directly.
+    /// Returns the typed result directly. An async task is driven to completion
+    /// with [`rustvello_core::task::block_on_task_future`]; prefer
+    /// [`RustvelloApp::call`] from async code.
     pub fn execute_sync<T: Task>(&self, task: &T, params: T::Params) -> RustvelloResult<T::Result> {
         task.run(params)
     }
@@ -250,7 +290,9 @@ impl RustvelloApp {
         }
 
         if self.config.dev_mode_force_sync {
-            Ok(Invocation::Sync(Self::run_sync_with_retries(task, params)))
+            Ok(Invocation::Sync(
+                Self::run_sync_with_retries(task, params).await,
+            ))
         } else {
             // Distributed path: delegate to submit_call
             let handle = self.submit_call(task, params).await?;
@@ -260,8 +302,12 @@ impl RustvelloApp {
 
     /// Execute a task synchronously with retry logic.
     ///
-    /// Mirrors pynenc's `ConcurrentInvocation` retry behaviour.
-    fn run_sync_with_retries<T: Task>(task: &T, params: T::Params) -> SyncInvocation<T::Result>
+    /// Mirrors pynenc's `ConcurrentInvocation` retry behaviour. Async task
+    /// bodies are awaited in place; synchronous bodies run inline as before.
+    async fn run_sync_with_retries<T: Task>(
+        task: &T,
+        params: T::Params,
+    ) -> SyncInvocation<T::Result>
     where
         T::Params: Clone,
     {
@@ -270,7 +316,7 @@ impl RustvelloApp {
 
         let mut last_err = None;
         for attempt in 0..=max_retries {
-            match task.run(params.clone()) {
+            match task.run_async(params.clone()).await {
                 Ok(result) => {
                     return SyncInvocation::success(invocation_id, result);
                 }

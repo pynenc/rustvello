@@ -2,13 +2,15 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::PyResult;
 use rustvello_core::context::{
-    clear_thread_invocation_context, get_invocation_context, set_thread_invocation_context,
-    InvocationContext,
+    clear_thread_invocation_context, current_attempt_signal, get_invocation_context,
+    set_thread_invocation_context, InvocationContext,
 };
 use rustvello_proto::call::SerializedArguments;
 use rustvello_proto::identifiers::{InvocationId, TaskId, TaskLanguage};
 use rustvello_proto::invocation::TraceContextCarrier;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 /// Parse `s` as an invocation ID and return an `InvocationId`.
 ///
@@ -94,6 +96,72 @@ pub fn clear_current_invocation_context() {
 #[pyfunction]
 pub fn get_current_invocation_id() -> Option<String> {
     get_invocation_context().map(|ctx| ctx.invocation_id.to_string())
+}
+
+/// Runner threads currently inside Python (holding or releasing the GIL).
+///
+/// A timed-out or cancelled attempt is abandoned by the runner, so its thread,
+/// and the thread that delivers the cancellation, are outside the runner's
+/// shutdown drain. The interpreter must not finalize while one of them is
+/// still in Python: CPython aborts with ``PyGILState_Release ... finalizing``.
+static RUNNER_PYTHON_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+/// Counts one runner-thread call into Python until dropped, which happens
+/// after the call's GIL has been released.
+pub(crate) struct RunnerPythonCall;
+
+impl RunnerPythonCall {
+    pub(crate) fn enter() -> Self {
+        RUNNER_PYTHON_CALLS.fetch_add(1, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for RunnerPythonCall {
+    fn drop(&mut self) {
+        RUNNER_PYTHON_CALLS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Wait, without holding the GIL, until no runner thread is inside Python.
+///
+/// Returns `False` if `timeout_seconds` passed first. `App.stop()` and an exit
+/// hook call it so the interpreter never finalizes under a runner thread.
+#[pyfunction]
+pub fn wait_runner_python_calls(py: Python<'_>, timeout_seconds: f64) -> bool {
+    let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds.max(0.0));
+    py.allow_threads(|| loop {
+        if RUNNER_PYTHON_CALLS.load(Ordering::SeqCst) == 0 {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    })
+}
+
+/// Call `callback()` once if the runner abandons the running attempt.
+///
+/// The runner abandons an attempt when its execution deadline expires or its
+/// invocation is cancelled. `callback` runs on a runner thread (at once if the
+/// attempt was already abandoned); exceptions it raises are reported as
+/// unraisable. Returns `False`, registering nothing, outside a runner attempt
+/// (dev mode, worker processes that the runner kills instead).
+#[pyfunction]
+pub fn on_attempt_abandoned(callback: PyObject) -> bool {
+    let Some(signal) = current_attempt_signal() else {
+        return false;
+    };
+    signal.on_abandon(move || {
+        let _calling = RunnerPythonCall::enter();
+        Python::with_gil(|py| {
+            if let Err(error) = callback.call0(py) {
+                error.write_unraisable_bound(py, None);
+            }
+        });
+    });
+    true
 }
 
 /// Return the running task as `module.name` from Rust's thread-local invocation context.

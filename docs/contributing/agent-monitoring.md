@@ -41,7 +41,10 @@ curl -sS \
 
 `GET /invocations/{invocation_id}/investigation` returns:
 
-- Invocation identity, task, call, parent, and workflow references.
+- Invocation identity, task, call, current status, parent, and workflow
+  references.
+- The stored error of a failed invocation (`error_type`, `message` and the
+  last 4000 characters of the traceback), or `null`.
 - Ordered history enriched with runner class, language, executor, host, PID,
   thread, and parent-runner context.
 - The runner and timestamp that created the `Registered` event.
@@ -50,6 +53,9 @@ curl -sS \
   monitoring.
 - Integrity flags that make missing registration provenance explicit.
 - Relative links to the detail, history, and tightly focused timeline views.
+
+From Python, `App.start_monitor(port=0)` binds a free port and
+`server.address` reports it; the socket is bound when the call returns.
 
 The response is deliberately bounded: trigger evidence is limited to 50 rows
 around the registration timestamp. It is an investigation view, not an

@@ -1,47 +1,47 @@
 name: Backend and Stress Tests
 
+# Runs the release gate (release-gate.yml: guarantee matrix, fault-injection
+# suites, PostgreSQL/Redis/MongoDB/RabbitMQ suites, soak tests) weekly, on
+# demand, and on pull requests that touch a backend or the contracts backends
+# implement. The release workflows call the same gate before publishing.
 on:
   schedule:
     - cron: "30 3 * * 1"
   workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "crates/rustvello-core/**"
+      - "crates/rustvello-proto/**"
+      - "crates/rustvello-test-suite/**"
+      - "crates/rustvello-mem/**"
+      - "crates/rustvello-sqlite/**"
+      - "crates/rustvello-postgres/**"
+      - "crates/rustvello-redis/**"
+      - "crates/rustvello-mongo/**"
+      - "crates/rustvello-mongo3/**"
+      - "crates/rustvello-rabbitmq/**"
+      - "crates/rustvello/src/orchestration/**"
+      - "crates/rustvello/tests/publication_crash_acceptance.rs"
+      - "crates/rustvello/tests/stale_owner_concurrency.rs"
+      - "crates/rustvello/tests/trigger_crash_acceptance.rs"
+      - "crates/rustvello/tests/trigger_fallback_faults.rs"
+      - "crates/rustvello/tests/durable_retry_kill.rs"
+      - "crates/rustvello/tests/idempotency_kill.rs"
+      - "docs/guarantees.md"
+      - "Cargo.lock"
+      - "Makefile"
+      - ".github/workflows/backend-and-stress.yml"
+      - ".github/workflows/release-gate.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  docker-backends:
-    name: Docker suite (${{ matrix.package }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        package:
-          - rustvello-redis
-          - rustvello-postgres
-          - rustvello-mongo
-          - rustvello-mongo3
-          - rustvello-rabbitmq
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Run ignored backend compliance tests
-        run: cargo test -p "${{ matrix.package }}" -- --ignored --test-threads=1
-
-  soak:
-    name: Persistent and runner soak tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Run high-volume runner tests
-        run: cargo test -p rustvello --test concurrency_stress_tests -- --ignored --test-threads=1
-      - name: Run SQLite contention tests
-        run: cargo test -p rustvello-sqlite --test stress -- --ignored --test-threads=1
+  gate:
+    name: Release gate
+    uses: ./.github/workflows/release-gate.yml

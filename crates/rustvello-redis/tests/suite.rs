@@ -140,6 +140,19 @@ fn tls_fixture() -> std::path::PathBuf {
         ],
         &directory,
     );
+    // The key is copied into the container with its mode and owned by root
+    // there, while Redis runs as the unprivileged `redis` user: openssl's
+    // 0600 makes it unreadable ("Failed to load private key: Permission
+    // denied"). A throwaway test key may be world-readable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            directory.join("server.key"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+    }
     directory
 }
 

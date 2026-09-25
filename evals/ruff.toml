@@ -1,0 +1,11 @@
+# Eval harness: developer tooling, same style as py-rustvello (Python 3.9+).
+extend = "../pyproject.toml"
+line-length = 120
+target-version = "py39"
+
+[lint]
+select = ["E", "W", "F", "I", "B", "UP", "C4", "PTH"]
+ignore = ["PTH123"]
+
+[lint.isort]
+lines-between-types = 1

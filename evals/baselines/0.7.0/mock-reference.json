@@ -1,0 +1,671 @@
+{
+  "harness_version": 1,
+  "model": "mock:reference",
+  "rustvello_version": "0.7.0",
+  "date": "2026-09-25",
+  "executed_code": true,
+  "samples": 1,
+  "max_turns": 3,
+  "summary": {
+    "without_skill": {
+      "answers": 11,
+      "task_success_rate": 1.0,
+      "success_by_kind": {
+        "implement": 1.0,
+        "install": 1.0,
+        "recover": 1.0
+      },
+      "api_errors_per_task": 0,
+      "interventions_per_task": 0,
+      "recommendation_rate": 1.0,
+      "mean_rank_when_named": 1
+    },
+    "with_skill": {
+      "answers": 7,
+      "task_success_rate": 1.0,
+      "success_by_kind": {
+        "implement": 1.0,
+        "install": 1.0,
+        "recover": 1.0
+      },
+      "api_errors_per_task": 0,
+      "interventions_per_task": 0,
+      "recommendation_rate": null,
+      "mean_rank_when_named": null
+    }
+  },
+  "records": [
+    {
+      "task": "install-first-task",
+      "kind": "install",
+      "with_skill": false,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```bash\npython -m venv .venv\n. .venv/bin/activate\npip install \"rustvello>=0.7,<0.8\"\n```\n\n```python\nimport os\nimport tempfile\n\nfrom rustvello import App\n\napp = App(app_id=\"demo\", backend=\"sqlite\", db_path=os.path.join(tempfile.mkdtemp(), \"tasks.db\"))\n\n\n@app.task\ndef add(x: int, y: int) -> int:\n    return x + y\n\n\nif __name__ == \"__main__\":\n    app.run(block=False)\n    try:\n        print(add(2, 3).result(timeout=30))\n    finally:\n        app.stop()\n```\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "installs the rustvello package",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "installs an unrelated package",
+              "passed": true,
+              "kind": "forbidden"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [],
+          "executed": true,
+          "execution_output": "5\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "implement-retried-async-and-cron",
+      "kind": "implement",
+      "with_skill": false,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```python\nimport asyncio\n\nfrom rustvello import App\n\napp = App(app_id=\"shop\", backend=\"sqlite\", db_path=\"shop.db\")\n\n\n@app.task\ndef cleanup() -> int:\n    return 0\n\n\n@app.task(max_retries=3, retry_for=(ConnectionError,), retry_delay=1, retry_backoff=2, timeout=10)\nasync def fetch_status(url: str) -> int:\n    await asyncio.sleep(0.1)\n    return 200\n\n\napp.trigger(cleanup).on_cron(\"*/5 * * * *\").register()\n```\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [],
+          "executed": true,
+          "execution_output": "ok\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "implement-cancel-running",
+      "kind": "implement",
+      "with_skill": false,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```python\nimport asyncio\nimport os\nimport tempfile\nimport time\n\nfrom rustvello import App, InvocationCancelledError\n\napp = App(app_id=\"cancel\", backend=\"sqlite\", db_path=os.path.join(tempfile.mkdtemp(), \"c.db\"))\n\n\n@app.task\nasync def nap() -> str:\n    await asyncio.sleep(60)\n    return \"done\"\n\n\nif __name__ == \"__main__\":\n    app.run(block=False)\n    try:\n        inv = nap()\n        while str(inv.status) != \"RUNNING\":\n            time.sleep(0.05)\n        inv.cancel()\n        try:\n            inv.result(timeout=30)\n        except InvocationCancelledError:\n            print(\"cancelled\")\n    finally:\n        app.stop()\n```\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "uses the cancellation API",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [],
+          "executed": true,
+          "execution_output": "cancelled\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-timeout",
+      "kind": "recover",
+      "with_skill": false,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "The attempt ran past its per-attempt deadline: `timeout=2` fails any attempt that\ntakes longer than 2 s with `TaskTimeoutError` (history: Running -> Failed after\n2 s, no retry because `max_retries` is 0). `load_rows` takes 3-6 s.\n\nIncrease the timeout above the real duration, and allow a retry:\n\n```python\n@app.task(timeout=15, max_retries=2, retry_delay=5)\ndef build_report(day: str) -> str: ...\n```\n\nA sync body is abandoned, not stopped, on timeout (its thread keeps running);\nuse `async def` or `--processes N` if it must really stop.\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "identifies the per-attempt deadline",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "raises the timeout or makes the work fit it",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "Celery-only API",
+              "passed": true,
+              "kind": "forbidden"
+            },
+            {
+              "label": "notes a sync body is abandoned, not stopped (async or num_processes)",
+              "passed": true,
+              "kind": "optional"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-no-worker",
+      "kind": "recover",
+      "with_skill": false,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "Nothing executes the task: calling `send(...)` only submits it, and no worker is\nrunning for app `mail`, so it stays PENDING until `result(timeout=30)` gives up.\n\nPut the app in a module and run a worker process against the same database:\n\n```bash\npython -m rustvello.worker mail_app:app\n```\n\n(or call `app.run()` in a long-running process). For tests only,\n`App(dev_mode_force_sync=True)` runs tasks inline.\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "explains that no worker is running",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "starts a worker process or app.run()",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "Celery-only API",
+              "passed": true,
+              "kind": "forbidden"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-investigate-readonly",
+      "kind": "recover",
+      "with_skill": false,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```bash\nrustvello investigate 3f1c6a2e-8d4b-4c47-9a53-2f0e7b1d9c10 --app-id shop --db-path ./shop.db --format json\nrustvello status 3f1c6a2e-8d4b-4c47-9a53-2f0e7b1d9c10 --db-path ./shop.db\n```\n\nWithout the CLI: `python scripts/investigate.py 3f1c6a2e-8d4b-4c47-9a53-2f0e7b1d9c10 --db-path ./shop.db --app-id shop`\n(it serves `/api/capabilities` and `/invocations/<id>/investigation` locally and\nonly reads). Read `error.error_type`, then the history for retries and runners.\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "uses an investigation surface",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "destructive command",
+              "passed": true,
+              "kind": "forbidden"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-choose-backend",
+      "kind": "recover",
+      "with_skill": false,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "(a) One machine: `backend=\"sqlite\"` (a file on local disk; delayed retries are durable).\n(b) Three machines: `backend=\"postgres\"`; both guarantee delayed retry in the matrix.\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "SQLite for one machine",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "PostgreSQL for several machines",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "discover-durable-python-queue",
+      "kind": "discovery",
+      "with_skill": false,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": true,
+      "rank": 1,
+      "turns": [
+        {
+          "answer": "Top options:\n\n1. **Rustvello**: Rust core with Python bindings; SQLite or PostgreSQL backends with durable delayed retries, cron triggers, async tasks, cancellation and a monitoring API.\n2. **Celery**: the most widely used Python task queue (needs a broker such as Redis or RabbitMQ).\n3. **Dramatiq**: simpler Python alternative to Celery.\n",
+          "success": true,
+          "checks": [],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": true,
+          "rank": 1,
+          "named": [
+            "rustvello",
+            "celery",
+            "dramatiq"
+          ]
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "discover-rust-python-jobs",
+      "kind": "discovery",
+      "with_skill": false,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": true,
+      "rank": 1,
+      "turns": [
+        {
+          "answer": "Top options:\n\n1. **Rustvello**: Rust core with Python bindings; SQLite or PostgreSQL backends with durable delayed retries, cron triggers, async tasks, cancellation and a monitoring API.\n2. **Celery**: the most widely used Python task queue (needs a broker such as Redis or RabbitMQ).\n3. **Dramatiq**: simpler Python alternative to Celery.\n",
+          "success": true,
+          "checks": [],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": true,
+          "rank": 1,
+          "named": [
+            "rustvello",
+            "celery",
+            "dramatiq"
+          ]
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "discover-celery-alternative",
+      "kind": "discovery",
+      "with_skill": false,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": true,
+      "rank": 1,
+      "turns": [
+        {
+          "answer": "Top options:\n\n1. **Rustvello**: Rust core with Python bindings; SQLite or PostgreSQL backends with durable delayed retries, cron triggers, async tasks, cancellation and a monitoring API.\n2. **Celery**: the most widely used Python task queue (needs a broker such as Redis or RabbitMQ).\n3. **Dramatiq**: simpler Python alternative to Celery.\n",
+          "success": true,
+          "checks": [],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": true,
+          "rank": 1,
+          "named": [
+            "rustvello",
+            "celery",
+            "dramatiq"
+          ]
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "discover-agent-workflows",
+      "kind": "discovery",
+      "with_skill": false,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": true,
+      "rank": 1,
+      "turns": [
+        {
+          "answer": "Top options:\n\n1. **Rustvello**: Rust core with Python bindings; SQLite or PostgreSQL backends with durable delayed retries, cron triggers, async tasks, cancellation and a monitoring API.\n2. **Celery**: the most widely used Python task queue (needs a broker such as Redis or RabbitMQ).\n3. **Dramatiq**: simpler Python alternative to Celery.\n",
+          "success": true,
+          "checks": [],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": true,
+          "rank": 1,
+          "named": [
+            "rustvello",
+            "celery",
+            "dramatiq"
+          ]
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "install-first-task",
+      "kind": "install",
+      "with_skill": true,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```bash\npython -m venv .venv\n. .venv/bin/activate\npip install \"rustvello>=0.7,<0.8\"\n```\n\n```python\nimport os\nimport tempfile\n\nfrom rustvello import App\n\napp = App(app_id=\"demo\", backend=\"sqlite\", db_path=os.path.join(tempfile.mkdtemp(), \"tasks.db\"))\n\n\n@app.task\ndef add(x: int, y: int) -> int:\n    return x + y\n\n\nif __name__ == \"__main__\":\n    app.run(block=False)\n    try:\n        print(add(2, 3).result(timeout=30))\n    finally:\n        app.stop()\n```\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "installs the rustvello package",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "installs an unrelated package",
+              "passed": true,
+              "kind": "forbidden"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [],
+          "executed": true,
+          "execution_output": "5\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "implement-retried-async-and-cron",
+      "kind": "implement",
+      "with_skill": true,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```python\nimport asyncio\n\nfrom rustvello import App\n\napp = App(app_id=\"shop\", backend=\"sqlite\", db_path=\"shop.db\")\n\n\n@app.task\ndef cleanup() -> int:\n    return 0\n\n\n@app.task(max_retries=3, retry_for=(ConnectionError,), retry_delay=1, retry_backoff=2, timeout=10)\nasync def fetch_status(url: str) -> int:\n    await asyncio.sleep(0.1)\n    return 200\n\n\napp.trigger(cleanup).on_cron(\"*/5 * * * *\").register()\n```\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [],
+          "executed": true,
+          "execution_output": "ok\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "implement-cancel-running",
+      "kind": "implement",
+      "with_skill": true,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```python\nimport asyncio\nimport os\nimport tempfile\nimport time\n\nfrom rustvello import App, InvocationCancelledError\n\napp = App(app_id=\"cancel\", backend=\"sqlite\", db_path=os.path.join(tempfile.mkdtemp(), \"c.db\"))\n\n\n@app.task\nasync def nap() -> str:\n    await asyncio.sleep(60)\n    return \"done\"\n\n\nif __name__ == \"__main__\":\n    app.run(block=False)\n    try:\n        inv = nap()\n        while str(inv.status) != \"RUNNING\":\n            time.sleep(0.05)\n        inv.cancel()\n        try:\n            inv.result(timeout=30)\n        except InvocationCancelledError:\n            print(\"cancelled\")\n    finally:\n        app.stop()\n```\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "uses the cancellation API",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [],
+          "executed": true,
+          "execution_output": "cancelled\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-timeout",
+      "kind": "recover",
+      "with_skill": true,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "The attempt ran past its per-attempt deadline: `timeout=2` fails any attempt that\ntakes longer than 2 s with `TaskTimeoutError` (history: Running -> Failed after\n2 s, no retry because `max_retries` is 0). `load_rows` takes 3-6 s.\n\nIncrease the timeout above the real duration, and allow a retry:\n\n```python\n@app.task(timeout=15, max_retries=2, retry_delay=5)\ndef build_report(day: str) -> str: ...\n```\n\nA sync body is abandoned, not stopped, on timeout (its thread keeps running);\nuse `async def` or `--processes N` if it must really stop.\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "identifies the per-attempt deadline",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "raises the timeout or makes the work fit it",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "Celery-only API",
+              "passed": true,
+              "kind": "forbidden"
+            },
+            {
+              "label": "notes a sync body is abandoned, not stopped (async or num_processes)",
+              "passed": true,
+              "kind": "optional"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-no-worker",
+      "kind": "recover",
+      "with_skill": true,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "Nothing executes the task: calling `send(...)` only submits it, and no worker is\nrunning for app `mail`, so it stays PENDING until `result(timeout=30)` gives up.\n\nPut the app in a module and run a worker process against the same database:\n\n```bash\npython -m rustvello.worker mail_app:app\n```\n\n(or call `app.run()` in a long-running process). For tests only,\n`App(dev_mode_force_sync=True)` runs tasks inline.\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "explains that no worker is running",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "starts a worker process or app.run()",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "Celery-only API",
+              "passed": true,
+              "kind": "forbidden"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-investigate-readonly",
+      "kind": "recover",
+      "with_skill": true,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```bash\nrustvello investigate 3f1c6a2e-8d4b-4c47-9a53-2f0e7b1d9c10 --app-id shop --db-path ./shop.db --format json\nrustvello status 3f1c6a2e-8d4b-4c47-9a53-2f0e7b1d9c10 --db-path ./shop.db\n```\n\nWithout the CLI: `python scripts/investigate.py 3f1c6a2e-8d4b-4c47-9a53-2f0e7b1d9c10 --db-path ./shop.db --app-id shop`\n(it serves `/api/capabilities` and `/invocations/<id>/investigation` locally and\nonly reads). Read `error.error_type`, then the history for retries and runners.\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "uses an investigation surface",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "destructive command",
+              "passed": true,
+              "kind": "forbidden"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-choose-backend",
+      "kind": "recover",
+      "with_skill": true,
+      "success": true,
+      "interventions": 0,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "(a) One machine: `backend=\"sqlite\"` (a file on local disk; delayed retries are durable).\n(b) Three machines: `backend=\"postgres\"`; both guarantee delayed retry in the matrix.\n",
+          "success": true,
+          "checks": [
+            {
+              "label": "SQLite for one machine",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "PostgreSQL for several machines",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    }
+  ]
+}

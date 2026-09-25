@@ -1145,3 +1145,120 @@ async fn test_cc_slot_is_atomic_across_runner_instances() {
         1
     );
 }
+
+/// A broker whose `wait_for_work` only returns on cancellation, like a
+/// database broker with a very slow poll interval.
+struct NeverWakesBroker(rustvello_mem::broker::MemBroker);
+
+#[async_trait::async_trait]
+impl Broker for NeverWakesBroker {
+    async fn route_invocation_with_options(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: Option<&TaskId>,
+        queue_name: &str,
+        priority: f64,
+    ) -> RustvelloResult<()> {
+        self.0
+            .route_invocation_with_options(invocation_id, task_id, queue_name, priority)
+            .await
+    }
+
+    async fn retrieve_invocation_from_queue(
+        &self,
+        queue_name: &str,
+        task_id: Option<&TaskId>,
+    ) -> RustvelloResult<Option<InvocationId>> {
+        self.0
+            .retrieve_invocation_from_queue(queue_name, task_id)
+            .await
+    }
+
+    async fn retrieve_invocation_for_language_from_queue(
+        &self,
+        language: rustvello_proto::identifiers::TaskLanguage,
+        queue_name: &str,
+    ) -> RustvelloResult<Option<InvocationId>> {
+        self.0
+            .retrieve_invocation_for_language_from_queue(language, queue_name)
+            .await
+    }
+
+    async fn count_invocations_in_queues(
+        &self,
+        queue_names: &[String],
+        task_id: Option<&TaskId>,
+    ) -> RustvelloResult<usize> {
+        self.0
+            .count_invocations_in_queues(queue_names, task_id)
+            .await
+    }
+
+    async fn retrieve_invocation_for_language(
+        &self,
+        language: rustvello_proto::identifiers::TaskLanguage,
+    ) -> RustvelloResult<Option<InvocationId>> {
+        self.0.retrieve_invocation_for_language(language).await
+    }
+
+    async fn route_invocation(&self, invocation_id: &InvocationId) -> RustvelloResult<()> {
+        self.0.route_invocation(invocation_id).await
+    }
+
+    async fn route_invocation_for_task(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: &TaskId,
+    ) -> RustvelloResult<()> {
+        self.0
+            .route_invocation_for_task(invocation_id, task_id)
+            .await
+    }
+
+    async fn retrieve_invocation(
+        &self,
+        task_id: Option<&TaskId>,
+    ) -> RustvelloResult<Option<InvocationId>> {
+        self.0.retrieve_invocation(task_id).await
+    }
+
+    async fn wait_for_work(&self, cancel: &tokio_util::sync::CancellationToken) -> bool {
+        cancel.cancelled().await;
+        false
+    }
+
+    async fn count_invocations(&self, task_id: Option<&TaskId>) -> RustvelloResult<usize> {
+        self.0.count_invocations(task_id).await
+    }
+
+    async fn purge(&self, task_id: Option<&TaskId>) -> RustvelloResult<()> {
+        self.0.purge(task_id).await
+    }
+}
+
+#[tokio::test]
+async fn idle_wait_is_capped_by_idle_sleep_ms() {
+    let runner = PersistentTokioRunner::new(
+        "test-app".to_string(),
+        AppConfig::default(),
+        Arc::new(NeverWakesBroker(rustvello_mem::broker::MemBroker::new())),
+        Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new()),
+        Arc::new(rustvello_mem::state_backend::MemStateBackend::new()),
+        Arc::new(TaskRegistry::new()),
+        None,
+    )
+    .with_idle_sleep(20);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let started = std::time::Instant::now();
+    assert!(
+        runner.wait_idle(&cancel).await,
+        "keep polling after the cap"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "idle wait ignored idle_sleep_ms: {:?}",
+        started.elapsed()
+    );
+    cancel.cancel();
+    assert!(!runner.wait_idle(&cancel).await, "stop once cancelled");
+}

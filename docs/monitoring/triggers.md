@@ -11,11 +11,21 @@ backend. A broker-only component such as RabbitMQ has no trigger store.
    condition. Unmatched events therefore remain observable.
 2. Matching conditions add their condition and validation identifiers to the
    same record.
-3. `evaluate_trigger_runs` atomically claims a trigger run and writes a
-   `TriggerRunRecord` containing the conditions that participated.
-4. Normal task submission creates the target invocation.
+3. `evaluate_trigger_runs` claims each firing into the **trigger outbox**: the
+   claim, a `TriggerRunRecord` with the conditions that participated and the
+   `planned_invocation_id`, and the removal of the consumed valid conditions.
+   SQLite, PostgreSQL and memory commit the three writes in one transaction.
+4. The atomic service publishes every pending run (planned invocation, no
+   `triggered_invocation_id`), including runs claimed by a process that died
+   before publishing. The invocation id is derived from the run id
+   (`trigger_run_invocation_id`), so a repeated publication is a no-op.
 5. `complete_trigger_run` links the run and its event records to that
-   invocation.
+   invocation, which removes the run from the outbox.
+
+A crash between any two steps is repaired by the next trigger iteration: each
+firing produces exactly one logical invocation. Records written before 0.6.0
+have no planned invocation and are never re-published. The per-backend
+guarantee is listed in the {doc}`../guarantees`.
 
 Monitoring persistence is part of the trigger execution contract. Backend
 implementations use their native durable primitives so event matching and
@@ -41,6 +51,7 @@ trigger submission have queryable evidence after a process restart.
 | `arguments`                                        | Arguments submitted to the target task                         |
 | `participants`                                     | Condition, validation, event, and source-invocation links      |
 | `claimed_at`, `executed_at`                        | Claim and submission timestamps                                |
+| `planned_invocation_id`                            | Invocation the run publishes; set at claim time                |
 | `triggered_invocation_id`                          | Invocation produced by the run                                 |
 | `atomic_service_*`                                 | Optional service-run attribution reserved by the wire contract |
 

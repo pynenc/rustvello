@@ -110,9 +110,28 @@ Rustvello organizes tests into these categories:
 6. **Benchmarks** — `criterion` micro-benchmarks for broker and orchestrator hot paths
 
 Default PR CI runs unit, integration, shared compliance, Python, property, fast
-contention, docs, and short fuzz checks. `.github/workflows/backend-and-stress.yml`
-runs Docker-backed compliance and slower soak tests on a schedule or manual
-dispatch. See {doc}`backend-constraints` for backend facts and the required
-contract rule.
+contention, docs, and short fuzz checks, plus the SQLite fault suites
+(`make test` includes `make test-fault`). See {doc}`backend-constraints` for
+backend facts and the required contract rule.
+
+Fault suites prove the guarantees in {doc}`../../guarantees`. They need the
+fault-injection features and are defined once, in the release gate
+(`.github/workflows/release-gate.yml`): the guarantee-matrix check, the SQLite
+and in-process fault suites, the PostgreSQL suites and process kills against a
+service container, the Redis, MongoDB and RabbitMQ suites, and (outside pull
+requests) the soak tests. `release-rust.yml` and `release-python.yml` require
+it before publishing; `.github/workflows/backend-and-stress.yml` runs it weekly,
+on manual dispatch, and on pull requests that touch a backend. Locally:
+
+```bash
+make test-fault           # SQLite process kills, trigger outbox faults
+RUSTVELLO_POSTGRES_DSN="host=127.0.0.1 port=5432 user=postgres password=... dbname=..." \
+  make test-fault-postgres  # PostgreSQL compliance, publication and trigger kills
+```
+
+The guarantee matrix page is generated from `rustvello_core::guarantees`; a
+test fails when it is stale or when a guaranteed cell names a test that does
+not exist. Regenerate it with
+`RUSTVELLO_WRITE_GUARANTEES=1 cargo test -p rustvello-core --lib guarantees`.
 
 See {doc}`architecture` for the design rationale, {doc}`backend-testing` for writing backend tests, and {doc}`advanced` for property tests, fuzzing, and benchmarks.

@@ -35,6 +35,13 @@ pub struct SubmissionPublication {
 pub enum PublicationChange {
     Status(InvocationStatus),
     Retry(PublicationRoute),
+    /// Like [`Self::Retry`], but the queued entry must not be delivered
+    /// before `delay` elapses. Only sent to publications that return
+    /// `true` from [`RuntimePublication::supports_delayed_retry`].
+    DelayedRetry {
+        route: PublicationRoute,
+        delay: std::time::Duration,
+    },
     Reroute(PublicationRoute),
     ConcurrencyReroute(PublicationRoute),
     Recover {
@@ -49,6 +56,12 @@ pub enum PublicationChange {
 #[async_trait]
 pub trait RuntimePublication: Send + Sync {
     fn domain(&self) -> PublicationDomain;
+
+    /// Whether [`PublicationChange::DelayedRetry`] is committed with a
+    /// durable not-before time in the same transaction as the Retry status.
+    fn supports_delayed_retry(&self) -> bool {
+        false
+    }
 
     async fn begin_execution(
         &self,

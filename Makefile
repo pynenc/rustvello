@@ -1,6 +1,8 @@
 # Interpreter used by the Python compatibility metadata helper.
 PYTHON_BIN ?= $(CURDIR)/.venv/bin/python
 MONITORING_LOAD_LOG ?= rustvello=debug,rustvello_monitoring=debug
+# Markdown checked by `make links` / `make links-online` (and the CI link job).
+LINK_SOURCES = README.md '*.md' py-rustvello/README.md 'crates/*/README.md' 'docs/**/*.md' 'skills/**/*.md' evals/README.md benchmarks/README.md
 
 .PHONY: install
 install: ## Install dependencies, build the Python extension, and set up pre-commit hooks
@@ -45,8 +47,67 @@ test-rust: ## Run Rust tests
 	@echo "🚀 Testing Rust: Running cargo test"
 	@cargo test --workspace --exclude py-rustvello
 
+.PHONY: test-fault
+test-fault: ## Run the fault-injection suites (SQLite process kills at every publication, trigger and delayed-retry boundary, a worker killed after its side effects, in-process trigger faults)
+	@echo "🚀 Testing Rust: SQLite process kills, trigger outbox faults and durable retries"
+	@cargo test -p rustvello --features sqlite-fault-injection \
+		--test publication_crash_acceptance --test trigger_crash_acceptance \
+		--test stale_owner_concurrency --test trigger_fallback_faults \
+		--test durable_retry_kill --test idempotency_kill -- --test-threads=1
+	@echo "🚀 Testing Rust: SQLite backend with failpoints compiled in"
+	@cargo test -p rustvello-sqlite --features fault-injection -- --test-threads=1
+
+.PHONY: test-fault-postgres
+test-fault-postgres: ## Run the PostgreSQL suites and process kills (needs RUSTVELLO_POSTGRES_DSN to an isolated database)
+	@test -n "$$RUSTVELLO_POSTGRES_DSN" || { echo "set RUSTVELLO_POSTGRES_DSN to an isolated PostgreSQL database"; exit 1; }
+	@echo "🚀 Testing Rust: PostgreSQL compliance, network gates and publication process kills"
+	@cargo test -p rustvello-postgres --features fault-injection -- --include-ignored --test-threads=1
+	@echo "🚀 Testing Rust: PostgreSQL trigger and delayed-retry process kills"
+	@cargo test -p rustvello --features sqlite,postgres-fault-injection \
+		--test trigger_crash_acceptance --test durable_retry_kill \
+		-- --include-ignored --test-threads=1 postgres_
+
 .PHONY: test
-test: test-rust test-python ## Run all tests (Rust + Python)
+test: test-rust test-fault test-python ## Run all tests (Rust + fault suites + Python)
+
+.PHONY: readme-examples
+readme-examples: develop ## Run the README quick starts (Python against the installed build, Rust via cargo)
+	@uv run python scripts/readme_examples.py run
+
+.PHONY: skill-examples
+skill-examples: develop ## Fresh-agent check: run the agent skill's examples from a copy of skills/rustvello
+	@uv run python scripts/readme_examples.py skill
+
+.PHONY: evals-check
+evals-check: develop ## Self-test the cross-model eval harness (mock models, no keys, no network)
+	@uv run python evals/run.py api-surface
+	@uv run python -m pytest evals/tests -q
+
+.PHONY: migration-example
+migration-example: develop ## Run the Celery migration example: the Celery app (in-memory transport), then its Rustvello port
+	@cd py-rustvello/examples/celery_migration && uv run --no-sync --with celery==5.6.3 python celery_app.py
+	@cd py-rustvello/examples/celery_migration && uv run --no-sync python rustvello_app.py
+
+.PHONY: bench-up
+bench-up: ## Start the benchmark's Redis, RabbitMQ and PostgreSQL containers (benchmarks/docker-compose.yml)
+	@docker compose -f benchmarks/docker-compose.yml up -d --wait
+
+.PHONY: bench
+bench: develop ## Run the Rustvello vs Celery benchmark; BENCH_ARGS="--systems rustvello-sqlite celery-redis" narrows it
+	@uv run --no-sync --with-requirements benchmarks/requirements.txt python benchmarks/run.py $(BENCH_ARGS)
+
+.PHONY: bench-down
+bench-down: ## Stop and remove the benchmark containers and their volumes
+	@docker compose -f benchmarks/docker-compose.yml down -v
+
+.PHONY: links
+links: ## Check repository-relative links in Markdown (offline, needs lychee)
+	@python3 scripts/check_repo_links.py
+	@lychee --config lychee.toml --no-progress --offline $(LINK_SOURCES)
+
+.PHONY: links-online
+links-online: ## Check all Markdown links, including external ones (needs lychee)
+	@lychee --config lychee.toml --no-progress $(LINK_SOURCES)
 
 .PHONY: test-docker
 test-docker: ## Run ignored Docker backend compliance suites

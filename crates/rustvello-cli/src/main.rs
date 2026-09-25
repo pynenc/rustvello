@@ -54,9 +54,27 @@ enum Commands {
         db_path: Option<String>,
     },
 
+    /// Cancel an invocation that has not finished (queued, retrying or running)
+    ///
+    /// Queued invocations never run; a running attempt is abandoned by its
+    /// worker within `cancellation_check_interval_seconds` and its result is
+    /// discarded. Finished invocations are left unchanged (exit code 3).
+    Cancel {
+        /// Invocation ID to cancel
+        invocation_id: String,
+
+        /// Application ID used to namespace the backend data
+        #[arg(short, long, default_value = "rustvello")]
+        app_id: String,
+
+        /// SQLite database path
+        #[arg(short, long)]
+        db_path: String,
+    },
+
     /// List invocations, optionally filtered by status
     List {
-        /// Filter by status (REGISTERED, PENDING, RUNNING, SUCCESS, FAILED, RETRY)
+        /// Filter by status (REGISTERED, PENDING, RUNNING, SUCCESS, FAILED, RETRY, CANCELLED)
         #[arg(short, long)]
         status: Option<String>,
 
@@ -477,6 +495,41 @@ async fn main() {
             }
         }
 
+        Commands::Cancel {
+            invocation_id,
+            app_id,
+            db_path,
+        } => {
+            let inv_id = match InvocationId::try_from_string(invocation_id) {
+                Ok(id) => id,
+                Err(e) => {
+                    eprintln!("Invalid invocation ID: {e}");
+                    std::process::exit(1);
+                }
+            };
+            let app = Rustvello::builder()
+                .app_id(app_id.clone())
+                .sqlite(&db_path, &app_id)
+                .build()
+                .await
+                .unwrap_or_else(|e| {
+                    eprintln!("Failed to open database: {}", e);
+                    std::process::exit(1);
+                });
+            match app.cancel(&inv_id).await {
+                Ok(CancelOutcome::Cancelled) => println!("Invocation {inv_id} cancelled"),
+                Ok(CancelOutcome::AlreadyFinal(status)) => {
+                    println!("Invocation {inv_id} already finished with status {status}");
+                    std::process::exit(3);
+                }
+                Ok(other) => println!("Invocation {inv_id}: {other:?}"),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
         Commands::Purge { db_path, yes } => {
             if !yes {
                 println!("This will delete ALL data. Use --yes to confirm.");
@@ -505,8 +558,8 @@ async fn main() {
 
         Commands::Info => {
             println!("Rustvello v{}", env!("CARGO_PKG_VERSION"));
-            println!("Distributed task system for Rust");
-            println!("Homepage: https://pynenc.org");
+            println!("Distributed task queue and workflow runtime for Rust and Python");
+            println!("Documentation: https://rustvello.readthedocs.io");
             println!("Repository: https://github.com/pynenc/rustvello");
         }
 

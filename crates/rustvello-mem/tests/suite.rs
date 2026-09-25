@@ -46,3 +46,11 @@ mod lifecycle_suite {
         }
     });
 }
+
+#[test]
+fn declared_guarantees_match_ports() {
+    rustvello_test_suite::trigger::test_declared_guarantees(
+        &rustvello_mem::orchestrator::MemOrchestrator::new(),
+        &rustvello_mem::trigger::MemTriggerStore::new(),
+    );
+}

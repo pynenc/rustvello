@@ -169,7 +169,7 @@ Open a browser at `http://localhost:8000` to view the dashboard.
 
 ```toml
 [dependencies]
-rustvello-monitoring = "0.5.2"
+rustvello-monitoring = "0.8"
 ```
 
 The monitoring crate does **not** require `rustvello`'s feature flags — it depends
@@ -185,9 +185,9 @@ runner lifecycle. Python applications can pass `otlp_endpoint` and
 
 ```toml
 [dependencies]
-rustvello = "0.5.2"
-rustvello-otel = "0.5.2"
-rustvello-monitoring = "0.5.2"
+rustvello = "0.8"
+rustvello-otel = "0.8"
+rustvello-monitoring = "0.8"
 ```
 
 The exporter maps retries as sibling execution spans under the persisted W3C parent,

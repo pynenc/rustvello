@@ -14,6 +14,10 @@ use crate::db::{parse_status, pg_err};
 
 #[async_trait]
 impl OrchestratorStatus for PostgresOrchestrator {
+    fn guarantee_profile(&self) -> Option<&'static str> {
+        Some("postgres")
+    }
+
     fn runtime_publication(
         &self,
     ) -> Option<std::sync::Arc<dyn rustvello_core::publication::RuntimePublication>> {

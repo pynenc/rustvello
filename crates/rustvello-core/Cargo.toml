@@ -9,6 +9,8 @@ repository.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 rustvello-proto = { workspace = true }
@@ -27,6 +29,10 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 croner = { workspace = true }
+
+[features]
+# Opt-in orchestration failpoints for crash acceptance tests.
+fault-injection = []
 
 [lints]
 workspace = true

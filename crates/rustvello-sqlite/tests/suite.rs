@@ -137,3 +137,12 @@ mod isolation_suite {
         rustvello_test_suite::isolation::test_client_data_store_isolation(&ca, &cb).await;
     }
 }
+
+#[test]
+fn declared_guarantees_match_ports() {
+    let db = make_db();
+    rustvello_test_suite::trigger::test_declared_guarantees(
+        &rustvello_sqlite::orchestrator::SqliteOrchestrator::new(Arc::clone(&db)),
+        &rustvello_sqlite::trigger::SqliteTriggerStore::new(db),
+    );
+}

@@ -11,12 +11,20 @@
 :caption: User Guide
 
 installation
+when-to-use
 getting_started
 architecture
+async_tasks
 workflows
+retries-timeouts-cancellation
+idempotency
 configuration/index
 monitoring/index
+guarantees
+migrating-from-celery
+benchmarks
 migration-0.2
+agents
 ```
 
 ```{toctree}
@@ -62,6 +70,10 @@ or for Python:
 pip install rustvello
 ```
 
+Choosing a task runtime? Start with {doc}`when-to-use`, the at-least-once
+contract in {doc}`idempotency`, {doc}`migrating-from-celery` and the
+{doc}`benchmarks` against Celery.
+
 ---
 
 ## Define a Task
@@ -81,12 +93,11 @@ fn add(x: i32, y: i32) -> i32 {
 async fn main() -> RustvelloResult<()> {
     let app = Rustvello::builder()
         .app_id("my-app")
+        .dev_mode(true) // run inline for a local try; drop it to use workers
         .auto_discover_tasks()
         .build().await?;
 
-    // Submit and wait for the result
-    let handle = app.submit_call(&AddTask, AddParams { x: 1, y: 2 }).await?;
-    let result = handle.result().await?;
+    let result = app.call(&AddTask::new(), AddParams { x: 1, y: 2 }).await?.result().await?;
     println!("{result}");  // 3
     Ok(())
 }
@@ -103,7 +114,7 @@ app = App(backend="sqlite", db_path="./tasks.db")
 def add(x: int, y: int) -> int:
     return x + y
 
-# Submit and wait for the result
+app.run(block=False)  # a worker; in production `python -m rustvello.worker module:app`
 inv = add(1, 2)
 result = inv.result(timeout=30)  # 3
 ```
@@ -136,8 +147,8 @@ See the [pynenc documentation](https://docs.pynenc.org) for the full Python API.
 :gutter: 3
 
 ::::{grid-item-card} Invocation Lifecycle
-Every task call becomes a tracked **invocation** through a 13-state FSM:
-`Registered → Pending → Running → Success/Failed/Retry`. Ownership is
+Every task call becomes a tracked **invocation** through a 14-state FSM:
+`Registered → Pending → Running → Success/Failed/Retry/Cancelled`. Ownership is
 recorded per runner, and recovery re-queues stale invocations automatically.
 
 {doc}`architecture`
@@ -218,12 +229,12 @@ let app = Rustvello::builder()
 
 Rustvello is available as both a **Rust crate** and a **Python package**:
 
-| Distribution                                                   | Install                        | Language | Purpose                                       |
-| -------------------------------------------------------------- | ------------------------------ | -------- | --------------------------------------------- |
-| `rustvello` (crate)                                            | `cargo add rustvello`          | Rust     | Distributed task engine with proc-macro       |
-| `rustvello` (wheel)                                            | `pip install rustvello`        | Python   | Standalone task queue (PyO3 bindings)         |
-| [`pynenc-rustvello`](https://pynenc-rustvello.readthedocs.io/) | `pip install pynenc-rustvello` | Python   | Pynenc plugin — Rust backends for pynenc apps |
-| [`pynenc`](https://docs.pynenc.org)                            | `pip install pynenc`           | Python   | Full distributed task framework               |
+| Distribution                                                     | Install                        | Language | Purpose                                       |
+| ---------------------------------------------------------------- | ------------------------------ | -------- | --------------------------------------------- |
+| `rustvello` (crate)                                              | `cargo add rustvello`          | Rust     | Distributed task engine with proc-macro       |
+| `rustvello` (wheel)                                              | `pip install rustvello`        | Python   | Standalone task queue (PyO3 bindings)         |
+| [`pynenc-rustvello`](https://github.com/pynenc/pynenc_rustvello) | `pip install pynenc-rustvello` | Python   | Pynenc plugin — Rust backends for pynenc apps |
+| [`pynenc`](https://docs.pynenc.org)                              | `pip install pynenc`           | Python   | Full distributed task framework               |
 
 ### Capabilities by surface
 
@@ -253,7 +264,7 @@ pynenc (Python, full orchestration framework)
                     └── rustvello (this repo — Rust core)
 ```
 
-Python users install [`pynenc-rustvello`](https://pynenc-rustvello.readthedocs.io/) to
+Python users install [`pynenc-rustvello`](https://github.com/pynenc/pynenc_rustvello) to
 get Rust-powered backends. The plugin registers itself via Python entry points and adds
 builder methods like `.rustvello_redis()` and `.rustvello_postgres()` to `PynencBuilder`.
 
@@ -270,6 +281,6 @@ See the [pynenc documentation](https://docs.pynenc.org) to get started from Pyth
 
 ## Community & License
 
-Rustvello is open source under the [MIT License](license).
+Rustvello is open source under the [MIT License](license.md).
 Contributions welcome — see the {doc}`contributing/index` guide.
 GitHub: [pynenc/rustvello](https://github.com/pynenc/rustvello)

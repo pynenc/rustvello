@@ -1,0 +1,130 @@
+{
+    "started": "2026-09-25T17:41:00+00:00",
+    "command": "benchmarks/run.py --systems rustvello-sqlite rustvello-postgres --idle-sleep-ms 5",
+    "settings": {
+        "rate": 20.0,
+        "latency_tasks": 200,
+        "burst_tasks": 300,
+        "recovery_trials": 3,
+        "recover_after": 5,
+        "poll_ms": 5.0,
+        "idle_sleep_ms": 5,
+        "keep_workdir": false,
+        "one": null
+    },
+    "machine": {
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
+        "machine": "arm64",
+        "cpus": 11,
+        "memory_gb": 19.3,
+        "python": "3.12.10",
+        "load_average_at_start": [5.0, 5.4, 7.1],
+        "cpu": "Apple M3 Pro",
+        "load_average_at_end": [5.2, 5.3, 6.9]
+    },
+    "versions": {
+        "rustvello": "0.7.0",
+        "celery": "5.6.3",
+        "kombu": "5.6.2",
+        "redis": "8.1.0",
+        "SQLAlchemy": "2.1.1",
+        "psycopg": "3.3.6",
+        "psutil": "7.2.2"
+    },
+    "results": [
+        {
+            "system": "rustvello-sqlite (idle_sleep_ms=5)",
+            "worker_ready_s": 0.13,
+            "latency": {
+                "tasks": 200,
+                "rate_per_s": 20.0,
+                "end_to_end_ms": {
+                    "p50": 7.1,
+                    "p95": 14.5,
+                    "p99": 30.5,
+                    "max": 34.5,
+                    "mean": 8.7
+                },
+                "submit_to_executed_ms": {
+                    "p50": 4.6,
+                    "p95": 8.2,
+                    "p99": 27.1,
+                    "max": 30.8,
+                    "mean": 5.3
+                }
+            },
+            "throughput": {
+                "tasks": 300,
+                "submit_per_s": 2914.2,
+                "completed_per_s": 1207.1,
+                "all_results_read_s": 0.25,
+                "worker_cpu_s": 0.19,
+                "client_cpu_s": 0.09,
+                "worker_peak_rss_mb": 23.4,
+                "storage_cpu_s": {},
+                "storage_memory": {}
+            },
+            "idle": {
+                "seconds": 10,
+                "worker_cpu_s": 0.78,
+                "storage_cpu_s": {}
+            },
+            "recovery": {
+                "trials": 3,
+                "kill_to_result_s": [3.11, 7.52, 7.11],
+                "median_s": 7.11,
+                "body_executions": [2, 2, 2]
+            }
+        },
+        {
+            "system": "rustvello-postgres (idle_sleep_ms=5)",
+            "worker_ready_s": 0.4,
+            "latency": {
+                "tasks": 200,
+                "rate_per_s": 20.0,
+                "end_to_end_ms": {
+                    "p50": 40.4,
+                    "p95": 73.2,
+                    "p99": 157.1,
+                    "max": 320.7,
+                    "mean": 45.6
+                },
+                "submit_to_executed_ms": {
+                    "p50": 29.5,
+                    "p95": 54.1,
+                    "p99": 142.9,
+                    "max": 297.5,
+                    "mean": 34.1
+                }
+            },
+            "throughput": {
+                "tasks": 300,
+                "submit_per_s": 65.7,
+                "completed_per_s": 65.4,
+                "all_results_read_s": 5.45,
+                "worker_cpu_s": 1.17,
+                "client_cpu_s": 0.89,
+                "worker_peak_rss_mb": 21.5,
+                "storage_cpu_s": {
+                    "rvbench-postgres": 3.57
+                },
+                "storage_memory": {
+                    "rvbench-postgres": "73.49MiB / 7.661GiB"
+                }
+            },
+            "idle": {
+                "seconds": 10,
+                "worker_cpu_s": 1.07,
+                "storage_cpu_s": {
+                    "rvbench-postgres": 3.19
+                }
+            },
+            "recovery": {
+                "trials": 3,
+                "kill_to_result_s": [3.27, 7.39, 7.4],
+                "median_s": 7.39,
+                "body_executions": [2, 2, 2]
+            }
+        }
+    ]
+}

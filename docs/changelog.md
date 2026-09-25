@@ -4,6 +4,165 @@ For detailed information on each version, please visit the [GitHub Releases page
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-25
+
+- Fix: Python `app.trigger(...).register()` stored nothing, so cron and
+  interval triggers never fired. It now registers the cron condition and the
+  trigger in the app's trigger store (idempotent), rejects an invalid cron
+  expression or a foreign task with `ValueError`, and accepts a task argument
+  named `kind`. `on_cron` takes `min_interval_seconds` (default 50 for 5-field
+  expressions, as in Rust, 0 for 6-field ones).
+- Fix: cron conditions fired only when an evaluation (every few seconds) landed
+  on the slot's exact second, so a minute cron such as `*/5 * * * *` rarely
+  fired. Evaluation now fires the latest due slot once, up to two minutes late
+  (`cron_slot_due`); older missed slots are skipped, not replayed.
+- Fix: `idle_sleep_ms` (`with_idle_sleep`, `App.run(idle_sleep_ms=...)`,
+  `python -m rustvello.worker --idle-sleep-ms`) had no effect: an idle worker
+  always waited the broker's fixed 100 ms before polling again. It now caps
+  that wait, so the Python default (50 ms) and smaller values reduce the
+  dispatch delay of an idle worker, at the cost of more idle polling. Found by
+  the Celery benchmark.
+- The investigation report (`/invocations/{id}/investigation`) adds the
+  current `status` and the stored `error` of a failed invocation.
+- Python `App.start_monitor` binds before returning: `port=0` picks a free port
+  that `address` reports, requests made right after the call are served, and a
+  bind error raises `OSError`.
+- The in-memory trigger store indexes a trigger registered twice only once, and
+  `RuntimeError("Task failed: …")` no longer repeats the error type when the
+  stored message already starts with it.
+- Agent skill `skills/rustvello/` (`SKILL.md` format, no MCP needed): set up an
+  app on SQLite, sync and async tasks with retries, backoff, timeouts and
+  cancellation, workers, submit and wait, cron triggers, choosing a backend
+  from the guarantee matrix, and investigating a failure through
+  `/api/capabilities` and the investigation report, with helper scripts
+  (`guarantees.py`, `investigate.py`). CI copies the skill alone and runs its
+  examples against the built wheel (`make skill-examples`), and checks its
+  version pin and the API used by its snippets. New pages: `llms.txt` (served
+  at the docs root) and "Using Rustvello from an agent" (`docs/agents.md`).
+- Cross-model eval harness in `evals/`: install, implement and recover tasks
+  plus discovery prompts that do not name Rustvello, scored for task success,
+  wrong or nonexistent API use, interventions and recommendation rate. Calls
+  Anthropic, OpenAI(-compatible) or Gemini models when their key is in the
+  environment and skips them otherwise; mock models validate the harness in CI
+  (`make evals-check`).
+- Idempotency keys: `InvocationId::from_key(task_id, key)` (Rust) and
+  `InvocationId.from_key(task_key, key)` (Python) derive the same UUID v5 for a
+  task and a caller key. `RustvelloApp::submit_call_with_key` and
+  `TaskHandle.submit_with_key` submit through the idempotent durable submission,
+  so repeating a request with the same key returns the same invocation
+  (SQLite and PostgreSQL; other backends fail closed). The agent skill,
+  `llms.txt` and "Using Rustvello from an agent" cover keyed submission, with a
+  runnable skill example (`examples/idempotent_submit.py`).
+- New guide: [Idempotency and the at-least-once contract](idempotency.md), with
+  a new kill test (`idempotency_kill.rs`, in `make test-fault`) showing that a
+  worker killed after its side effects has its body run again under the same
+  invocation id, and that an effect keyed by that id is applied once. A new test
+  shows that a timed-out synchronous body overlaps its retry.
+- New pages: [When to use Rustvello](when-to-use.md),
+  [Migrating from Celery](migrating-from-celery.md) with a runnable before/after
+  example checked in CI (`make migration-example`), and a reproducible
+  [benchmark against Celery](benchmarks.md) under equal durability settings
+  (`benchmarks/`, `make bench-up bench bench-down`).
+
+## 0.7.0 - 2026-09-25
+
+- Native async tasks. `#[rustvello::task]` and `#[rustvello::workflow]` accept
+  `async fn`: the runner awaits the body on its Tokio runtime without a blocking
+  thread, bounded by `num_workers`. The invocation, runner and W3C trace contexts
+  and the worker's tracing span follow the body across `.await` points.
+  `Task`/`DynTask` gain `is_async` and `run_async`/`execute_async` with defaults,
+  so existing implementations are unchanged; `block_on_task_future` serves the
+  synchronous entry points. A panicking or aborted body fails the attempt
+  (`TaskCancelled`) instead of hanging, and a dropped worker aborts its body so
+  stale recovery can re-run the invocation. `blocking = true` on an `async fn` is
+  a compile error.
+- Python `@app.task` accepts `async def`. Each worker thread (or worker process)
+  owns one reusable event loop, so the invocation context and OpenTelemetry context
+  work unchanged. Tasks a coroutine leaves running are cancelled when it returns.
+  `Invocation.result_async()` awaits a child without blocking the loop, and dev
+  mode awaits async bodies inline. See [Async tasks](async_tasks.md).
+- Retry backoff: `retry_delay_ms`, `retry_max_delay_ms`, `retry_backoff` and
+  `retry_jitter` (equal by default; full or none) on `TaskConfig`, on the task
+  macros and on Python `@app.task`/`@app.workflow` (seconds). Delayed retries are
+  stored durably in the backend on SQLite and PostgreSQL. The in-memory backend
+  keeps them only for the life of the process. Redis, MongoDB and RabbitMQ
+  declare no support and retry immediately. A worker killed during the backoff
+  loses nothing, and the retry fires once when due (kill test).
+- Execution deadlines: `timeout_ms` / `timeout` fail an attempt with
+  `TaskTimeoutError`. `retry_on_timeout` decides whether the attempt is
+  retried. Rust async bodies are aborted, Python `async def` bodies are
+  cancelled on their worker event loop (`CancelledError` at the next `await`)
+  and process-pool workers are killed. Sync threads are abandoned and their
+  late result is discarded.
+- Cancellation: new terminal status `CANCELLED`, `RustvelloApp::cancel`,
+  Python `Invocation.cancel()`/`App.cancel()` and `rustvello cancel`. Running
+  attempts are abandoned within `cancellation_check_interval_seconds`, with
+  the same per-body rules as deadlines.
+- `AttemptSignal` / `current_attempt_signal()`: a sync task body can check
+  whether the runner abandoned its attempt (deadline or cancel) and stop
+  cooperatively, or register an `on_abandon` hook.
+- The guarantee matrix (`/api/capabilities`, `docs/guarantees.md`) gains a
+  _delayed retry_ column: guaranteed on SQLite and PostgreSQL (kill-tested),
+  process-local (best effort) in memory, not supported on Redis, MongoDB and
+  RabbitMQ. The release gate runs the delayed-retry kill tests
+  (`make test-fault`, `make test-fault-postgres`).
+- Defaults keep the previous behaviour, and task configs serialized before this
+  release deserialize unchanged. See the "Retries, timeouts and cancellation"
+  guide for the per-backend guarantees and the side-effect semantics.
+
+## 0.6.0 - 2026-09-25
+
+- Trigger firings can no longer be lost. A firing is claimed into a trigger
+  outbox (claim, run record with its planned invocation, and consumed
+  conditions, committed together on SQLite, PostgreSQL and memory), then
+  published under an invocation id derived from the run id. The atomic
+  service re-publishes claimed runs that a crashed process left unpublished,
+  and re-publication is idempotent, so every firing yields exactly one logical
+  invocation. Proven by process-kill suites at every boundary on SQLite and
+  PostgreSQL and by fault tests on the fallback path.
+- Trigger-run record errors now propagate instead of being logged and ignored.
+  A run whose target task is not registered on the evaluating runner stays
+  pending instead of failing the iteration.
+- `TriggerStore` gains `claim_trigger_runs_with_records`,
+  `get_pending_trigger_runs` and `atomic_trigger_claims` (with defaults);
+  `TriggerRunRecord` gains `planned_invocation_id`; `TriggerExecution` gains
+  `invocation_id`. Callers of `evaluate_trigger_runs` that publish invocations
+  themselves must call `complete_trigger_run`, or the trigger loop publishes
+  the run as well.
+- Guarantee matrix per backend (atomic publication, trigger atomicity,
+  stale-owner recovery, ordering, durability), served by `/api/capabilities`
+  under `guarantees` and generated into the docs; a guaranteed cell must name
+  its proving tests.
+- One release gate, `release-gate.yml`, defines the guarantee-matrix check,
+  the fault suites and the backend suites; `release-rust.yml`,
+  `release-python.yml` and `backend-and-stress.yml` (weekly and on backend
+  pull requests) all call it, so every suite runs once per trigger.
+  `make test-fault` now includes the trigger kill and trigger fallback suites;
+  `make test-fault-postgres` runs the PostgreSQL gate against an isolated
+  database.
+- PostgreSQL skips its schema DDL when the schema is already current
+  (`rustvello_schema_version`), so a runner starting next to busy runners no
+  longer takes table locks that could deadlock them. The compliance suite can
+  reuse an existing server through `RUSTVELLO_POSTGRES_DSN`.
+
+## 0.5.3 - 2026-09-25
+
+- The README quick starts run as written: the Python one starts a worker (and
+  shows `dev_mode_force_sync` for inline runs), the Rust one starts a runner and
+  waits with `wait_timeout()` instead of `result()`. They live in
+  `py-rustvello/examples/` and `crates/rustvello/examples/readme_quickstart.rs`;
+  CI checks the README copies and runs them against the built wheel and crate.
+- `make test` and PR CI run the SQLite fault-injection suites
+  (`make test-fault`). The external-backend suite, now including the PostgreSQL
+  network and process-kill gates, also runs on pull requests that touch a
+  backend and gates every PyPI and crates.io release.
+- One documentation host, Read the Docs, in the README, `pyproject.toml`,
+  `Cargo.toml` and `rustvello info`; package descriptions, keywords and
+  classifiers describe the task queue and workflow runtime. Broken external
+  links fixed, and a link checker (`make links`, lychee) runs in CI.
+- `docs/workflows.md` documents the standalone Python workflow API
+  (`@app.workflow`, `workflow_root()`).
+
 ## 0.5.2 - 2026-09-17
 
 - `RUSTVELLO__DEV_MODE_FORCE_SYNC` reaches an `App` built with an explicit

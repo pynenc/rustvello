@@ -2,7 +2,9 @@
 
 use crate::bounded::Client;
 use deadpool_postgres::Pool;
-use std::{fmt, sync::Arc, time::Duration};
+#[cfg(feature = "tls")]
+use std::fmt;
+use std::{sync::Arc, time::Duration};
 use tokio::time::{timeout_at, Instant};
 use tokio_postgres::NoTls;
 
@@ -423,6 +425,53 @@ impl Database {
             .await
             .map_err(pg_err)?;
 
+        // A warm start skips the DDL batch: `ALTER TABLE` and `CREATE INDEX`
+        // take table locks even when nothing changes, and could deadlock with
+        // runners already working in this schema.
+        let current_ddl: Option<i32> = if client
+            .query_one(
+                "SELECT to_regclass('rustvello_schema_version') IS NOT NULL",
+                &[],
+            )
+            .await?
+            .get(0)
+        {
+            client
+                .query_opt("SELECT version FROM rustvello_schema_version", &[])
+                .await?
+                .map(|row| row.get(0))
+        } else {
+            None
+        };
+        if current_ddl != Some(SCHEMA_DDL_VERSION) {
+            self.apply_schema_ddl(&client).await?;
+        }
+        client.execute("INSERT INTO runtime_profile (version,lease_ms,max_queue_rows,max_payload_bytes) VALUES (1,$1,$2,$3) ON CONFLICT DO NOTHING",
+            &[&(self.options.delivery_lease_ms as i64), &i64::from(self.options.max_queue_rows), &i64::from(self.options.max_payload_bytes)]).await?;
+        let profile = client
+            .query_one(
+                "SELECT version,lease_ms,max_queue_rows,max_payload_bytes FROM runtime_profile",
+                &[],
+            )
+            .await?;
+        if profile.get::<_, i32>(0) != 1
+            || profile.get::<_, i64>(1) != self.options.delivery_lease_ms as i64
+            || profile.get::<_, i64>(2) != i64::from(self.options.max_queue_rows)
+            || profile.get::<_, i64>(3) != i64::from(self.options.max_payload_bytes)
+        {
+            return Err(configuration(
+                "Postgres persisted runtime admission/lease profile differs",
+            ));
+        }
+        client.commit().await?;
+        Ok(())
+    }
+
+    /// Create or migrate every table and index of the app schema (additive only).
+    async fn apply_schema_ddl(
+        &self,
+        client: &crate::bounded::Transaction<'_>,
+    ) -> RustvelloResult<()> {
         client
             .batch_execute(
                 "
@@ -718,6 +767,10 @@ impl Database {
             ALTER TABLE invocations ADD COLUMN IF NOT EXISTS tracestate TEXT;
             ALTER TABLE invocations ADD COLUMN IF NOT EXISTS workflow_parent_id TEXT;
             ALTER TABLE broker_queue ADD COLUMN IF NOT EXISTS reserved_until TIMESTAMPTZ;
+            -- Trigger outbox: pre-0.6 runs keep NULL and are never re-published.
+            ALTER TABLE trg_trigger_runs ADD COLUMN IF NOT EXISTS planned_invocation_id TEXT;
+            CREATE INDEX IF NOT EXISTS idx_trg_runs_pending ON trg_trigger_runs(claimed_at)
+                WHERE triggered_invocation_id IS NULL AND planned_invocation_id IS NOT NULL;
             CREATE TABLE IF NOT EXISTS submission_publications (
                 invocation_id TEXT PRIMARY KEY, identity_json TEXT NOT NULL
             );
@@ -728,31 +781,28 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_history_runner
                 ON history(runner_id);
+            -- Marks this DDL version as applied; see SCHEMA_DDL_VERSION.
+            CREATE TABLE IF NOT EXISTS rustvello_schema_version (
+                singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+                version INTEGER NOT NULL
+            );
             ",
             )
             .await
             .map_err(pg_err)?;
-        client.execute("INSERT INTO runtime_profile (version,lease_ms,max_queue_rows,max_payload_bytes) VALUES (1,$1,$2,$3) ON CONFLICT DO NOTHING",
-            &[&(self.options.delivery_lease_ms as i64), &i64::from(self.options.max_queue_rows), &i64::from(self.options.max_payload_bytes)]).await?;
-        let profile = client
-            .query_one(
-                "SELECT version,lease_ms,max_queue_rows,max_payload_bytes FROM runtime_profile",
-                &[],
+        client
+            .execute(
+                "INSERT INTO rustvello_schema_version (version) VALUES ($1)
+                 ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version",
+                &[&SCHEMA_DDL_VERSION],
             )
             .await?;
-        if profile.get::<_, i32>(0) != 1
-            || profile.get::<_, i64>(1) != self.options.delivery_lease_ms as i64
-            || profile.get::<_, i64>(2) != i64::from(self.options.max_queue_rows)
-            || profile.get::<_, i64>(3) != i64::from(self.options.max_payload_bytes)
-        {
-            return Err(configuration(
-                "Postgres persisted runtime admission/lease profile differs",
-            ));
-        }
-        client.commit().await?;
         Ok(())
     }
 }
+
+/// Version of the DDL batch in `apply_schema_ddl`; bump it whenever that batch changes.
+const SCHEMA_DDL_VERSION: i32 = 2;
 
 pub(crate) fn pg_err(e: RustvelloError) -> RustvelloError {
     e

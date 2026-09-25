@@ -94,6 +94,11 @@ cargo test -p rustvello-redis -- --ignored suite_broker_route_and_retrieve
 - Default credentials: `user=postgres password=postgres dbname=postgres`
 - Auto-migration: The `Database::connect()` method runs schema migrations on
   first connection
+- Existing server: with `RUSTVELLO_POSTGRES_DSN` set, the compliance suite
+  reuses that server instead of starting a container; every test connects with
+  a unique app id, so it gets its own schema. The release gate runs the suite,
+  the publication acceptance tests and the trigger process-kill tests this way
+  against a PostgreSQL service container.
 
 ### RabbitMQ
 

@@ -56,6 +56,22 @@ fn publish(
     Ok(())
 }
 
+/// Hide the invocation's queued entry until `delay` elapses (durable retry backoff).
+fn delay_delivery(
+    tx: &Transaction<'_>,
+    id: &str,
+    delay: std::time::Duration,
+) -> RustvelloResult<()> {
+    tx.execute(
+        "INSERT INTO broker_reservations (queue_id, expires_at_ms)
+         SELECT id, ?2 FROM broker_queue WHERE invocation_id = ?1
+         ON CONFLICT(queue_id) DO UPDATE SET expires_at_ms = excluded.expires_at_ms",
+        params![id, crate::broker::not_before_ms(delay)],
+    )
+    .map_err(sql_err)?;
+    Ok(())
+}
+
 fn history(
     tx: &Transaction<'_>,
     id: &str,
@@ -129,6 +145,10 @@ fn transition(
 impl RuntimePublication for SqlitePublication {
     fn domain(&self) -> PublicationDomain {
         Arc::clone(&self.db.domain)
+    }
+
+    fn supports_delayed_retry(&self) -> bool {
+        true
     }
 
     async fn begin_execution(
@@ -237,7 +257,7 @@ impl RuntimePublication for SqlitePublication {
             let status_operation;
             let operation = match &change {
                 PublicationChange::Recover { .. } => "recover",
-                PublicationChange::Retry(_) => "retry",
+                PublicationChange::Retry(_) | PublicationChange::DelayedRetry { .. } => "retry",
                 PublicationChange::Reroute(_) | PublicationChange::ConcurrencyReroute(_) => "reroute",
                 PublicationChange::Success(_) | PublicationChange::Failure(_) => "complete",
                 PublicationChange::Status(status) => {
@@ -271,12 +291,13 @@ impl RuntimePublication for SqlitePublication {
                     point("concurrency_status")?;
                     Some(route)
                 }
-                PublicationChange::Retry(route) | PublicationChange::Reroute(route) => Some(route),
+                PublicationChange::Retry(route) | PublicationChange::Reroute(route)
+                | PublicationChange::DelayedRetry { route, .. } => Some(route),
                 _ => None,
             };
             let status = match &change {
                 PublicationChange::Status(s) => *s,
-                PublicationChange::Retry(_) => InvocationStatus::Retry,
+                PublicationChange::Retry(_) | PublicationChange::DelayedRetry { .. } => InvocationStatus::Retry,
                 PublicationChange::Success(_) => InvocationStatus::Success,
                 PublicationChange::Failure(_) => InvocationStatus::Failed,
                 _ => InvocationStatus::Rerouted,
@@ -293,7 +314,7 @@ impl RuntimePublication for SqlitePublication {
             let record = transition(&tx, &id, &runner, &old, status)?;
             point("status_history")?;
             match &change {
-                PublicationChange::Retry(_) => {
+                PublicationChange::Retry(_) | PublicationChange::DelayedRetry { .. } => {
                     tx.execute("INSERT INTO retries (invocation_id,retry_count) VALUES (?1,1) ON CONFLICT(invocation_id) DO UPDATE SET retry_count=retry_count+1", [id.as_str()]).map_err(sql_err)?;
                     point("counter")?;
                 }
@@ -310,6 +331,9 @@ impl RuntimePublication for SqlitePublication {
             if let Some(route) = route {
                 let task: String = tx.query_row("SELECT task_id FROM invocations WHERE invocation_id=?1", [id.as_str()], |r| r.get(0)).map_err(sql_err)?;
                 publish(&tx, id.as_str(), &task, route)?;
+                if let PublicationChange::DelayedRetry { delay, .. } = &change {
+                    delay_delivery(&tx, id.as_str(), *delay)?;
+                }
                 tx.execute("DELETE FROM cc_arg_pairs WHERE invocation_id=?1", [id.as_str()]).map_err(sql_err)?;
                 point("queue")?;
             }

@@ -14,54 +14,65 @@ use rustvello_test_suite::lifecycle::BackendTriple;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 
-/// Start a Postgres container and return a connected `Database`.
-async fn postgres_db() -> (testcontainers::ContainerAsync<Postgres>, Arc<Database>) {
+/// Keeps a started container alive; `None` when reusing a server.
+type Guard = Option<testcontainers::ContainerAsync<Postgres>>;
+
+/// Connection string of an existing server (`RUSTVELLO_POSTGRES_DSN`), or a
+/// freshly started container. Every connection below uses a unique app id, so
+/// tests sharing one server stay isolated in separate schemas.
+async fn postgres_server() -> (Guard, String) {
+    if let Ok(dsn) = std::env::var("RUSTVELLO_POSTGRES_DSN") {
+        return (None, dsn);
+    }
     let container = Postgres::default().start().await.unwrap();
     let host = container.get_host().await.unwrap();
     let port = container.get_host_port_ipv4(5432).await.unwrap();
     let conn = format!("host={host} port={port} user=postgres password=postgres dbname=postgres");
-    let db = Arc::new(Database::connect(&conn, "test").await.unwrap());
+    (Some(container), conn)
+}
+
+fn unique_app(prefix: &str) -> String {
+    format!(
+        "{prefix}_{}",
+        rustvello_proto::identifiers::RunnerId::new()
+            .to_string()
+            .replace('-', "")
+    )
+}
+
+/// Connect to a Postgres server and return a connected `Database`.
+async fn postgres_db() -> (Guard, Arc<Database>) {
+    let (container, conn) = postgres_server().await;
+    let db = Arc::new(Database::connect(&conn, &unique_app("test")).await.unwrap());
     (container, db)
 }
 
-async fn make_broker() -> (testcontainers::ContainerAsync<Postgres>, PostgresBroker) {
+async fn make_broker() -> (Guard, PostgresBroker) {
     let (c, db) = postgres_db().await;
     (c, PostgresBroker::new(db))
 }
 
-async fn make_orchestrator() -> (
-    testcontainers::ContainerAsync<Postgres>,
-    PostgresOrchestrator,
-) {
+async fn make_orchestrator() -> (Guard, PostgresOrchestrator) {
     let (c, db) = postgres_db().await;
     (c, PostgresOrchestrator::new(db))
 }
 
-async fn make_state_backend() -> (
-    testcontainers::ContainerAsync<Postgres>,
-    PostgresStateBackend,
-) {
+async fn make_state_backend() -> (Guard, PostgresStateBackend) {
     let (c, db) = postgres_db().await;
     (c, PostgresStateBackend::new(db))
 }
 
-async fn make_trigger_store() -> (
-    testcontainers::ContainerAsync<Postgres>,
-    PostgresTriggerStore,
-) {
+async fn make_trigger_store() -> (Guard, PostgresTriggerStore) {
     let (c, db) = postgres_db().await;
     (c, PostgresTriggerStore::new(db))
 }
 
-async fn make_client_data_store() -> (
-    testcontainers::ContainerAsync<Postgres>,
-    PostgresClientDataStore,
-) {
+async fn make_client_data_store() -> (Guard, PostgresClientDataStore) {
     let (c, db) = postgres_db().await;
     (c, PostgresClientDataStore::new(db))
 }
 
-async fn make_triple() -> (testcontainers::ContainerAsync<Postgres>, BackendTriple) {
+async fn make_triple() -> (Guard, BackendTriple) {
     let (container, db) = postgres_db().await;
     let triple = BackendTriple {
         broker: Arc::new(PostgresBroker::new(Arc::clone(&db))),
@@ -108,7 +119,7 @@ mod lifecycle_suite {
 
 /// Two sets of backends sharing the same Postgres instance but different app_ids.
 async fn make_isolation_pair() -> (
-    testcontainers::ContainerAsync<Postgres>,
+    Guard,
     PostgresBroker,
     PostgresBroker,
     PostgresOrchestrator,
@@ -120,13 +131,18 @@ async fn make_isolation_pair() -> (
     PostgresClientDataStore,
     PostgresClientDataStore,
 ) {
-    let container = Postgres::default().start().await.unwrap();
-    let host = container.get_host().await.unwrap();
-    let port = container.get_host_port_ipv4(5432).await.unwrap();
-    let conn = format!("host={host} port={port} user=postgres password=postgres dbname=postgres");
+    let (container, conn) = postgres_server().await;
 
-    let db_a = Arc::new(Database::connect(&conn, "app_a").await.unwrap());
-    let db_b = Arc::new(Database::connect(&conn, "app_b").await.unwrap());
+    let db_a = Arc::new(
+        Database::connect(&conn, &unique_app("app_a"))
+            .await
+            .unwrap(),
+    );
+    let db_b = Arc::new(
+        Database::connect(&conn, &unique_app("app_b"))
+            .await
+            .unwrap(),
+    );
 
     (
         container,
@@ -146,4 +162,14 @@ async fn make_isolation_pair() -> (
 mod isolation_suite {
     use super::*;
     rustvello_test_suite::async_isolation_suite!(make_isolation_pair());
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn declared_guarantees_match_ports() {
+    let (_container, db) = postgres_db().await;
+    rustvello_test_suite::trigger::test_declared_guarantees(
+        &PostgresOrchestrator::new(Arc::clone(&db)),
+        &PostgresTriggerStore::new(db),
+    );
 }

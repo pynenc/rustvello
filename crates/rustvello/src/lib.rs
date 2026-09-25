@@ -78,6 +78,7 @@ pub use rustvello_rabbitmq as rabbitmq;
 pub mod prelude {
     pub use crate::app::{RustvelloApp, TaskEntry};
     pub use crate::builder::Rustvello;
+    pub use crate::orchestration::CancelOutcome;
     #[cfg(feature = "rayon")]
     pub use crate::runner::RayonRunner;
     pub use crate::runner::{PersistentTokioRunner, TaskRunner};

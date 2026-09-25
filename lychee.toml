@@ -1,0 +1,30 @@
+# Link checker configuration (https://lychee.cli.rs), used by `make links`
+# (offline: repository-relative links only) and `make links-online` / CI.
+
+# Markdown sources; generated output and dependencies are never checked.
+exclude_path = ["(^|/)target/", "(^|/)\\.venv/", "docs/_build/", "(^|/)fuzz/", "node_modules/"]
+
+# Local, templated and example endpoints that exist only at runtime.
+exclude_loopback = true
+exclude = [
+  '^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)',
+  '^https?://[^/]*\.(local|example|invalid)(/|$)',
+  '^https?://example\.(com|org)',
+  '^(amqp|redis|mongodb|postgres|postgresql)://',
+  '\$\{?[A-Z_]+',
+  '<[^>]+>',
+  # Links to this repository's main branch: a file added by a pull request
+  # exists there only after the merge. `scripts/check_repo_links.py` checks
+  # them against the working tree (pre-commit, `make links`, CI).
+  '^https://github\.com/pynenc/rustvello/(blob|tree)/main/',
+  '^https://raw\.githubusercontent\.com/pynenc/rustvello/main/',
+]
+
+# Transient failures and rate limits must not fail CI; broken links must.
+max_retries = 3
+retry_wait_time = 2
+timeout = 20
+accept = ["200..=299", "403", "429"]
+# A slow third-party site (a timeout) is not a broken link; they are still
+# reported in the summary.
+accept_timeouts = true

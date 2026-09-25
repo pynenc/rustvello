@@ -202,7 +202,7 @@ impl PersistentTokioRunner {
                     continue;
                 }
             };
-            if !did_work && !self.control_plane.broker.wait_for_work(cancel).await {
+            if !did_work && !self.wait_idle(cancel).await {
                 break;
             }
         }
@@ -232,6 +232,16 @@ impl PersistentTokioRunner {
             }
             None => Ok(false),
         }
+    }
+
+    /// Wait after an empty poll: the broker's own wait (a notification for the
+    /// in-memory broker, a fixed interval for database brokers), capped at
+    /// `idle_sleep_ms`. Returns `false` once the runner is cancelled.
+    pub(super) async fn wait_idle(&self, cancel: &CancellationToken) -> bool {
+        let cap = Duration::from_millis(self.idle_sleep_ms.max(1));
+        tokio::time::timeout(cap, self.control_plane.broker.wait_for_work(cancel))
+            .await
+            .unwrap_or_else(|_| !cancel.is_cancelled())
     }
 
     pub(super) async fn management_loop(&self) -> RustvelloResult<()> {

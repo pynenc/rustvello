@@ -9,6 +9,7 @@
 //! broker, trigger, and payload ports. It does not execute user task code.
 
 mod backends;
+mod control;
 mod dispatch;
 mod maintenance;
 mod retrieval;
@@ -16,6 +17,7 @@ mod routing;
 mod submission;
 mod triggers;
 
+pub use control::CancelOutcome;
 pub(crate) use dispatch::queue_names_for_retrieval;
 pub use routing::RouteCallResult;
 
