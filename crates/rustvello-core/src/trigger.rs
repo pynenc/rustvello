@@ -137,6 +137,73 @@ pub trait TriggerStore: Send + Sync {
         query: &TriggerRunQuery,
     ) -> RustvelloResult<Vec<TriggerRunRecord>>;
 
+    // -- Trigger outbox --
+
+    /// Claim runs, persist their outbox records, then consume valid conditions.
+    ///
+    /// Returns, per record, whether this call made the claim. The consumed
+    /// conditions are removed even for runs that were already claimed, so an
+    /// evaluation interrupted after its claims converges on the next pass.
+    /// Conditions are consumed only after every run of the batch is claimed:
+    /// a condition shared by two triggers is never lost between their claims.
+    ///
+    /// Transactional stores override this so the whole batch commits at once
+    /// (see [`Self::atomic_trigger_claims`]). The default is an ordered
+    /// sequence that the next evaluator repairs: a claim left without its
+    /// record is recorded again, and the record's deterministic invocation id
+    /// keeps re-publication idempotent.
+    async fn claim_trigger_runs_with_records(
+        &self,
+        records: &[TriggerRunRecord],
+        consumed: &[String],
+    ) -> RustvelloResult<Vec<bool>> {
+        let mut claimed = Vec::with_capacity(records.len());
+        for record in records {
+            let run_id = record.trigger_run_id.as_str();
+            let first = self.claim_trigger_run(&record.trigger_run_id).await?;
+            crate::failpoints::boundary("trigger.claim.claimed", run_id).await?;
+            if first
+                || self
+                    .get_trigger_run(&record.trigger_run_id)
+                    .await?
+                    .is_none()
+            {
+                self.store_trigger_run(record).await?;
+            }
+            crate::failpoints::boundary("trigger.claim.recorded", run_id).await?;
+            claimed.push(first);
+        }
+        self.clear_valid_conditions(consumed).await?;
+        Ok(claimed)
+    }
+
+    /// Claimed runs whose planned invocation is not attached yet, oldest first.
+    ///
+    /// This is the trigger outbox the atomic service drains. The default scans
+    /// [`Self::get_trigger_runs`]; stores with an index override it.
+    async fn get_pending_trigger_runs(
+        &self,
+        limit: usize,
+    ) -> RustvelloResult<Vec<TriggerRunRecord>> {
+        let mut runs: Vec<TriggerRunRecord> = self
+            .get_trigger_runs(&TriggerRunQuery {
+                limit: Some(usize::MAX),
+                ..TriggerRunQuery::default()
+            })
+            .await?
+            .into_iter()
+            .filter(TriggerRunRecord::is_pending)
+            .collect();
+        runs.sort_by(|left, right| left.claimed_at.cmp(&right.claimed_at));
+        runs.truncate(limit);
+        Ok(runs)
+    }
+
+    /// Whether [`Self::claim_trigger_runs_with_records`] commits as one atomic write.
+    fn atomic_trigger_claims(&self) -> bool {
+        false
+    }
+
     /// Purge all trigger data.
     async fn purge(&self) -> RustvelloResult<()>;
 
@@ -167,6 +234,24 @@ pub struct TriggerExecution {
     pub run_id: TriggerRunId,
     pub trigger: TriggerDefinitionDTO,
     pub arguments: serde_json::Value,
+    /// Deterministic invocation id for this run; see [`trigger_run_invocation_id`].
+    pub invocation_id: InvocationId,
+}
+
+/// Namespace for invocation ids derived from trigger run ids (UUID v5).
+const TRIGGER_RUN_NAMESPACE: uuid::Uuid = uuid::Uuid::from_bytes([
+    0x5c, 0x0e, 0x7a, 0x61, 0x2b, 0x4d, 0x4f, 0x0a, 0x9e, 0x1d, 0x8b, 0x62, 0x3f, 0x70, 0xc4, 0x19,
+]);
+
+/// The invocation id a trigger run publishes.
+///
+/// Derived from the run id, so every attempt to publish one firing, including
+/// recovery after a crash, targets the same invocation and publication stays
+/// idempotent.
+pub fn trigger_run_invocation_id(run_id: &TriggerRunId) -> InvocationId {
+    InvocationId::from_string(
+        uuid::Uuid::new_v5(&TRIGGER_RUN_NAMESPACE, run_id.as_str().as_bytes()).to_string(),
+    )
 }
 
 impl TriggerManager {
@@ -367,9 +452,14 @@ impl TriggerManager {
 
     // -- Trigger evaluation pipeline --
 
-    /// Process all pending valid conditions and determine which triggers should fire.
+    /// Process all pending valid conditions and claim the triggers that fire.
     ///
-    /// Returns a list of (trigger definition, arguments) pairs ready for invocation.
+    /// Each firing is claimed into the trigger outbox: the claim, its run
+    /// record (with the planned invocation id) and the consumed valid
+    /// conditions are written together. Returns the runs claimed by this call.
+    /// A claimed run stays pending until [`Self::complete_trigger_run`]
+    /// attaches its invocation; the orchestrator's trigger loop publishes
+    /// every pending run, including runs left behind by a crashed process.
     pub async fn evaluate_trigger_runs(&self) -> RustvelloResult<Vec<TriggerExecution>> {
         let valid_conditions = self.store.get_valid_conditions().await?;
         if valid_conditions.is_empty() {
@@ -394,8 +484,8 @@ impl TriggerManager {
             }
         }
 
-        let mut to_invoke = Vec::new();
-        let mut to_clear: Vec<String> = Vec::new();
+        let mut candidates: Vec<(TriggerRunRecord, TriggerExecution)> = Vec::new();
+        let mut consumed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
         for trigger in trigger_map.values() {
             match trigger.logic {
@@ -423,39 +513,33 @@ impl TriggerManager {
                             trigger.trigger_id.as_str(),
                             vc_ids.join("_")
                         ));
-
-                        if self.store.claim_trigger_run(&run_id).await? {
-                            let args = trigger
-                                .argument_template
-                                .clone()
-                                .unwrap_or(serde_json::Value::Object(Default::default()));
-                            let selected: Vec<ValidCondition> = trigger
-                                .condition_ids
-                                .iter()
-                                .filter_map(|cid| {
-                                    by_condition.get(cid)?.first().map(|vc| (*vc).clone())
-                                })
-                                .collect();
-                            self.record_claimed_run(&run_id, trigger, &args, &selected)
-                                .await;
-                            to_invoke.push(TriggerExecution {
-                                run_id,
-                                trigger: trigger.clone(),
-                                arguments: args,
-                            });
-
-                            // Mark all valid conditions used in this trigger for clearing
-                            for cid in &trigger.condition_ids {
-                                if let Some(vcs) = by_condition.get(cid) {
-                                    for vc in vcs {
-                                        to_clear.push(vc.valid_condition_id.clone());
-                                    }
-                                }
-                            }
-                        }
+                        let selected: Vec<ValidCondition> = trigger
+                            .condition_ids
+                            .iter()
+                            .filter_map(|cid| {
+                                by_condition.get(cid)?.first().map(|vc| (*vc).clone())
+                            })
+                            .collect();
+                        // Every valid condition of the participating conditions is consumed.
+                        let consumed_here: Vec<String> = trigger
+                            .condition_ids
+                            .iter()
+                            .filter_map(|cid| by_condition.get(cid))
+                            .flatten()
+                            .map(|vc| vc.valid_condition_id.clone())
+                            .collect();
+                        candidates.push(Self::planned_run(run_id, trigger, &selected));
+                        consumed.extend(consumed_here);
                     }
                 }
-                TriggerLogic::Or => {
+                logic => {
+                    if logic != TriggerLogic::Or {
+                        tracing::warn!(
+                            trigger_id = %trigger.trigger_id,
+                            logic = ?trigger.logic,
+                            "Unknown TriggerLogic variant; falling back to Or semantics"
+                        );
+                    }
                     // Any condition is sufficient — one invocation per valid condition
                     for cid in &trigger.condition_ids {
                         if let Some(vcs) = by_condition.get(cid) {
@@ -465,64 +549,12 @@ impl TriggerManager {
                                     trigger.trigger_id.as_str(),
                                     vc.valid_condition_id
                                 ));
-
-                                if self.store.claim_trigger_run(&run_id).await? {
-                                    let args = trigger
-                                        .argument_template
-                                        .clone()
-                                        .unwrap_or(serde_json::Value::Object(Default::default()));
-                                    self.record_claimed_run(
-                                        &run_id,
-                                        trigger,
-                                        &args,
-                                        &[(*vc).clone()],
-                                    )
-                                    .await;
-                                    to_invoke.push(TriggerExecution {
-                                        run_id,
-                                        trigger: trigger.clone(),
-                                        arguments: args,
-                                    });
-                                    to_clear.push(vc.valid_condition_id.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {
-                    // Future logic variants: treat like Or for forward-compat
-                    tracing::warn!(
-                        trigger_id = %trigger.trigger_id,
-                        logic = ?trigger.logic,
-                        "Unknown TriggerLogic variant; falling back to Or semantics"
-                    );
-                    for cid in &trigger.condition_ids {
-                        if let Some(vcs) = by_condition.get(cid) {
-                            for vc in vcs {
-                                let run_id = TriggerRunId::from(format!(
-                                    "run_{}_{}",
-                                    trigger.trigger_id.as_str(),
-                                    vc.valid_condition_id
+                                candidates.push(Self::planned_run(
+                                    run_id,
+                                    trigger,
+                                    &[(*vc).clone()],
                                 ));
-                                if self.store.claim_trigger_run(&run_id).await? {
-                                    let args = trigger
-                                        .argument_template
-                                        .clone()
-                                        .unwrap_or(serde_json::Value::Object(Default::default()));
-                                    self.record_claimed_run(
-                                        &run_id,
-                                        trigger,
-                                        &args,
-                                        &[(*vc).clone()],
-                                    )
-                                    .await;
-                                    to_invoke.push(TriggerExecution {
-                                        run_id,
-                                        trigger: trigger.clone(),
-                                        arguments: args,
-                                    });
-                                    to_clear.push(vc.valid_condition_id.clone());
-                                }
+                                consumed.insert(vc.valid_condition_id.clone());
                             }
                         }
                     }
@@ -530,12 +562,26 @@ impl TriggerManager {
             }
         }
 
-        // Clear processed valid conditions
-        if !to_clear.is_empty() {
-            self.store.clear_valid_conditions(&to_clear).await?;
+        if candidates.is_empty() {
+            return Ok(Vec::new());
         }
-
-        Ok(to_invoke)
+        // One claim batch: every run is claimed and recorded before any
+        // condition is consumed, so a crash cannot consume a condition that a
+        // not-yet-claimed trigger still needs.
+        let records: Vec<TriggerRunRecord> = candidates
+            .iter()
+            .map(|(record, _)| record.clone())
+            .collect();
+        let consumed: Vec<String> = consumed.into_iter().collect();
+        let claimed = self
+            .store
+            .claim_trigger_runs_with_records(&records, &consumed)
+            .await?;
+        Ok(candidates
+            .into_iter()
+            .zip(claimed)
+            .filter_map(|((_, execution), claimed)| claimed.then_some(execution))
+            .collect())
     }
 
     /// Compatibility projection for callers that do not need run attribution.
@@ -550,33 +596,51 @@ impl TriggerManager {
             .collect())
     }
 
-    async fn record_claimed_run(
-        &self,
-        run_id: &TriggerRunId,
+    /// The outbox record and execution for one firing.
+    fn planned_run(
+        run_id: TriggerRunId,
         trigger: &TriggerDefinitionDTO,
-        arguments: &serde_json::Value,
         valid_conditions: &[ValidCondition],
-    ) {
-        let participants = valid_conditions
-            .iter()
-            .map(participant_from_valid_condition)
-            .collect();
+    ) -> (TriggerRunRecord, TriggerExecution) {
+        let arguments = trigger
+            .argument_template
+            .clone()
+            .unwrap_or(serde_json::Value::Object(Default::default()));
+        let invocation_id = trigger_run_invocation_id(&run_id);
         let record = TriggerRunRecord {
             trigger_run_id: run_id.clone(),
             trigger_id: trigger.trigger_id.clone(),
             task_id: trigger.task_id.clone(),
             logic: trigger.logic,
             arguments: arguments.clone(),
-            participants,
+            participants: valid_conditions
+                .iter()
+                .map(participant_from_valid_condition)
+                .collect(),
             claimed_at: Utc::now(),
             executed_at: None,
+            planned_invocation_id: Some(invocation_id.clone()),
             triggered_invocation_id: None,
             atomic_service_run_id: None,
             atomic_service_runner_id: None,
         };
-        if let Err(error) = self.store.store_trigger_run(&record).await {
-            tracing::debug!(%error, trigger_run_id = %run_id, "trigger-run monitoring record unavailable");
-        }
+        let execution = TriggerExecution {
+            run_id,
+            trigger: trigger.clone(),
+            arguments,
+            invocation_id,
+        };
+        (record, execution)
+    }
+
+    /// Claimed runs whose invocation is not published yet, oldest first.
+    ///
+    /// Includes runs claimed by a process that crashed before publishing.
+    pub async fn pending_trigger_runs(
+        &self,
+        limit: usize,
+    ) -> RustvelloResult<Vec<TriggerRunRecord>> {
+        self.store.get_pending_trigger_runs(limit).await
     }
 
     /// Attach the invocation created for a previously claimed trigger run.

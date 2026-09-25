@@ -16,6 +16,10 @@ use super::MemOrchestrator;
 
 #[async_trait]
 impl OrchestratorStatus for MemOrchestrator {
+    fn guarantee_profile(&self) -> Option<&'static str> {
+        Some("memory")
+    }
+
     #[instrument(skip(self, call))]
     async fn register_invocation(&self, call: &CallDTO) -> RustvelloResult<InvocationId> {
         let invocation_id = InvocationId::new();

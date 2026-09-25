@@ -115,4 +115,24 @@ runs Docker-backed compliance and slower soak tests on a schedule or manual
 dispatch. See {doc}`backend-constraints` for backend facts and the required
 contract rule.
 
+Fault suites prove the guarantees in {doc}`../../guarantees`. They need the
+fault-injection features and are part of the release gate
+(`.github/workflows/release-gate.yml`), which `release-rust.yml` and
+`release-python.yml` require before publishing:
+
+```bash
+cargo test -p rustvello --features fault-injection --test trigger_fallback_faults
+cargo test -p rustvello --features sqlite-fault-injection \
+  --test publication_crash_acceptance --test trigger_crash_acceptance \
+  --test stale_owner_concurrency -- --test-threads=1
+RUSTVELLO_POSTGRES_DSN="host=127.0.0.1 port=5432 user=postgres password=... dbname=..." \
+  cargo test -p rustvello --features postgres-fault-injection \
+  --test trigger_crash_acceptance -- --include-ignored --test-threads=1
+```
+
+The guarantee matrix page is generated from `rustvello_core::guarantees`; a
+test fails when it is stale or when a guaranteed cell names a test that does
+not exist. Regenerate it with
+`RUSTVELLO_WRITE_GUARANTEES=1 cargo test -p rustvello-core --lib guarantees`.
+
 See {doc}`architecture` for the design rationale, {doc}`backend-testing` for writing backend tests, and {doc}`advanced` for property tests, fuzzing, and benchmarks.

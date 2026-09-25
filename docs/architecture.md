@@ -301,6 +301,16 @@ the backend's native storage primitives; the shared evidence contract has no
 unsupported implementation path. RabbitMQ is a broker-only component and does
 not expose a trigger store.
 
+Trigger firings go through an outbox. `claim_trigger_runs_with_records` claims a
+run, stores its record with the planned invocation id and consumes its valid
+conditions; stores that commit these together report
+`atomic_trigger_claims() == true`, the others use the trait's ordered default,
+which the next evaluator repairs. `get_pending_trigger_runs` lists claimed runs
+without an attached invocation, and the orchestrator's trigger loop publishes
+them under the run-derived invocation id, through the atomic publication port
+when the backend has one and through ordered idempotent writes otherwise. See
+{doc}`guarantees` for which backends are proven under process death.
+
 The stable monitoring DTOs live in `rustvello-proto`. Events retain payload,
 emitter, matched-condition, and produced-invocation links. Trigger runs retain
 arguments, timestamps, the produced invocation, and one participant entry per

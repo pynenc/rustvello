@@ -13,6 +13,7 @@ use rustvello_proto::trigger::{
 };
 
 use crate::db::{blocking, lock_err, sql_err};
+use crate::failpoints::boundary;
 
 use super::{condition_type_tag, get_condition_ids_for_trigger, parse_logic, SqliteTriggerStore};
 
@@ -707,54 +708,98 @@ impl TriggerStore for SqliteTriggerStore {
         blocking(move || {
             let mut conn = db.conn.lock().map_err(lock_err)?;
             let transaction = conn.transaction().map_err(sql_err)?;
-            let json = serde_json::to_string(&run).map_err(|error| {
-                RustvelloError::Serialization {
-                    message: error.to_string(),
-                }
-            })?;
-            transaction
-                .execute(
-                    "INSERT OR REPLACE INTO trg_trigger_runs
-                     (trigger_run_id, claimed_at, triggered_invocation_id, run_json)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![
-                        run.trigger_run_id.as_str(),
-                        run.claimed_at.to_rfc3339(),
-                        run.triggered_invocation_id.as_ref().map(ToString::to_string),
-                        json,
-                    ],
-                )
-                .map_err(sql_err)?;
-            transaction
-                .execute(
-                    "DELETE FROM trg_trigger_run_events WHERE trigger_run_id = ?1",
-                    rusqlite::params![run.trigger_run_id.as_str()],
-                )
-                .map_err(sql_err)?;
-            transaction
-                .execute(
-                    "DELETE FROM trg_trigger_run_sources WHERE trigger_run_id = ?1",
-                    rusqlite::params![run.trigger_run_id.as_str()],
-                )
-                .map_err(sql_err)?;
-            for event_id in run.event_ids() {
-                transaction
-                    .execute(
-                        "INSERT OR IGNORE INTO trg_trigger_run_events (trigger_run_id, event_id) VALUES (?1, ?2)",
-                        rusqlite::params![run.trigger_run_id.as_str(), event_id],
-                    )
-                    .map_err(sql_err)?;
-            }
-            for invocation_id in run.source_invocation_ids() {
-                transaction
-                    .execute(
-                        "INSERT OR IGNORE INTO trg_trigger_run_sources (trigger_run_id, invocation_id) VALUES (?1, ?2)",
-                        rusqlite::params![run.trigger_run_id.as_str(), invocation_id.to_string()],
-                    )
-                    .map_err(sql_err)?;
-            }
+            write_trigger_run(&transaction, &run)?;
             transaction.commit().map_err(sql_err)?;
             Ok(())
+        })
+        .await
+    }
+
+    async fn claim_trigger_runs_with_records(
+        &self,
+        records: &[TriggerRunRecord],
+        consumed: &[String],
+    ) -> RustvelloResult<Vec<bool>> {
+        let db = Arc::clone(&self.db);
+        let records = records.to_vec();
+        let consumed = consumed.to_vec();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let tx = rusqlite::Transaction::new_unchecked(
+                &conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )
+            .map_err(sql_err)?;
+            let now = Utc::now().to_rfc3339();
+            let mut claimed = Vec::with_capacity(records.len());
+            for record in &records {
+                let run_id = record.trigger_run_id.as_str();
+                let first = tx
+                    .execute(
+                        "INSERT OR IGNORE INTO trg_trigger_run_claims (trigger_run_id, claimed_at) VALUES (?1, ?2)",
+                        rusqlite::params![run_id, now],
+                    )
+                    .map_err(sql_err)?
+                    > 0;
+                let recorded: bool = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM trg_trigger_runs WHERE trigger_run_id = ?1)",
+                        [run_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(sql_err)?;
+                if first || !recorded {
+                    write_trigger_run(&tx, record)?;
+                }
+                claimed.push(first);
+            }
+            for id in &consumed {
+                tx.execute(
+                    "DELETE FROM trg_valid_conditions WHERE valid_condition_id = ?1",
+                    [id],
+                )
+                .map_err(sql_err)?;
+            }
+            let subject = records
+                .first()
+                .map_or("", |record| record.trigger_run_id.as_str());
+            boundary("trigger.claim.before_commit", subject)?;
+            tx.commit().map_err(sql_err)?;
+            boundary("trigger.claim.after_commit", subject)?;
+            Ok(claimed)
+        })
+        .await
+    }
+
+    fn atomic_trigger_claims(&self) -> bool {
+        true
+    }
+
+    async fn get_pending_trigger_runs(
+        &self,
+        limit: usize,
+    ) -> RustvelloResult<Vec<TriggerRunRecord>> {
+        let db = Arc::clone(&self.db);
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT run_json FROM trg_trigger_runs
+                     WHERE triggered_invocation_id IS NULL AND planned_invocation_id IS NOT NULL
+                     ORDER BY claimed_at ASC LIMIT ?1",
+                )
+                .map_err(sql_err)?;
+            let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+            let rows = stmt
+                .query_map([limit], |row| row.get::<_, String>(0))
+                .map_err(sql_err)?;
+            rows.map(|row| {
+                let json = row.map_err(sql_err)?;
+                serde_json::from_str(&json).map_err(|error| RustvelloError::Serialization {
+                    message: error.to_string(),
+                })
+            })
+            .collect()
         })
         .await
     }
@@ -855,4 +900,54 @@ impl TriggerStore for SqliteTriggerStore {
         })
         .await
     }
+}
+
+/// Upsert one run record and its lookup rows inside the caller's transaction.
+fn write_trigger_run(
+    tx: &rusqlite::Transaction<'_>,
+    run: &TriggerRunRecord,
+) -> RustvelloResult<()> {
+    let json = serde_json::to_string(run).map_err(|error| RustvelloError::Serialization {
+        message: error.to_string(),
+    })?;
+    tx.execute(
+        "INSERT OR REPLACE INTO trg_trigger_runs
+         (trigger_run_id, claimed_at, triggered_invocation_id, planned_invocation_id, run_json)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            run.trigger_run_id.as_str(),
+            run.claimed_at.to_rfc3339(),
+            run.triggered_invocation_id
+                .as_ref()
+                .map(ToString::to_string),
+            run.planned_invocation_id.as_ref().map(ToString::to_string),
+            json,
+        ],
+    )
+    .map_err(sql_err)?;
+    tx.execute(
+        "DELETE FROM trg_trigger_run_events WHERE trigger_run_id = ?1",
+        rusqlite::params![run.trigger_run_id.as_str()],
+    )
+    .map_err(sql_err)?;
+    tx.execute(
+        "DELETE FROM trg_trigger_run_sources WHERE trigger_run_id = ?1",
+        rusqlite::params![run.trigger_run_id.as_str()],
+    )
+    .map_err(sql_err)?;
+    for event_id in run.event_ids() {
+        tx.execute(
+            "INSERT OR IGNORE INTO trg_trigger_run_events (trigger_run_id, event_id) VALUES (?1, ?2)",
+            rusqlite::params![run.trigger_run_id.as_str(), event_id],
+        )
+        .map_err(sql_err)?;
+    }
+    for invocation_id in run.source_invocation_ids() {
+        tx.execute(
+            "INSERT OR IGNORE INTO trg_trigger_run_sources (trigger_run_id, invocation_id) VALUES (?1, ?2)",
+            rusqlite::params![run.trigger_run_id.as_str(), invocation_id.to_string()],
+        )
+        .map_err(sql_err)?;
+    }
+    Ok(())
 }

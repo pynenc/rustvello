@@ -54,12 +54,25 @@ pub struct TriggerRunRecord {
     pub participants: Vec<TriggerRunParticipant>,
     pub claimed_at: DateTime<Utc>,
     pub executed_at: Option<DateTime<Utc>>,
+    /// Invocation this run will publish, derived from `trigger_run_id`.
+    ///
+    /// Set when the run is claimed; together with a missing
+    /// `triggered_invocation_id` it marks the run as pending in the trigger
+    /// outbox. Records written before 0.6.0 carry `None` and are never
+    /// re-published.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_invocation_id: Option<InvocationId>,
     pub triggered_invocation_id: Option<InvocationId>,
     pub atomic_service_run_id: Option<String>,
     pub atomic_service_runner_id: Option<RunnerId>,
 }
 
 impl TriggerRunRecord {
+    /// A claimed run whose planned invocation has not been attached yet.
+    pub fn is_pending(&self) -> bool {
+        self.planned_invocation_id.is_some() && self.triggered_invocation_id.is_none()
+    }
+
     pub fn event_ids(&self) -> Vec<&str> {
         self.participants
             .iter()

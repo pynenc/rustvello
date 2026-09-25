@@ -396,6 +396,34 @@ impl TriggerStore for MemTriggerStore {
         Ok(runs)
     }
 
+    async fn claim_trigger_runs_with_records(
+        &self,
+        records: &[TriggerRunRecord],
+        consumed: &[String],
+    ) -> RustvelloResult<Vec<bool>> {
+        let mut state = self.state.lock().await;
+        let mut claimed = Vec::with_capacity(records.len());
+        for record in records {
+            let key = record.trigger_run_id.as_str().to_owned();
+            let first = !state.trigger_run_claims.contains_key(&key);
+            if first {
+                state.trigger_run_claims.insert(key.clone(), Utc::now());
+            }
+            if first || !state.trigger_runs.contains_key(&key) {
+                state.trigger_runs.insert(key, record.clone());
+            }
+            claimed.push(first);
+        }
+        for id in consumed {
+            state.valid_conditions.remove(id);
+        }
+        Ok(claimed)
+    }
+
+    fn atomic_trigger_claims(&self) -> bool {
+        true
+    }
+
     async fn purge(&self) -> RustvelloResult<()> {
         let mut state = self.state.lock().await;
         state.conditions.clear();

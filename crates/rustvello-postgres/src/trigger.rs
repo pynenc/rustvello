@@ -16,6 +16,7 @@ use rustvello_proto::trigger::{
 };
 
 use crate::db::{pg_err, Database};
+use crate::failpoints::boundary;
 
 /// PostgreSQL-backed trigger store implementation.
 pub struct PostgresTriggerStore {
@@ -581,63 +582,90 @@ impl TriggerStore for PostgresTriggerStore {
     async fn store_trigger_run(&self, run: &TriggerRunRecord) -> RustvelloResult<()> {
         let mut client = self.db.conn().await?;
         let transaction = client.transaction().await.map_err(pg_err)?;
-        let json = serde_json::to_string(run).map_err(|e| RustvelloError::Serialization {
-            message: e.to_string(),
-        })?;
-        transaction
-            .execute(
-                "INSERT INTO trg_trigger_runs
-                 (trigger_run_id, claimed_at, triggered_invocation_id, run_json)
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (trigger_run_id) DO UPDATE SET claimed_at = $2,
-                   triggered_invocation_id = $3, run_json = $4",
-                &[
-                    &run.trigger_run_id.as_str(),
-                    &run.claimed_at,
-                    &run.triggered_invocation_id
-                        .as_ref()
-                        .map(ToString::to_string),
-                    &json,
-                ],
-            )
-            .await
-            .map_err(pg_err)?;
-        transaction
-            .execute(
-                "DELETE FROM trg_trigger_run_events WHERE trigger_run_id = $1",
-                &[&run.trigger_run_id.as_str()],
-            )
-            .await
-            .map_err(pg_err)?;
-        transaction
-            .execute(
-                "DELETE FROM trg_trigger_run_sources WHERE trigger_run_id = $1",
-                &[&run.trigger_run_id.as_str()],
-            )
-            .await
-            .map_err(pg_err)?;
-        for event_id in run.event_ids() {
-            transaction
-                .execute(
-                    "INSERT INTO trg_trigger_run_events (trigger_run_id, event_id)
-                     VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                    &[&run.trigger_run_id.as_str(), &event_id],
-                )
-                .await
-                .map_err(pg_err)?;
-        }
-        for invocation_id in run.source_invocation_ids() {
-            transaction
-                .execute(
-                    "INSERT INTO trg_trigger_run_sources (trigger_run_id, invocation_id)
-                     VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                    &[&run.trigger_run_id.as_str(), &invocation_id.to_string()],
-                )
-                .await
-                .map_err(pg_err)?;
-        }
+        write_trigger_run(&transaction, run).await?;
         transaction.commit().await.map_err(pg_err)?;
         Ok(())
+    }
+
+    async fn claim_trigger_runs_with_records(
+        &self,
+        records: &[TriggerRunRecord],
+        consumed: &[String],
+    ) -> RustvelloResult<Vec<bool>> {
+        let mut client = self.db.conn().await?;
+        let transaction = client.transaction().await.map_err(pg_err)?;
+        let now = Utc::now();
+        let mut claimed = Vec::with_capacity(records.len());
+        for record in records {
+            let run_id = record.trigger_run_id.as_str();
+            let first = transaction
+                .execute(
+                    "INSERT INTO trg_trigger_run_claims (trigger_run_id, claimed_at) VALUES ($1, $2)
+                     ON CONFLICT DO NOTHING",
+                    &[&run_id, &now],
+                )
+                .await
+                .map_err(pg_err)?
+                > 0;
+            let recorded = transaction
+                .query_opt(
+                    "SELECT 1 FROM trg_trigger_runs WHERE trigger_run_id = $1",
+                    &[&run_id],
+                )
+                .await
+                .map_err(pg_err)?
+                .is_some();
+            if first || !recorded {
+                write_trigger_run(&transaction, record).await?;
+            }
+            claimed.push(first);
+        }
+        if !consumed.is_empty() {
+            transaction
+                .execute(
+                    "DELETE FROM trg_valid_conditions WHERE valid_condition_id = ANY($1)",
+                    &[&consumed],
+                )
+                .await
+                .map_err(pg_err)?;
+        }
+        let subject = records
+            .first()
+            .map_or("", |record| record.trigger_run_id.as_str());
+        boundary("trigger.claim.before_commit", subject).await?;
+        transaction.commit().await.map_err(pg_err)?;
+        boundary("trigger.claim.after_commit", subject).await?;
+        Ok(claimed)
+    }
+
+    fn atomic_trigger_claims(&self) -> bool {
+        true
+    }
+
+    async fn get_pending_trigger_runs(
+        &self,
+        limit: usize,
+    ) -> RustvelloResult<Vec<TriggerRunRecord>> {
+        let client = self.db.conn().await?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = client
+            .query(
+                "SELECT run_json FROM trg_trigger_runs
+                 WHERE triggered_invocation_id IS NULL AND planned_invocation_id IS NOT NULL
+                 ORDER BY claimed_at ASC LIMIT $1",
+                &[&limit],
+            )
+            .await
+            .map_err(pg_err)?;
+        rows.iter()
+            .map(|row| {
+                serde_json::from_str(row.get::<_, String>(0).as_str()).map_err(|e| {
+                    RustvelloError::Serialization {
+                        message: e.to_string(),
+                    }
+                })
+            })
+            .collect()
     }
 
     async fn get_trigger_run(
@@ -800,4 +828,68 @@ impl PostgresTriggerStore {
         }
         Ok(map)
     }
+}
+
+/// Upsert one run record and its lookup rows inside the caller's transaction.
+async fn write_trigger_run(
+    transaction: &crate::bounded::Transaction<'_>,
+    run: &TriggerRunRecord,
+) -> RustvelloResult<()> {
+    let json = serde_json::to_string(run).map_err(|e| RustvelloError::Serialization {
+        message: e.to_string(),
+    })?;
+    transaction
+        .execute(
+            "INSERT INTO trg_trigger_runs
+             (trigger_run_id, claimed_at, triggered_invocation_id, planned_invocation_id, run_json)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (trigger_run_id) DO UPDATE SET claimed_at = $2,
+               triggered_invocation_id = $3, planned_invocation_id = $4, run_json = $5",
+            &[
+                &run.trigger_run_id.as_str(),
+                &run.claimed_at,
+                &run.triggered_invocation_id
+                    .as_ref()
+                    .map(ToString::to_string),
+                &run.planned_invocation_id.as_ref().map(ToString::to_string),
+                &json,
+            ],
+        )
+        .await
+        .map_err(pg_err)?;
+    transaction
+        .execute(
+            "DELETE FROM trg_trigger_run_events WHERE trigger_run_id = $1",
+            &[&run.trigger_run_id.as_str()],
+        )
+        .await
+        .map_err(pg_err)?;
+    transaction
+        .execute(
+            "DELETE FROM trg_trigger_run_sources WHERE trigger_run_id = $1",
+            &[&run.trigger_run_id.as_str()],
+        )
+        .await
+        .map_err(pg_err)?;
+    for event_id in run.event_ids() {
+        transaction
+            .execute(
+                "INSERT INTO trg_trigger_run_events (trigger_run_id, event_id)
+                 VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                &[&run.trigger_run_id.as_str(), &event_id],
+            )
+            .await
+            .map_err(pg_err)?;
+    }
+    for invocation_id in run.source_invocation_ids() {
+        transaction
+            .execute(
+                "INSERT INTO trg_trigger_run_sources (trigger_run_id, invocation_id)
+                 VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                &[&run.trigger_run_id.as_str(), &invocation_id.to_string()],
+            )
+            .await
+            .map_err(pg_err)?;
+    }
+    Ok(())
 }

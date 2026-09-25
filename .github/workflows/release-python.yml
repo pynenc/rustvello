@@ -113,6 +113,13 @@ jobs:
       - name: Build Rust API docs (docs.rs compat)
         run: cargo doc --workspace --all-features --no-deps --exclude py-rustvello
 
+  # ── Durability gate: fault suites and backend suites (release only) ──
+  release-gate:
+    name: Release gate
+    needs: check-version
+    if: needs.check-version.outputs.is_release == 'true' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    uses: ./.github/workflows/release-gate.yml
+
   # ── Build sdist ──
   create-sdist:
     name: Build source distribution
@@ -233,11 +240,13 @@ jobs:
   # ── Publish to PyPI (main push with version bump, or manual) ──
   publish-to-pypi:
     name: Publish to PyPI
-    needs: [check-version, verify-docs, create-sdist, build-wheels]
+    needs:
+      [check-version, verify-docs, release-gate, create-sdist, build-wheels]
     if: >-
       always() &&
       needs.check-version.result == 'success' &&
       needs.verify-docs.result == 'success' &&
+      needs.release-gate.result == 'success' &&
       needs.create-sdist.result == 'success' &&
       needs.build-wheels.result == 'success' &&
       (

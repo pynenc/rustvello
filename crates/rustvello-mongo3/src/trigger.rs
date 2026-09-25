@@ -516,6 +516,7 @@ impl TriggerStore for Mongo3TriggerStore {
                     "data": json,
                     "claimed_at": run.claimed_at.to_rfc3339(),
                     "triggered_invocation_id": run.triggered_invocation_id.as_ref().map(ToString::to_string),
+                    "pending": run.is_pending(),
                 }
             },
             Some(mongodb::options::UpdateOptions::builder().upsert(true).build()),
@@ -523,6 +524,39 @@ impl TriggerStore for Mongo3TriggerStore {
         .await
         .map_err(mongo_err)?;
         Ok(())
+    }
+
+    async fn get_pending_trigger_runs(
+        &self,
+        limit: usize,
+    ) -> RustvelloResult<Vec<TriggerRunRecord>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let db = self.pool.db().await?;
+        let col = db.collection::<mongodb::bson::Document>(TRIGGER_RUN_RECORD_COL);
+        let options = mongodb::options::FindOptions::builder()
+            .sort(doc! { "claimed_at": 1 })
+            .limit(i64::try_from(limit).unwrap_or(i64::MAX))
+            .build();
+        let mut cursor = col
+            .find(doc! { "pending": true }, options)
+            .await
+            .map_err(mongo_err)?;
+        let mut runs = Vec::new();
+        use futures_util::StreamExt;
+        while let Some(item) = StreamExt::next(&mut cursor).await {
+            let document = item.map_err(mongo_err)?;
+            let json = document
+                .get_str("data")
+                .map_err(|e| RustvelloError::state_backend(e.to_string()))?;
+            let run: TriggerRunRecord =
+                serde_json::from_str(json).map_err(|e| RustvelloError::Serialization {
+                    message: e.to_string(),
+                })?;
+            runs.push(run);
+        }
+        Ok(runs)
     }
 
     async fn get_trigger_run(

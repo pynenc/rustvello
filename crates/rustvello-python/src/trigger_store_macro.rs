@@ -432,6 +432,37 @@ macro_rules! impl_py_trigger_store {
                     .collect()
             }
 
+            /// Claimed trigger runs not yet published, oldest first (JSON records).
+            ///
+            /// The trigger outbox: each record carries `planned_invocation_id`,
+            /// the invocation the trigger loop publishes for it.
+            #[pyo3(signature = (limit=100))]
+            fn pending_trigger_runs(&self, py: pyo3::Python<'_>, limit: usize) -> pyo3::PyResult<Vec<String>> {
+                let rt = crate::runtime::shared_runtime()?;
+                let runs = py.allow_threads(|| rt.block_on(self.manager.pending_trigger_runs(limit)))
+                    .map_err(crate::error::to_py_err)?;
+                runs.iter()
+                    .map(|run| {
+                        serde_json::to_string(run).map_err(|e| {
+                            pyo3::exceptions::PyValueError::new_err(e.to_string())
+                        })
+                    })
+                    .collect()
+            }
+
+            /// Attach the published invocation to a claimed run, removing it from the outbox.
+            fn complete_trigger_run(
+                &self, py: pyo3::Python<'_>,
+                trigger_run_id: &str,
+                invocation_id: &str,
+            ) -> pyo3::PyResult<()> {
+                let run_id = rustvello_proto::trigger::TriggerRunId::from(trigger_run_id.to_owned());
+                let invocation = rustvello_proto::identifiers::InvocationId::from_string(invocation_id);
+                let rt = crate::runtime::shared_runtime()?;
+                py.allow_threads(|| rt.block_on(self.manager.complete_trigger_run(&run_id, &invocation)))
+                    .map_err(crate::error::to_py_err)
+            }
+
             // ─── Typed condition registration ────────────────────────
 
             /// Register a status condition. Returns the condition_id.

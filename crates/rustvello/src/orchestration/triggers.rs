@@ -2,15 +2,21 @@
 
 use chrono::Utc;
 use rustvello_core::error::{RustvelloError, RustvelloResult};
+use rustvello_core::failpoints;
 use rustvello_core::orchestrator::ActiveRunnerInfo;
 use rustvello_proto::call::{CallDTO, SerializedArguments};
 use rustvello_proto::config::AppConfig;
 use rustvello_proto::identifiers::{InvocationId, RunnerId};
 use rustvello_proto::invocation::{InvocationDTO, InvocationHistory};
+use rustvello_proto::status::InvocationStatus;
+use rustvello_proto::trigger::TriggerRunRecord;
 
 use crate::task_catalog::TaskCatalog;
 
 use super::Orchestrator;
+
+/// Pending trigger runs published per iteration; the rest wait for the next one.
+const PENDING_TRIGGER_RUN_BATCH: usize = 1000;
 
 impl Orchestrator {
     pub(crate) async fn run_trigger_iteration(
@@ -44,7 +50,17 @@ impl Orchestrator {
 
     /// Execute one trigger evaluation loop iteration.
     ///
-    /// Returns the list of invocation IDs created by fired triggers.
+    /// 1. Claim every firing into the trigger outbox (claim, run record and
+    ///    condition clear commit together on transactional stores).
+    /// 2. Publish every pending run, including runs a crashed process claimed
+    ///    but never published, under the run-derived invocation id.
+    /// 3. Attach the invocation to its run, which removes it from the outbox.
+    ///
+    /// A crash between any two steps is repaired by the next iteration, and
+    /// the deterministic invocation id makes re-publication idempotent: each
+    /// firing yields exactly one logical invocation.
+    ///
+    /// Returns the invocation IDs published by this iteration.
     pub async fn trigger_loop_iteration(
         &self,
         runner_id: &RunnerId,
@@ -54,28 +70,76 @@ impl Orchestrator {
             Some(ref tm) => tm,
             None => return Ok(Vec::new()),
         };
+        // Fail closed on a mixed deployment before claiming anything.
+        let publication = self.publication()?;
 
         let _ = tm.evaluate_cron_conditions().await?;
-        let to_invoke = tm.evaluate_trigger_runs().await?;
+        for execution in tm.evaluate_trigger_runs().await? {
+            failpoints::boundary("trigger.claimed", execution.run_id.as_str()).await?;
+        }
 
         let mut created_ids = Vec::new();
-        for execution in &to_invoke {
-            let trigger_def = &execution.trigger;
-            let args = json_value_to_serialized_args(&execution.arguments);
-            let call_dto = CallDTO::new(trigger_def.task_id.clone(), args);
-            let inv_id = InvocationId::new();
+        for run in tm.pending_trigger_runs(PENDING_TRIGGER_RUN_BATCH).await? {
+            let Some(invocation_id) = run.planned_invocation_id.clone() else {
+                continue;
+            };
+            let Some((queue_name, priority)) = routes.get(&run.task_id) else {
+                // Another runner that registers the task publishes it.
+                tracing::debug!(
+                    trigger_run_id = %run.trigger_run_id,
+                    task_id = %run.task_id,
+                    "trigger run stays pending: task is not registered on this runner"
+                );
+                continue;
+            };
+            let route = rustvello_core::publication::PublicationRoute {
+                queue: queue_name.clone(),
+                priority: *priority,
+            };
+            self.publish_trigger_run(&run, &invocation_id, runner_id, route, publication.as_ref())
+                .await?;
+            failpoints::boundary("trigger.published", invocation_id.as_str()).await?;
+            tm.complete_trigger_run(&run.trigger_run_id, &invocation_id)
+                .await?;
+            failpoints::boundary("trigger.completed", invocation_id.as_str()).await?;
+            created_ids.push(invocation_id);
+        }
 
-            let inv_dto = InvocationDTO::new(
-                inv_id.clone(),
-                trigger_def.task_id.clone(),
-                call_dto.call_id.clone(),
-            );
-            let (queue_name, priority) = routes.get(&trigger_def.task_id).ok_or_else(|| {
-                RustvelloError::TaskNotRegistered {
-                    task_id: trigger_def.task_id.clone(),
-                }
-            })?;
-            if let Some(publication) = self.publication()? {
+        Ok(created_ids)
+    }
+
+    /// Publish one claimed trigger run; a no-op when an earlier attempt did.
+    async fn publish_trigger_run(
+        &self,
+        run: &TriggerRunRecord,
+        invocation_id: &InvocationId,
+        runner_id: &RunnerId,
+        route: rustvello_core::publication::PublicationRoute,
+        publication: Option<&std::sync::Arc<dyn rustvello_core::publication::RuntimePublication>>,
+    ) -> RustvelloResult<()> {
+        let call_dto = CallDTO::new(
+            run.task_id.clone(),
+            json_value_to_serialized_args(&run.arguments),
+        );
+        let existing = match self
+            .backends
+            .invocation_control
+            .get_invocation_status(invocation_id)
+            .await
+        {
+            Ok(record) => Some(record.status),
+            Err(RustvelloError::InvocationNotFound { .. }) => None,
+            Err(error) => return Err(error),
+        };
+
+        if let Some(publication) = publication {
+            // One transaction: an existing invocation is completely published.
+            if existing.is_none() {
+                let inv_dto = InvocationDTO::new(
+                    invocation_id.clone(),
+                    run.task_id.clone(),
+                    call_dto.call_id.clone(),
+                );
                 publication
                     .submit(rustvello_core::publication::SubmissionPublication {
                         invocation: inv_dto,
@@ -84,56 +148,68 @@ impl Orchestrator {
                         runner_context: None,
                         workflow_root: false,
                         cc_arguments: None,
-                        route: rustvello_core::publication::PublicationRoute {
-                            queue: queue_name.clone(),
-                            priority: *priority,
-                        },
+                        route,
                     })
                     .await?;
-                tm.complete_trigger_run(&execution.run_id, &inv_id).await?;
-                created_ids.push(inv_id);
-                continue;
             }
-            self.backends
-                .state_backend
-                .upsert_invocation(&inv_dto, &call_dto)
-                .await?;
+            return Ok(());
+        }
 
+        // Fallback: ordered writes, each idempotent for this invocation id.
+        // Once a worker has moved the invocation past Registered it is
+        // published; while it is Registered the remaining writes are repeated.
+        // A repeated route can queue a second delivery of the same id, which
+        // retrieval drops because the status can no longer become Pending.
+        match existing {
+            Some(status) if status != InvocationStatus::Registered => return Ok(()),
+            Some(_) => {}
+            None => {
+                self.backends
+                    .invocation_control
+                    .register_invocation_with_id(invocation_id, &call_dto, Some(runner_id))
+                    .await?;
+                failpoints::boundary("trigger.fallback.registered", invocation_id.as_str()).await?;
+            }
+        }
+        let inv_dto = InvocationDTO::new(
+            invocation_id.clone(),
+            run.task_id.clone(),
+            call_dto.call_id.clone(),
+        );
+        self.backends
+            .state_backend
+            .upsert_invocation(&inv_dto, &call_dto)
+            .await?;
+        failpoints::boundary("trigger.fallback.stored", invocation_id.as_str()).await?;
+        let registered_history = self
+            .backends
+            .state_backend
+            .get_history(invocation_id)
+            .await?
+            .iter()
+            .any(|h| h.status_record.status == InvocationStatus::Registered);
+        if !registered_history {
             let record = self
                 .backends
                 .invocation_control
-                .register_invocation_with_id(&inv_id, &call_dto, Some(runner_id))
+                .get_invocation_status(invocation_id)
                 .await?;
-
-            let history = InvocationHistory::new(inv_id.clone(), record.clone(), None)
+            let history = InvocationHistory::new(invocation_id.clone(), record, None)
                 .with_runner(runner_id.clone());
-            if let Err(e) = self.backends.state_backend.add_history(&history).await {
-                tracing::warn!("trigger_loop_iteration: failed to record history: {e}");
-            }
-
-            let (queue_name, priority) = routes.get(&trigger_def.task_id).ok_or_else(|| {
-                RustvelloError::TaskNotRegistered {
-                    task_id: trigger_def.task_id.clone(),
-                }
-            })?;
-            self.backends
-                .broker
-                .route_invocation_with_options(
-                    &inv_id,
-                    Some(&trigger_def.task_id),
-                    queue_name,
-                    *priority,
-                )
-                .await?;
-
-            if let Err(error) = tm.complete_trigger_run(&execution.run_id, &inv_id).await {
-                tracing::debug!(%error, trigger_run_id = %execution.run_id, "trigger-run completion unavailable");
-            }
-
-            created_ids.push(inv_id);
+            self.backends.state_backend.add_history(&history).await?;
         }
-
-        Ok(created_ids)
+        failpoints::boundary("trigger.fallback.history", invocation_id.as_str()).await?;
+        self.backends
+            .broker
+            .route_invocation_with_options(
+                invocation_id,
+                Some(&run.task_id),
+                &route.queue,
+                route.priority,
+            )
+            .await?;
+        failpoints::boundary("trigger.fallback.routed", invocation_id.as_str()).await?;
+        Ok(())
     }
 
     /// Execute one atomic service check: coordination, trigger loop, recording.

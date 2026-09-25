@@ -4,6 +4,34 @@ For detailed information on each version, please visit the [GitHub Releases page
 
 ## Unreleased
 
+- Trigger firings can no longer be lost. A firing is claimed into a trigger
+  outbox (claim, run record with its planned invocation, and consumed
+  conditions, committed together on SQLite, PostgreSQL and memory), then
+  published under an invocation id derived from the run id. The atomic
+  service re-publishes claimed runs that a crashed process left unpublished,
+  and re-publication is idempotent, so every firing yields exactly one logical
+  invocation. Proven by process-kill suites at every boundary on SQLite and
+  PostgreSQL and by fault tests on the fallback path.
+- Trigger-run record errors now propagate instead of being logged and ignored.
+  A run whose target task is not registered on the evaluating runner stays
+  pending instead of failing the iteration.
+- `TriggerStore` gains `claim_trigger_runs_with_records`,
+  `get_pending_trigger_runs` and `atomic_trigger_claims` (with defaults);
+  `TriggerRunRecord` gains `planned_invocation_id`; `TriggerExecution` gains
+  `invocation_id`. Callers of `evaluate_trigger_runs` that publish invocations
+  themselves must call `complete_trigger_run`, or the trigger loop publishes
+  the run as well.
+- Guarantee matrix per backend (atomic publication, trigger atomicity,
+  stale-owner recovery, ordering, durability), served by `/api/capabilities`
+  under `guarantees` and generated into the docs; a guaranteed cell must name
+  its proving tests.
+- Releases are gated on the fault suites and the backend suites
+  (`release-gate.yml`).
+- PostgreSQL skips its schema DDL when the schema is already current
+  (`rustvello_schema_version`), so a runner starting next to busy runners no
+  longer takes table locks that could deadlock them. The compliance suite can
+  reuse an existing server through `RUSTVELLO_POSTGRES_DSN`.
+
 ## 0.5.2 - 2026-09-17
 
 - `RUSTVELLO__DEV_MODE_FORCE_SYNC` reaches an `App` built with an explicit

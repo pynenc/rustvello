@@ -70,3 +70,36 @@ class TestRustMemTriggerStore:
         store = RustMemTriggerStore()
         result = store.evaluate_triggers()
         assert result == []
+
+
+class TestTriggerOutbox:
+    """A claimed firing stays in the outbox until its invocation is attached."""
+
+    @staticmethod
+    def _store(kind: str, tmp_path):
+        from rustvello import RustSqliteDatabase, RustSqliteTriggerStore
+
+        if kind == "memory":
+            return RustMemTriggerStore()
+        return RustSqliteTriggerStore(RustSqliteDatabase(str(tmp_path / "outbox.db"), "outbox"))
+
+    @pytest.mark.parametrize("kind", ["memory", "sqlite"])
+    def test_claimed_run_is_pending_until_completed(self, kind, tmp_path):
+        store = self._store(kind, tmp_path)
+        cid = store.register_event_condition("outbox_ready")
+        store.register_trigger_typed("jobs", "target", [cid], "Any", json.dumps({"batch": 5}))
+        store.emit_event("outbox_ready", "{}")
+
+        assert len(store.evaluate_triggers()) == 1
+        # The same firing is never claimed twice.
+        assert store.evaluate_triggers() == []
+
+        pending = [json.loads(run) for run in store.pending_trigger_runs()]
+        assert len(pending) == 1
+        run = pending[0]
+        assert run["arguments"] == {"batch": 5}
+        planned = run["planned_invocation_id"]
+        assert planned
+
+        store.complete_trigger_run(run["trigger_run_id"], planned)
+        assert store.pending_trigger_runs() == []

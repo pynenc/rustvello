@@ -497,6 +497,15 @@ impl Database {
         let _ = conn.execute_batch("ALTER TABLE invocations ADD COLUMN tracestate TEXT");
         // Additive: existing invocation/workflow data is never reset.
         let _ = conn.execute_batch("ALTER TABLE invocations ADD COLUMN workflow_parent_id TEXT");
+        // Trigger outbox: runs claimed since 0.6.0 record the invocation they
+        // will publish; pre-0.6 rows keep NULL and are never re-published.
+        let _ = conn
+            .execute_batch("ALTER TABLE trg_trigger_runs ADD COLUMN planned_invocation_id TEXT");
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_trg_runs_pending ON trg_trigger_runs(claimed_at)
+             WHERE triggered_invocation_id IS NULL AND planned_invocation_id IS NOT NULL",
+        )
+        .map_err(|e| RustvelloError::state_backend(format!("schema init failed: {}", e)))?;
 
         Ok(())
     }
