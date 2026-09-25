@@ -305,9 +305,16 @@ def fetch(url: str) -> str: ...
 @app.task
 def cleanup() -> None: ...
 
-app.trigger(cleanup).on_cron("0 */5 * * * *").register()
+app.trigger(cleanup).on_cron("*/5 * * * *").register()        # 5 fields: minute cron
+app.trigger(cleanup).on_cron("0 30 3 * * *").register()       # 6 fields: seconds first
 app.trigger(cleanup).on_interval(300).register()
 ```
+
+`register()` stores the trigger in the app's trigger store, so every worker
+sharing the backend sees it and each slot fires once; registering it again is a
+no-op. An invalid expression raises `ValueError`. Workers evaluate triggers
+every few seconds and fire the latest slot that is due (a slot missed for more
+than two minutes, for example while no worker ran, is skipped).
 
 ### Extended task configuration
 

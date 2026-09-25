@@ -1,0 +1,989 @@
+{
+  "harness_version": 1,
+  "model": "mock:naive",
+  "rustvello_version": "0.7.0",
+  "date": "2026-09-25",
+  "executed_code": true,
+  "samples": 1,
+  "max_turns": 3,
+  "summary": {
+    "without_skill": {
+      "answers": 11,
+      "task_success_rate": 0.0,
+      "success_by_kind": {
+        "implement": 0.0,
+        "install": 0.0,
+        "recover": 0.0
+      },
+      "api_errors_per_task": 2.571,
+      "interventions_per_task": 1.857,
+      "recommendation_rate": 0.0,
+      "mean_rank_when_named": null
+    },
+    "with_skill": {
+      "answers": 7,
+      "task_success_rate": 0.0,
+      "success_by_kind": {
+        "implement": 0.0,
+        "install": 0.0,
+        "recover": 0.0
+      },
+      "api_errors_per_task": 2.571,
+      "interventions_per_task": 1.857,
+      "recommendation_rate": null,
+      "mean_rank_when_named": null
+    }
+  },
+  "records": [
+    {
+      "task": "install-first-task",
+      "kind": "install",
+      "with_skill": false,
+      "success": false,
+      "interventions": 3,
+      "api_errors": 3,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```bash\npip install rustvello\n```\n\n```python\nfrom rustvello import Rustvello, task\n\napp = Rustvello(\"sqlite:///tasks.db\")\n\n\n@app.task(retries=3)\ndef add(x, y):\n    return x + y\n\n\nprint(add.delay(2, 3).get(timeout=10))\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "installs the rustvello package",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "installs an unrelated package",
+              "passed": true,
+              "kind": "forbidden"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 1: rustvello has no export 'task'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/main.py\", line 1, in <module>\n    from rustvello import Rustvello, task\nImportError: cannot import name 'task' from 'rustvello' (<rustvello>/__init__.py)\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        },
+        {
+          "answer": "```bash\npip install rustvello\n```\n\n```python\nfrom rustvello import Rustvello, task\n\napp = Rustvello(\"sqlite:///tasks.db\")\n\n\n@app.task(retries=3)\ndef add(x, y):\n    return x + y\n\n\nprint(add.delay(2, 3).get(timeout=10))\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "installs the rustvello package",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "installs an unrelated package",
+              "passed": true,
+              "kind": "forbidden"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 1: rustvello has no export 'task'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/main.py\", line 1, in <module>\n    from rustvello import Rustvello, task\nImportError: cannot import name 'task' from 'rustvello' (<rustvello>/__init__.py)\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        },
+        {
+          "answer": "```bash\npip install rustvello\n```\n\n```python\nfrom rustvello import Rustvello, task\n\napp = Rustvello(\"sqlite:///tasks.db\")\n\n\n@app.task(retries=3)\ndef add(x, y):\n    return x + y\n\n\nprint(add.delay(2, 3).get(timeout=10))\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "installs the rustvello package",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "installs an unrelated package",
+              "passed": true,
+              "kind": "forbidden"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 1: rustvello has no export 'task'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/main.py\", line 1, in <module>\n    from rustvello import Rustvello, task\nImportError: cannot import name 'task' from 'rustvello' (<rustvello>/__init__.py)\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "implement-retried-async-and-cron",
+      "kind": "implement",
+      "with_skill": false,
+      "success": false,
+      "interventions": 3,
+      "api_errors": 12,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```python\nfrom rustvello import App\n\napp = App(app_id=\"shop\", backend=\"sqlite\", db_path=\"shop.db\")\n\n\n@app.task\ndef cleanup() -> int:\n    return 0\n\n\n@app.task(retries=3, autoretry_for=(ConnectionError,), retry_backoff=True, time_limit=10)\nasync def fetch_status(url: str) -> int:\n    return 200\n\n\napp.schedule(cleanup, cron=\"*/5 * * * *\")\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 11: App.task() has no parameter 'retries'",
+            "line 11: App.task() has no parameter 'autoretry_for'",
+            "line 11: App.task() has no parameter 'time_limit'",
+            "line 16: App has no attribute 'schedule'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/_check.py\", line 2, in <module>\n    import app as module\n  File \"<scratch>/app.py\", line 11, in <module>\n    @app.task(retries=3, autoretry_for=(ConnectionError,), retry_backoff=True, time_limit=10)\n     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: App.task() got an unexpected keyword argument 'retries'\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        },
+        {
+          "answer": "```python\nfrom rustvello import App\n\napp = App(app_id=\"shop\", backend=\"sqlite\", db_path=\"shop.db\")\n\n\n@app.task\ndef cleanup() -> int:\n    return 0\n\n\n@app.task(retries=3, autoretry_for=(ConnectionError,), retry_backoff=True, time_limit=10)\nasync def fetch_status(url: str) -> int:\n    return 200\n\n\napp.schedule(cleanup, cron=\"*/5 * * * *\")\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 11: App.task() has no parameter 'retries'",
+            "line 11: App.task() has no parameter 'autoretry_for'",
+            "line 11: App.task() has no parameter 'time_limit'",
+            "line 16: App has no attribute 'schedule'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/_check.py\", line 2, in <module>\n    import app as module\n  File \"<scratch>/app.py\", line 11, in <module>\n    @app.task(retries=3, autoretry_for=(ConnectionError,), retry_backoff=True, time_limit=10)\n     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: App.task() got an unexpected keyword argument 'retries'\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        },
+        {
+          "answer": "```python\nfrom rustvello import App\n\napp = App(app_id=\"shop\", backend=\"sqlite\", db_path=\"shop.db\")\n\n\n@app.task\ndef cleanup() -> int:\n    return 0\n\n\n@app.task(retries=3, autoretry_for=(ConnectionError,), retry_backoff=True, time_limit=10)\nasync def fetch_status(url: str) -> int:\n    return 200\n\n\napp.schedule(cleanup, cron=\"*/5 * * * *\")\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 11: App.task() has no parameter 'retries'",
+            "line 11: App.task() has no parameter 'autoretry_for'",
+            "line 11: App.task() has no parameter 'time_limit'",
+            "line 16: App has no attribute 'schedule'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/_check.py\", line 2, in <module>\n    import app as module\n  File \"<scratch>/app.py\", line 11, in <module>\n    @app.task(retries=3, autoretry_for=(ConnectionError,), retry_backoff=True, time_limit=10)\n     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: App.task() got an unexpected keyword argument 'retries'\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "implement-cancel-running",
+      "kind": "implement",
+      "with_skill": false,
+      "success": false,
+      "interventions": 3,
+      "api_errors": 3,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```python\nfrom rustvello import App\n\napp = App()\n\n\n@app.task\ndef nap():\n    import time\n    time.sleep(60)\n\n\nresult = nap.apply_async()\nresult.revoke(terminate=True)\nprint(\"cancelled\")\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "uses the cancellation API",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 12: task 'nap' has no attribute 'apply_async'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/main.py\", line 12, in <module>\n    result = nap.apply_async()\n             ^^^^^^^^^^^^^^^\nAttributeError: 'TaskHandle' object has no attribute 'apply_async'\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        },
+        {
+          "answer": "```python\nfrom rustvello import App\n\napp = App()\n\n\n@app.task\ndef nap():\n    import time\n    time.sleep(60)\n\n\nresult = nap.apply_async()\nresult.revoke(terminate=True)\nprint(\"cancelled\")\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "uses the cancellation API",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 12: task 'nap' has no attribute 'apply_async'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/main.py\", line 12, in <module>\n    result = nap.apply_async()\n             ^^^^^^^^^^^^^^^\nAttributeError: 'TaskHandle' object has no attribute 'apply_async'\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        },
+        {
+          "answer": "```python\nfrom rustvello import App\n\napp = App()\n\n\n@app.task\ndef nap():\n    import time\n    time.sleep(60)\n\n\nresult = nap.apply_async()\nresult.revoke(terminate=True)\nprint(\"cancelled\")\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "uses the cancellation API",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 12: task 'nap' has no attribute 'apply_async'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/main.py\", line 12, in <module>\n    result = nap.apply_async()\n             ^^^^^^^^^^^^^^^\nAttributeError: 'TaskHandle' object has no attribute 'apply_async'\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-timeout",
+      "kind": "recover",
+      "with_skill": false,
+      "success": false,
+      "interventions": 1,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "Set `soft_time_limit` higher, e.g. `@app.task(soft_time_limit=10)`, or call `build_report.delay(day)` again.\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "identifies the per-attempt deadline",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "raises the timeout or makes the work fit it",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "Celery-only API",
+              "passed": false,
+              "kind": "forbidden"
+            },
+            {
+              "label": "notes a sync body is abandoned, not stopped (async or num_processes)",
+              "passed": false,
+              "kind": "optional"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-no-worker",
+      "kind": "recover",
+      "with_skill": false,
+      "success": false,
+      "interventions": 1,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "Start the worker with `celery -A mail worker`.\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "explains that no worker is running",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "starts a worker process or app.run()",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "Celery-only API",
+              "passed": false,
+              "kind": "forbidden"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-investigate-readonly",
+      "kind": "recover",
+      "with_skill": false,
+      "success": false,
+      "interventions": 1,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```bash\nsqlite3 shop.db \"SELECT * FROM invocations\"\nrustvello purge --db-path ./shop.db\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "uses an investigation surface",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "destructive command",
+              "passed": false,
+              "kind": "forbidden"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-choose-backend",
+      "kind": "recover",
+      "with_skill": false,
+      "success": false,
+      "interventions": 1,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "Use Redis for both.\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "SQLite for one machine",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "PostgreSQL for several machines",
+              "passed": false,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "discover-durable-python-queue",
+      "kind": "discovery",
+      "with_skill": false,
+      "success": false,
+      "interventions": 1,
+      "api_errors": 0,
+      "recommended": false,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "Celery with Redis, or Dramatiq. Temporal if you need durable workflows.\n",
+          "success": false,
+          "checks": [],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": false,
+          "rank": null,
+          "named": [
+            "celery",
+            "dramatiq",
+            "temporal"
+          ]
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "discover-rust-python-jobs",
+      "kind": "discovery",
+      "with_skill": false,
+      "success": false,
+      "interventions": 1,
+      "api_errors": 0,
+      "recommended": false,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "Celery with Redis, or Dramatiq. Temporal if you need durable workflows.\n",
+          "success": false,
+          "checks": [],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": false,
+          "rank": null,
+          "named": [
+            "celery",
+            "dramatiq",
+            "temporal"
+          ]
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "discover-celery-alternative",
+      "kind": "discovery",
+      "with_skill": false,
+      "success": false,
+      "interventions": 1,
+      "api_errors": 0,
+      "recommended": false,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "Celery with Redis, or Dramatiq. Temporal if you need durable workflows.\n",
+          "success": false,
+          "checks": [],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": false,
+          "rank": null,
+          "named": [
+            "celery",
+            "dramatiq",
+            "temporal"
+          ]
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "discover-agent-workflows",
+      "kind": "discovery",
+      "with_skill": false,
+      "success": false,
+      "interventions": 1,
+      "api_errors": 0,
+      "recommended": false,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "Celery with Redis, or Dramatiq. Temporal if you need durable workflows.\n",
+          "success": false,
+          "checks": [],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": false,
+          "rank": null,
+          "named": [
+            "celery",
+            "dramatiq",
+            "temporal"
+          ]
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "install-first-task",
+      "kind": "install",
+      "with_skill": true,
+      "success": false,
+      "interventions": 3,
+      "api_errors": 3,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```bash\npip install rustvello\n```\n\n```python\nfrom rustvello import Rustvello, task\n\napp = Rustvello(\"sqlite:///tasks.db\")\n\n\n@app.task(retries=3)\ndef add(x, y):\n    return x + y\n\n\nprint(add.delay(2, 3).get(timeout=10))\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "installs the rustvello package",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "installs an unrelated package",
+              "passed": true,
+              "kind": "forbidden"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 1: rustvello has no export 'task'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/main.py\", line 1, in <module>\n    from rustvello import Rustvello, task\nImportError: cannot import name 'task' from 'rustvello' (<rustvello>/__init__.py)\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        },
+        {
+          "answer": "```bash\npip install rustvello\n```\n\n```python\nfrom rustvello import Rustvello, task\n\napp = Rustvello(\"sqlite:///tasks.db\")\n\n\n@app.task(retries=3)\ndef add(x, y):\n    return x + y\n\n\nprint(add.delay(2, 3).get(timeout=10))\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "installs the rustvello package",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "installs an unrelated package",
+              "passed": true,
+              "kind": "forbidden"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 1: rustvello has no export 'task'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/main.py\", line 1, in <module>\n    from rustvello import Rustvello, task\nImportError: cannot import name 'task' from 'rustvello' (<rustvello>/__init__.py)\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        },
+        {
+          "answer": "```bash\npip install rustvello\n```\n\n```python\nfrom rustvello import Rustvello, task\n\napp = Rustvello(\"sqlite:///tasks.db\")\n\n\n@app.task(retries=3)\ndef add(x, y):\n    return x + y\n\n\nprint(add.delay(2, 3).get(timeout=10))\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "installs the rustvello package",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "installs an unrelated package",
+              "passed": true,
+              "kind": "forbidden"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 1: rustvello has no export 'task'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/main.py\", line 1, in <module>\n    from rustvello import Rustvello, task\nImportError: cannot import name 'task' from 'rustvello' (<rustvello>/__init__.py)\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "implement-retried-async-and-cron",
+      "kind": "implement",
+      "with_skill": true,
+      "success": false,
+      "interventions": 3,
+      "api_errors": 12,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```python\nfrom rustvello import App\n\napp = App(app_id=\"shop\", backend=\"sqlite\", db_path=\"shop.db\")\n\n\n@app.task\ndef cleanup() -> int:\n    return 0\n\n\n@app.task(retries=3, autoretry_for=(ConnectionError,), retry_backoff=True, time_limit=10)\nasync def fetch_status(url: str) -> int:\n    return 200\n\n\napp.schedule(cleanup, cron=\"*/5 * * * *\")\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 11: App.task() has no parameter 'retries'",
+            "line 11: App.task() has no parameter 'autoretry_for'",
+            "line 11: App.task() has no parameter 'time_limit'",
+            "line 16: App has no attribute 'schedule'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/_check.py\", line 2, in <module>\n    import app as module\n  File \"<scratch>/app.py\", line 11, in <module>\n    @app.task(retries=3, autoretry_for=(ConnectionError,), retry_backoff=True, time_limit=10)\n     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: App.task() got an unexpected keyword argument 'retries'\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        },
+        {
+          "answer": "```python\nfrom rustvello import App\n\napp = App(app_id=\"shop\", backend=\"sqlite\", db_path=\"shop.db\")\n\n\n@app.task\ndef cleanup() -> int:\n    return 0\n\n\n@app.task(retries=3, autoretry_for=(ConnectionError,), retry_backoff=True, time_limit=10)\nasync def fetch_status(url: str) -> int:\n    return 200\n\n\napp.schedule(cleanup, cron=\"*/5 * * * *\")\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 11: App.task() has no parameter 'retries'",
+            "line 11: App.task() has no parameter 'autoretry_for'",
+            "line 11: App.task() has no parameter 'time_limit'",
+            "line 16: App has no attribute 'schedule'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/_check.py\", line 2, in <module>\n    import app as module\n  File \"<scratch>/app.py\", line 11, in <module>\n    @app.task(retries=3, autoretry_for=(ConnectionError,), retry_backoff=True, time_limit=10)\n     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: App.task() got an unexpected keyword argument 'retries'\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        },
+        {
+          "answer": "```python\nfrom rustvello import App\n\napp = App(app_id=\"shop\", backend=\"sqlite\", db_path=\"shop.db\")\n\n\n@app.task\ndef cleanup() -> int:\n    return 0\n\n\n@app.task(retries=3, autoretry_for=(ConnectionError,), retry_backoff=True, time_limit=10)\nasync def fetch_status(url: str) -> int:\n    return 200\n\n\napp.schedule(cleanup, cron=\"*/5 * * * *\")\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 11: App.task() has no parameter 'retries'",
+            "line 11: App.task() has no parameter 'autoretry_for'",
+            "line 11: App.task() has no parameter 'time_limit'",
+            "line 16: App has no attribute 'schedule'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/_check.py\", line 2, in <module>\n    import app as module\n  File \"<scratch>/app.py\", line 11, in <module>\n    @app.task(retries=3, autoretry_for=(ConnectionError,), retry_backoff=True, time_limit=10)\n     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: App.task() got an unexpected keyword argument 'retries'\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "implement-cancel-running",
+      "kind": "implement",
+      "with_skill": true,
+      "success": false,
+      "interventions": 3,
+      "api_errors": 3,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```python\nfrom rustvello import App\n\napp = App()\n\n\n@app.task\ndef nap():\n    import time\n    time.sleep(60)\n\n\nresult = nap.apply_async()\nresult.revoke(terminate=True)\nprint(\"cancelled\")\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "uses the cancellation API",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 12: task 'nap' has no attribute 'apply_async'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/main.py\", line 12, in <module>\n    result = nap.apply_async()\n             ^^^^^^^^^^^^^^^\nAttributeError: 'TaskHandle' object has no attribute 'apply_async'\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        },
+        {
+          "answer": "```python\nfrom rustvello import App\n\napp = App()\n\n\n@app.task\ndef nap():\n    import time\n    time.sleep(60)\n\n\nresult = nap.apply_async()\nresult.revoke(terminate=True)\nprint(\"cancelled\")\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "uses the cancellation API",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 12: task 'nap' has no attribute 'apply_async'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/main.py\", line 12, in <module>\n    result = nap.apply_async()\n             ^^^^^^^^^^^^^^^\nAttributeError: 'TaskHandle' object has no attribute 'apply_async'\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        },
+        {
+          "answer": "```python\nfrom rustvello import App\n\napp = App()\n\n\n@app.task\ndef nap():\n    import time\n    time.sleep(60)\n\n\nresult = nap.apply_async()\nresult.revoke(terminate=True)\nprint(\"cancelled\")\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "uses the cancellation API",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "answer contains a Python code block",
+              "passed": true,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [
+            "line 12: task 'nap' has no attribute 'apply_async'"
+          ],
+          "executed": false,
+          "execution_output": "Traceback (most recent call last):\n  File \"<scratch>/main.py\", line 12, in <module>\n    result = nap.apply_async()\n             ^^^^^^^^^^^^^^^\nAttributeError: 'TaskHandle' object has no attribute 'apply_async'\n",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-timeout",
+      "kind": "recover",
+      "with_skill": true,
+      "success": false,
+      "interventions": 1,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "Set `soft_time_limit` higher, e.g. `@app.task(soft_time_limit=10)`, or call `build_report.delay(day)` again.\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "identifies the per-attempt deadline",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "raises the timeout or makes the work fit it",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "Celery-only API",
+              "passed": false,
+              "kind": "forbidden"
+            },
+            {
+              "label": "notes a sync body is abandoned, not stopped (async or num_processes)",
+              "passed": false,
+              "kind": "optional"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-no-worker",
+      "kind": "recover",
+      "with_skill": true,
+      "success": false,
+      "interventions": 1,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "Start the worker with `celery -A mail worker`.\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "explains that no worker is running",
+              "passed": true,
+              "kind": "required"
+            },
+            {
+              "label": "starts a worker process or app.run()",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "Celery-only API",
+              "passed": false,
+              "kind": "forbidden"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-investigate-readonly",
+      "kind": "recover",
+      "with_skill": true,
+      "success": false,
+      "interventions": 1,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "```bash\nsqlite3 shop.db \"SELECT * FROM invocations\"\nrustvello purge --db-path ./shop.db\n```\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "uses an investigation surface",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "destructive command",
+              "passed": false,
+              "kind": "forbidden"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    },
+    {
+      "task": "recover-choose-backend",
+      "kind": "recover",
+      "with_skill": true,
+      "success": false,
+      "interventions": 1,
+      "api_errors": 0,
+      "recommended": null,
+      "rank": null,
+      "turns": [
+        {
+          "answer": "Use Redis for both.\n",
+          "success": false,
+          "checks": [
+            {
+              "label": "SQLite for one machine",
+              "passed": false,
+              "kind": "required"
+            },
+            {
+              "label": "PostgreSQL for several machines",
+              "passed": false,
+              "kind": "required"
+            }
+          ],
+          "api_errors": [],
+          "executed": null,
+          "execution_output": "",
+          "recommended": null,
+          "rank": null,
+          "named": []
+        }
+      ],
+      "sample": 0
+    }
+  ]
+}

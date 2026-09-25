@@ -1530,6 +1530,9 @@ async fn api_json(
     )
 }
 
+/// Characters of a stored traceback kept in the investigation report (its end).
+const INVESTIGATION_TRACEBACK_CHARS: usize = 4000;
+
 /// A single, agent-friendly provenance view for diagnosing an invocation.
 ///
 /// This intentionally composes existing backend information into one bounded
@@ -1631,7 +1634,8 @@ async fn invocation_investigation_json(
             Vec::new()
         };
 
-    let history = history
+    let history_rows = &history;
+    let history = history_rows
         .iter()
         .map(|entry| {
             let runner_id = entry
@@ -1659,6 +1663,33 @@ async fn invocation_investigation_json(
             })
         })
         .collect::<Vec<_>>();
+    // Current status: the latest history row, as `/invocations/{id}/api` reports it.
+    let status = history_rows.last().map_or_else(
+        || format!("{:?}", invocation.status),
+        |last| format!("{:?}", last.status_record.status),
+    );
+    // Stored error of a failed attempt (bounded: the traceback keeps its last lines).
+    let error = app
+        .state_backend
+        .get_error(&invocation_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|error| {
+            let traceback = error.traceback.map(|traceback| {
+                let start = traceback
+                    .char_indices()
+                    .rev()
+                    .nth(INVESTIGATION_TRACEBACK_CHARS)
+                    .map_or(0, |(index, _)| index);
+                traceback[start..].to_owned()
+            });
+            serde_json::json!({
+                "error_type": error.error_type,
+                "message": error.message,
+                "traceback": traceback,
+            })
+        });
     let mut timeline_scope = MonitoringScope::default().with_invocation(inv_id.clone());
     if let Some(timestamp) = registration_time {
         timeline_scope = timeline_scope.with_time(TimeWindow::fit_default(timestamp, timestamp));
@@ -1673,6 +1704,7 @@ async fn invocation_investigation_json(
             "id": invocation.invocation_id.to_string(),
             "task_id": invocation.task_id.to_string(),
             "call_id": invocation.call_id.to_string(),
+            "status": status,
             "parent_invocation_id": invocation.parent_invocation_id.as_ref().map(std::string::ToString::to_string),
             "workflow": invocation.workflow.as_ref().map(|workflow| serde_json::json!({
                 "workflow_id": workflow.workflow_id.to_string(),
@@ -1680,6 +1712,7 @@ async fn invocation_investigation_json(
                 "parent_id": workflow.parent_id.as_ref().map(std::string::ToString::to_string),
             })),
         },
+        "error": error,
         "registration": {
             "timestamp": registration_time.map(|time| time.to_rfc3339()),
             "runner_id": registration_runner_id,

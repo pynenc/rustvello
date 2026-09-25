@@ -1,5 +1,11 @@
 # Rustvello Agent Investigation Guide
 
+To _use_ Rustvello in an application (set up, workers, retries, triggers,
+cancellation, choosing a backend), read the agent skill in
+[skills/rustvello/SKILL.md](skills/rustvello/SKILL.md) and
+[docs/agents.md](docs/agents.md). This file is about investigating a running
+application and working on this repository.
+
 This file is for Codex, Claude Code, Cursor, human operators, and any other
 agent debugging a Rustvello application. Rustvello monitoring is not just a web
 page: it is a set of query surfaces over the same broker, orchestrator, state
@@ -85,7 +91,8 @@ curl -sS "$BASE/invocations/<id>/history" | jq
 
 `/invocations/{id}/investigation` is the best first query. It joins:
 
-- core invocation data
+- core invocation data, including the current `status`
+- the stored `error` (type, message, traceback tail) of a failed invocation
 - ordered status history
 - runner context per history row
 - parent and workflow references

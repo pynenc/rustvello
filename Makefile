@@ -2,7 +2,7 @@
 PYTHON_BIN ?= $(CURDIR)/.venv/bin/python
 MONITORING_LOAD_LOG ?= rustvello=debug,rustvello_monitoring=debug
 # Markdown checked by `make links` / `make links-online` (and the CI link job).
-LINK_SOURCES = README.md '*.md' py-rustvello/README.md 'crates/*/README.md' 'docs/**/*.md'
+LINK_SOURCES = README.md '*.md' py-rustvello/README.md 'crates/*/README.md' 'docs/**/*.md' 'skills/**/*.md' evals/README.md
 
 .PHONY: install
 install: ## Install dependencies, build the Python extension, and set up pre-commit hooks
@@ -73,6 +73,15 @@ test: test-rust test-fault test-python ## Run all tests (Rust + fault suites + P
 .PHONY: readme-examples
 readme-examples: develop ## Run the README quick starts (Python against the installed build, Rust via cargo)
 	@uv run python scripts/readme_examples.py run
+
+.PHONY: skill-examples
+skill-examples: develop ## Fresh-agent check: run the agent skill's examples from a copy of skills/rustvello
+	@uv run python scripts/readme_examples.py skill
+
+.PHONY: evals-check
+evals-check: develop ## Self-test the cross-model eval harness (mock models, no keys, no network)
+	@uv run python evals/run.py api-surface
+	@uv run python -m pytest evals/tests -q
 
 .PHONY: links
 links: ## Check repository-relative links in Markdown (offline, needs lychee)

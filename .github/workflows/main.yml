@@ -171,6 +171,17 @@ jobs:
       - name: Run the Rust examples against the crate
         run: python scripts/readme_examples.py run --language rust
 
+      # A fresh agent with only the skill: its examples and scripts run from a
+      # copy of skills/rustvello against the same wheel, so the skill cannot drift.
+      - name: Agent skill examples against the built wheel
+        run: '"$RUNNER_TEMP/readme/bin/python" scripts/readme_examples.py skill'
+
+      - name: Eval harness self-test (mock models, no keys)
+        run: |
+          "$RUNNER_TEMP/readme/bin/pip" install pytest
+          "$RUNNER_TEMP/readme/bin/python" evals/run.py api-surface
+          "$RUNNER_TEMP/readme/bin/python" -m pytest evals/tests -q -p no:cacheprovider
+
   links:
     name: Link check
     runs-on: ubuntu-latest
@@ -185,7 +196,7 @@ jobs:
           fail: true
           args: >-
             --config lychee.toml --no-progress
-            README.md '*.md' py-rustvello/README.md 'crates/*/README.md' 'docs/**/*.md'
+            README.md '*.md' py-rustvello/README.md 'crates/*/README.md' 'docs/**/*.md' 'skills/**/*.md' evals/README.md
 
   publish-dry-run:
     name: Verify crates compile (all features)

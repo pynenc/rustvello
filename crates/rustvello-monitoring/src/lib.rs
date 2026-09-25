@@ -73,14 +73,28 @@ pub async fn start_monitor(
     selected_app: &str,
     monitor_config: MonitorConfig,
 ) -> RustvelloResult<()> {
-    let state = AppState::new(apps, selected_app)?;
-    let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind(monitor_config.bind)
         .await
         .map_err(|e| rustvello_core::error::RustvelloError::Internal {
             message: format!("bind: {e}"),
         })?;
-    tracing::info!("Monitoring server listening on {}", monitor_config.bind);
+    serve_on(apps, selected_app, listener).await
+}
+
+/// Serve the monitoring web server on an already bound listener.
+///
+/// Binding first lets a caller learn the actual address (for example after
+/// binding port 0) and report bind errors before the server task starts.
+pub async fn serve_on(
+    apps: std::collections::HashMap<String, AppInstance>,
+    selected_app: &str,
+    listener: tokio::net::TcpListener,
+) -> RustvelloResult<()> {
+    let state = AppState::new(apps, selected_app)?;
+    let app = server::build_router(state);
+    if let Ok(address) = listener.local_addr() {
+        tracing::info!("Monitoring server listening on {}", address);
+    }
     axum::serve(listener, app).await.map_err(|e| {
         rustvello_core::error::RustvelloError::Internal {
             message: format!("serve: {e}"),

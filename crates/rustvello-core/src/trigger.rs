@@ -22,6 +22,31 @@ use rustvello_proto::trigger::{
     TriggerRunRecord, ValidCondition,
 };
 
+/// How late an evaluation may fire a cron slot. Covers the evaluation period
+/// and the gaps between atomic-service slots of several runners; a slot missed
+/// for longer (no runner alive) is skipped rather than replayed.
+pub const CRON_MISSED_SLOT_GRACE_SECONDS: i64 = 120;
+
+/// Whether a cron schedule has a slot due at `now`.
+///
+/// The due slot is the latest scheduled time at or before `now`. It fires when
+/// it is at most [`CRON_MISSED_SLOT_GRACE_SECONDS`] old and later than
+/// `last_execution` (the time of the previous firing), so each slot fires once.
+///
+/// # Errors
+/// Returns the `croner` error when no previous occurrence can be computed.
+pub fn cron_slot_due(
+    schedule: &Cron,
+    now: DateTime<Utc>,
+    last_execution: Option<DateTime<Utc>>,
+) -> Result<bool, croner::errors::CronError> {
+    let slot = schedule.find_previous_occurrence(&now, true)?;
+    if (now - slot).num_seconds() > CRON_MISSED_SLOT_GRACE_SECONDS {
+        return Ok(false);
+    }
+    Ok(last_execution.is_none_or(|last| slot > last))
+}
+
 // ---------------------------------------------------------------------------
 // TriggerStore — backend trait
 // ---------------------------------------------------------------------------
@@ -375,8 +400,12 @@ impl TriggerManager {
     ///
     /// For each cron condition:
     /// 1. Parse the `cron_expression` with the `croner` crate; log and skip on syntax error.
-    /// 2. Check whether the current minute matches the schedule via `is_time_matched`.
-    /// 3. Also enforce `min_interval_seconds` to prevent double-firing within the same minute.
+    /// 2. Find the latest scheduled slot at or before now ([`cron_slot_due`]): it fires
+    ///    when it is newer than the last execution and at most
+    ///    [`CRON_MISSED_SLOT_GRACE_SECONDS`] old, so an evaluation a few seconds
+    ///    after the slot still fires it (evaluations run every few seconds, not on
+    ///    the slot's exact second), and older missed slots are skipped, not replayed.
+    /// 3. Also enforce `min_interval_seconds` between two firings.
     /// 4. Use optimistic locking (`store_cron_execution`) across multiple runner instances.
     pub async fn evaluate_cron_conditions(&self) -> RustvelloResult<Vec<ValidCondition>> {
         let cron_conditions = self.store.get_cron_conditions().await?;
@@ -412,9 +441,9 @@ impl TriggerManager {
                     continue;
                 }
 
-                // Check if the current time matches the cron schedule.
-                let matches = match schedule.is_time_matching(&now) {
-                    Ok(m) => m,
+                // Fire the latest slot at or before now, once.
+                let matches = match cron_slot_due(&schedule, now, last_exec) {
+                    Ok(due) => due,
                     Err(e) => {
                         tracing::warn!(
                             "Cron match check failed for condition {} (expr {:?}): {}",
@@ -713,6 +742,45 @@ mod tests {
 
     // TriggerManager tests require a backend — see rustvello-mem tests
     // and integration tests. Here we just verify construction.
+
+    fn at(h: u32, m: u32, sec: u32) -> DateTime<Utc> {
+        use chrono::TimeZone;
+        Utc.with_ymd_and_hms(2026, 9, 25, h, m, sec).unwrap()
+    }
+
+    fn cron(expression: &str) -> Cron {
+        Cron::from_str(expression).unwrap()
+    }
+
+    #[test]
+    fn minute_cron_fires_when_evaluated_after_second_zero() {
+        // Evaluations run every few seconds; the slot's exact second is rarely hit.
+        let every_minute = cron("* * * * *");
+        assert!(cron_slot_due(&every_minute, at(12, 0, 17), None).unwrap());
+        assert!(cron_slot_due(&every_minute, at(12, 0, 17), Some(at(11, 59, 3))).unwrap());
+        let every_5 = cron("*/5 * * * *");
+        assert!(cron_slot_due(&every_5, at(12, 5, 4), Some(at(12, 0, 6))).unwrap());
+    }
+
+    #[test]
+    fn a_slot_fires_once() {
+        let every_minute = cron("* * * * *");
+        assert!(!cron_slot_due(&every_minute, at(12, 0, 17), Some(at(12, 0, 5))).unwrap());
+        let every_5 = cron("*/5 * * * *");
+        assert!(!cron_slot_due(&every_5, at(12, 3, 0), Some(at(12, 0, 6))).unwrap());
+        let every_2s = cron("*/2 * * * * *");
+        assert!(!cron_slot_due(&every_2s, at(12, 0, 5), Some(at(12, 0, 4))).unwrap());
+        assert!(cron_slot_due(&every_2s, at(12, 0, 6), Some(at(12, 0, 4))).unwrap());
+    }
+
+    #[test]
+    fn missed_slots_older_than_the_grace_are_skipped() {
+        let daily = cron("0 3 * * *");
+        assert!(!cron_slot_due(&daily, at(12, 0, 0), None).unwrap());
+        assert!(!cron_slot_due(&daily, at(12, 0, 0), Some(at(0, 0, 0))).unwrap());
+        assert!(cron_slot_due(&daily, at(3, 1, 30), Some(at(0, 0, 0))).unwrap());
+        assert!(!cron_slot_due(&daily, at(3, 2, 1), Some(at(0, 0, 0))).unwrap());
+    }
 
     #[test]
     fn trigger_logic_display() {

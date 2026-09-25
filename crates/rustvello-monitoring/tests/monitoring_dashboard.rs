@@ -2189,6 +2189,11 @@ async fn test_hierarchical_timeline() {
         assert_eq!(resp.status(), 200);
         let investigation: serde_json::Value = resp.json().await.expect("investigation JSON");
         assert_eq!(investigation["invocation"]["id"], gp_id);
+        assert_eq!(investigation["invocation"]["status"], api["status"]);
+        assert!(
+            investigation["error"].is_null(),
+            "a successful invocation has no error"
+        );
         assert!(investigation["history"].is_array());
         assert!(investigation["integrity"]["has_registered_event"]
             .as_bool()
