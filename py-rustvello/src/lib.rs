@@ -146,6 +146,11 @@ fn rustvello(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     )?)?;
 
     m.add_function(wrap_pyfunction!(
+        rustvello_python::utils::on_attempt_abandoned,
+        m
+    )?)?;
+
+    m.add_function(wrap_pyfunction!(
         rustvello_python::utils::get_current_trace_context,
         m
     )?)?;

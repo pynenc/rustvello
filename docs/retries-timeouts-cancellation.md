@@ -123,17 +123,44 @@ a local executor slot.
 
 What happens to the code that was running depends on how the task runs:
 
-| Task body                                        | On expiry                                                                                                                                          |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Async (native async tasks)                       | The future is dropped: execution stops at its next `.await`. Code after that point never runs.                                                     |
-| Sync, `blocking = true` (and every Python task)  | A thread cannot be killed safely, so it keeps running in the background. Its result is discarded, and it keeps its executor slot until it returns. |
-| Sync, `blocking = false`                         | It cannot be preempted. The deadline is checked when it returns, and a late result is discarded.                                                   |
-| Subprocess executor (`App.run(num_processes=N)`) | The worker process is killed and replaced, so the body really stops.                                                                               |
+| Task body                                        | On expiry                                                                                                                                                                       |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rust `async fn` (native async tasks)             | The body runs as its own Tokio task and is aborted: execution stops at its next `.await`. Code after that point never runs.                                                     |
+| Python `async def`                               | The coroutine's asyncio task is cancelled on its worker event loop: `CancelledError` is raised at its next `await`, and `except`/`finally` blocks run. The thread is then free. |
+| Sync, `blocking = true` (and sync Python tasks)  | A thread cannot be killed safely, so it keeps running in the background. Its result is discarded, and it keeps its executor slot until it returns.                              |
+| Sync, `blocking = false`                         | It cannot be preempted. The deadline is checked when it returns, and a late result is discarded.                                                                                |
+| Subprocess executor (`App.run(num_processes=N)`) | The worker process is killed and replaced, so the body really stops.                                                                                                            |
+
+A Python coroutine that never awaits (CPU-bound code, a blocking call) cannot
+be interrupted either: it stops at its first `await` after the deadline, or
+runs to the end with its result discarded.
 
 Because an abandoned synchronous body keeps its slot, a task that times out
 repeatedly can occupy every blocking slot. Either give such work a
-cooperative stop (check a flag, bound your I/O timeouts) or run it in the
-process pool.
+cooperative stop or run it in the process pool. A Rust sync body (blocking or
+Rayon) can watch its attempt signal and stop by itself once the runner gives
+up on it:
+
+```rust
+use rustvello::prelude::*;
+
+#[rustvello::task(blocking = true, timeout_ms = 30_000)]
+fn crunch(chunks: Vec<String>) -> RustvelloResult<usize> {
+    let signal = current_attempt_signal();
+    let mut done = 0;
+    for chunk in &chunks {
+        if signal.as_ref().is_some_and(AttemptSignal::is_abandoned) {
+            break; // timed out or cancelled: the result is discarded anyway
+        }
+        process(chunk);
+        done += 1;
+    }
+    Ok(done)
+}
+```
+
+`AttemptSignal::on_abandon` registers a callback instead; the Python runtime
+uses it to cancel `async def` bodies.
 
 ## Cancellation
 
@@ -166,16 +193,20 @@ rustvello cancel <INVOCATION_ID> --app-id my-app --db-path ./tasks.db
 `CANCELLED` is a terminal status. Any non-final status can move to it, and the
 move is not limited to the runner that owns the invocation:
 
-| Invocation was                                        | Effect                                                                                                                                                                                      |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Registered, pending, rerouted, concurrency-controlled | It never runs. Its queued entry is dropped, or skipped when dequeued.                                                                                                                       |
-| Backing off before a retry (`RETRY`)                  | The retry never runs.                                                                                                                                                                       |
-| Running                                               | The worker re-reads the status every `cancellation_check_interval_seconds` (default 1 s) and abandons the attempt. The same rules as for deadlines apply, and the late result is discarded. |
-| Already finished (success, failure, cancelled)        | Nothing changes. Rust returns `CancelOutcome::AlreadyFinal`, Python returns `False`, and the CLI exits with code 3.                                                                         |
+| Invocation was                                        | Effect                                                                                                                                                                                                                                                                                 |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Registered, pending, rerouted, concurrency-controlled | It never runs. Its queued entry is dropped, or skipped when dequeued.                                                                                                                                                                                                                  |
+| Backing off before a retry (`RETRY`)                  | The retry never runs.                                                                                                                                                                                                                                                                  |
+| Running                                               | The worker re-reads the status every `cancellation_check_interval_seconds` (default 1 s) and abandons the attempt. The same rules as for deadlines apply: async bodies (Rust and Python) are stopped at their next await, sync bodies are abandoned, and the late result is discarded. |
+| Already finished (success, failure, cancelled)        | Nothing changes. Rust returns `CancelOutcome::AlreadyFinal`, Python returns `False`, and the CLI exits with code 3.                                                                                                                                                                    |
 
 Waiters are released, and triggers see the `CANCELLED` status. Reading the
 result of a cancelled invocation fails with `RustvelloError::InvocationCancelled`
 (Rust) or `rustvello.InvocationCancelledError` (Python).
+
+The behaviour above is covered by `crates/rustvello/tests/retry_timeout_cancel.rs`
+(memory backend; the async abort cases also on SQLite) and
+`py-rustvello/tests/test_retry_timeout_cancel.py`.
 
 ## Side effects and idempotency
 
@@ -186,8 +217,8 @@ Rustvello runs each invocation **at least once**:
   is already `FAILED`, `RETRY` or `CANCELLED`. It can finish its side effects
   (write a row, send an email) after the status says it stopped. It can even
   overlap a retry of the same invocation;
-- cancelling or timing out an async body stops it at an `.await`, so a
-  side effect split across awaits can be left half done;
+- cancelling or timing out an async body (Rust or Python) stops it at an
+  `.await`, so a side effect split across awaits can be left half done;
 - cancellation never undoes work that already happened.
 
 To make this safe, give every external side effect an idempotency key. The

@@ -11,6 +11,12 @@
 //!   executor permit, so concurrency stays bounded) and its result is
 //!   discarded. Sync bodies that never yield (not `blocking`) are only
 //!   checked after they return; a result past the deadline is discarded.
+//!
+//! The caller then raises the attempt's [`AttemptSignal`], so code that cannot
+//! be preempted can still stop: Python coroutines are cancelled on their
+//! worker loop, and sync bodies may poll the signal.
+//!
+//! [`AttemptSignal`]: rustvello_core::context::AttemptSignal
 
 use std::future::Future;
 use std::time::{Duration, Instant};

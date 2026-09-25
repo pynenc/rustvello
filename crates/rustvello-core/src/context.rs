@@ -20,7 +20,8 @@
 //! When a task calls `app.call()` inside its body, the app layer reads
 //! the current `InvocationContext` to determine parent/workflow inheritance.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use rustvello_proto::identifiers::{ExecutorKind, InvocationId, RunnerId, TaskId, TaskLanguage};
 use rustvello_proto::invocation::{TraceContextCarrier, WorkflowIdentity};
@@ -404,6 +405,108 @@ pub fn scope_current_contexts<'a, T: 'a>(
     }
 }
 
+// ---------------------------------------------------------------------------
+// AttemptSignal — the runner abandoned the running attempt
+// ---------------------------------------------------------------------------
+
+type AbandonHook = Box<dyn FnOnce() + Send>;
+
+/// Raised by the runner when it abandons a running attempt: its execution
+/// deadline expired or its invocation was cancelled.
+///
+/// The runner aborts native async Rust bodies itself. Code it cannot preempt
+/// (a synchronous body on a blocking thread, a coroutine on a foreign event
+/// loop) can poll [`AttemptSignal::is_abandoned`] or register a hook with
+/// [`AttemptSignal::on_abandon`] to stop cooperatively. The result of an
+/// abandoned attempt is discarded either way.
+#[derive(Clone, Default)]
+pub struct AttemptSignal(Arc<AttemptSignalInner>);
+
+#[derive(Default)]
+struct AttemptSignalInner {
+    abandoned: AtomicBool,
+    hooks: Mutex<Vec<AbandonHook>>,
+}
+
+impl AttemptSignal {
+    /// A signal that has not been raised.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether the runner has abandoned this attempt.
+    pub fn is_abandoned(&self) -> bool {
+        self.0.abandoned.load(Ordering::Acquire)
+    }
+
+    /// Run `hook` once when the attempt is abandoned; at once if it already was.
+    ///
+    /// Hooks run on the thread that raises the signal (a blocking thread in the
+    /// runner), so they must not block for long.
+    pub fn on_abandon<F: FnOnce() + Send + 'static>(&self, hook: F) {
+        let mut hooks = self.0.hooks.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.is_abandoned() {
+            drop(hooks);
+            hook();
+        } else {
+            hooks.push(Box::new(hook));
+        }
+    }
+
+    /// Mark the attempt abandoned and run the registered hooks (once).
+    pub fn abandon(&self) {
+        let hooks = {
+            let mut hooks = self.0.hooks.lock().unwrap_or_else(PoisonError::into_inner);
+            self.0.abandoned.store(true, Ordering::Release);
+            std::mem::take(&mut *hooks)
+        };
+        for hook in hooks {
+            hook();
+        }
+    }
+}
+
+impl std::fmt::Debug for AttemptSignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AttemptSignal")
+            .field("abandoned", &self.is_abandoned())
+            .finish_non_exhaustive()
+    }
+}
+
+tokio::task_local! {
+    /// The abandon signal of the attempt being executed.
+    pub static ATTEMPT_SIGNAL: AttemptSignal;
+}
+
+std::thread_local! {
+    static THREAD_ATTEMPT_SIGNAL: std::cell::RefCell<Option<AttemptSignal>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Set the thread-local attempt signal (for use in `spawn_blocking` / rayon).
+pub fn set_thread_attempt_signal(signal: Option<AttemptSignal>) {
+    THREAD_ATTEMPT_SIGNAL.with(|cell| {
+        *cell.borrow_mut() = signal;
+    });
+}
+
+/// Clear the thread-local attempt signal.
+pub fn clear_thread_attempt_signal() {
+    set_thread_attempt_signal(None);
+}
+
+/// The abandon signal of the running attempt, if called inside one.
+///
+/// Resolution order matches [`get_invocation_context`]: the task-local first,
+/// then the thread-local set for blocking and Rayon threads.
+pub fn current_attempt_signal() -> Option<AttemptSignal> {
+    if let Ok(signal) = ATTEMPT_SIGNAL.try_with(Clone::clone) {
+        return Some(signal);
+    }
+    THREAD_ATTEMPT_SIGNAL.with(|cell| cell.borrow().clone())
+}
+
 /// Build a stable external runner ID: `"{hostname}-{pid}"`.
 ///
 /// Matches pynenc's `ExternalRunner` which uses hostname-pid since external
@@ -530,5 +633,58 @@ mod tests {
         // Outside both scopes
         assert!(get_invocation_context().is_none());
         assert!(get_runner_context().is_none());
+    }
+
+    #[test]
+    fn attempt_signal_runs_hooks_once_including_late_ones() {
+        use std::sync::atomic::AtomicUsize;
+
+        let signal = AttemptSignal::new();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let hook = |fired: &Arc<AtomicUsize>| {
+            let fired = Arc::clone(fired);
+            move || {
+                fired.fetch_add(1, Ordering::SeqCst);
+            }
+        };
+        signal.on_abandon(hook(&fired));
+        assert!(!signal.is_abandoned());
+        assert_eq!(fired.load(Ordering::SeqCst), 0);
+
+        signal.clone().abandon();
+        assert!(signal.is_abandoned());
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
+        signal.abandon();
+        assert_eq!(fired.load(Ordering::SeqCst), 1, "hooks run once");
+
+        // Registered after the fact: runs immediately.
+        signal.on_abandon(hook(&fired));
+        assert_eq!(fired.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn attempt_signal_resolves_task_local_then_thread_local() {
+        assert!(current_attempt_signal().is_none());
+        let signal = AttemptSignal::new();
+        ATTEMPT_SIGNAL
+            .scope(signal.clone(), async {
+                current_attempt_signal().unwrap().abandon();
+            })
+            .await;
+        assert!(signal.is_abandoned());
+
+        let thread_signal = AttemptSignal::new();
+        let seen = std::thread::spawn({
+            let thread_signal = thread_signal.clone();
+            move || {
+                set_thread_attempt_signal(Some(thread_signal));
+                let seen = current_attempt_signal().is_some();
+                clear_thread_attempt_signal();
+                seen && current_attempt_signal().is_none()
+            }
+        })
+        .join()
+        .unwrap();
+        assert!(seen);
     }
 }

@@ -42,7 +42,9 @@ the OpenTelemetry context are the same as for a synchronous task. While the
 loop waits on I/O it releases the GIL, so other workers keep running; CPU-bound
 code inside a coroutine still holds the GIL and stalls that worker's loop.
 Tasks a coroutine leaves running when it returns are cancelled before the
-worker takes its next invocation.
+worker takes its next invocation. When the attempt times out or its invocation
+is cancelled, the coroutine is cancelled on its loop (``CancelledError`` at the
+next ``await``).
 """
 
 from __future__ import annotations
@@ -73,6 +75,7 @@ from rustvello.rustvello import (
     get_current_invocation_id,
     get_current_num_retries,
     get_current_trace_context,
+    on_attempt_abandoned,
 )
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -171,18 +174,30 @@ def _cancel_leftover_tasks(loop: asyncio.AbstractEventLoop) -> None:
     loop.run_until_complete(asyncio.gather(*leftovers, return_exceptions=True))
 
 
+def _cancel_from_runner(loop: asyncio.AbstractEventLoop, task: asyncio.Task[Any]) -> None:
+    """Cancel a task body from a runner thread (its attempt timed out or was cancelled)."""
+    try:
+        loop.call_soon_threadsafe(task.cancel)
+    except RuntimeError:
+        pass  # the worker loop is already closed: nothing left to stop
+
+
 def _run_coroutine(coro: Any) -> Any:
     """Drive a task coroutine to completion from synchronous worker code.
 
     Runs on this thread's worker loop, keeping the thread's invocation context. If a
     loop is already running here (a dev-mode call made from async code), the
     coroutine runs to completion on a helper thread with its own loop instead.
+
+    When the runner abandons the attempt (execution deadline or cancellation), the
+    coroutine's task is cancelled on its loop, so the body stops at its next ``await``.
     """
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         loop = _worker_event_loop()
         task = loop.create_task(coro)
+        on_attempt_abandoned(lambda: _cancel_from_runner(loop, task))
         try:
             return loop.run_until_complete(task)
         finally:
@@ -275,9 +290,9 @@ class Invocation:
 
         Returns ``True`` when this call cancelled it, ``False`` when it had
         already finished. Queued or backing-off invocations never run; a
-        running attempt is abandoned by its worker (async code is aborted, a
-        synchronous function keeps running in its thread but its result is
-        discarded). Side effects already performed are not undone.
+        running attempt is abandoned by its worker (an ``async def`` body is
+        cancelled at its next ``await``; a synchronous function keeps running in
+        its thread but its result is discarded). Side effects already performed are not undone.
         """
         if self._sync_status is not None:
             return False  # dev mode: already executed inline
@@ -673,10 +688,11 @@ class App:
             retry_jitter: ``"equal"`` (default: half the delay plus a random half),
                 ``"full"`` (random in ``[0, delay]``) or ``"none"``.
             timeout: Execution deadline of one attempt in seconds (``None`` = none).
-                An expired attempt fails with ``TaskTimeoutError``; the Python
-                function cannot be interrupted, so its thread keeps running and
-                its result is discarded (use ``num_processes`` to have the
-                worker process killed instead).
+                An expired attempt fails with ``TaskTimeoutError``. An ``async def``
+                body is cancelled at its next ``await``; a synchronous function
+                cannot be interrupted, so its thread keeps running and its result
+                is discarded (use ``num_processes`` to have the worker process
+                killed instead).
             retry_on_timeout: Whether a timed-out attempt may be retried.
 
         Returns:

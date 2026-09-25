@@ -39,7 +39,8 @@ pub mod prelude {
     pub use crate::call::Call;
     pub use crate::client_data_store::{ClientDataStore, ClientDataStoreManager};
     pub use crate::context::{
-        get_invocation_context, get_runner_context, InvocationContext, RunnerContext,
+        current_attempt_signal, get_invocation_context, get_runner_context, AttemptSignal,
+        InvocationContext, RunnerContext,
     };
     pub use crate::error::{RustvelloError, RustvelloResult};
     pub use crate::invocation::{Invocation, InvocationHandle, SyncInvocation};

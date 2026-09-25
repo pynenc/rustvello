@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use rustvello_core::context::{InvocationContext, RunnerContext};
+use rustvello_core::context::{AttemptSignal, InvocationContext, RunnerContext, ATTEMPT_SIGNAL};
 use rustvello_core::error::{RustvelloError, RustvelloResult, TaskError};
 use rustvello_core::middleware::TaskMiddleware;
 use rustvello_core::observability::{
@@ -197,18 +197,30 @@ pub(crate) async fn execute_invocation_common(
         resolved_task_config.timeout(),
         deps.app_config.cancellation_check_interval_seconds,
     );
+    let attempt_signal = AttemptSignal::new();
     let (exec_result, interruption) = supervise(
-        executor.execute(
-            Arc::clone(&task),
-            call_dto.serialized_arguments.clone(),
-            inv_ctx,
-            run_ctx,
+        ATTEMPT_SIGNAL.scope(
+            attempt_signal.clone(),
+            executor.execute(
+                Arc::clone(&task),
+                call_dto.serialized_arguments.clone(),
+                inv_ctx,
+                run_ctx,
+            ),
         ),
         &limits,
         &deps.lifecycle,
         invocation_id,
     )
     .await;
+    if interruption.is_some() {
+        // Tell code the runner could not preempt (a Python coroutine on its
+        // worker loop, a cooperative sync body) to stop. Hooks may take the GIL,
+        // so they run off the async runtime.
+        drop(tokio::task::spawn_blocking(move || {
+            attempt_signal.abandon()
+        }));
+    }
 
     // --- 7. Post-execution middleware ---
     for mw in deps.middlewares.iter().rev() {

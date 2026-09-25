@@ -1,5 +1,6 @@
 """Retry backoff, execution deadlines and cancellation from the Python App (parity with Rust)."""
 
+import asyncio
 import time
 
 import pytest
@@ -154,5 +155,80 @@ def test_cancel_running_invocation_discards_its_result() -> None:
             invocation.result(timeout=2)
         time.sleep(1.2)
         assert str(invocation.status) == "CANCELLED"
+    finally:
+        app.stop()
+
+
+class _Ticker:
+    """Side effects of an ``async def`` body: ticks while running, cancellations seen."""
+
+    def __init__(self) -> None:
+        self.starts = 0
+        self.ticks = 0
+        self.cancelled = 0
+
+    async def run(self) -> str:
+        self.starts += 1
+        try:
+            for _ in range(300):
+                self.ticks += 1
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+        return "late"
+
+    def assert_stopped(self, cancelled: int, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout
+        while self.cancelled < cancelled:
+            assert time.monotonic() < deadline, "async body was not cancelled"
+            time.sleep(0.01)
+        ticks = self.ticks
+        time.sleep(0.2)
+        assert self.ticks == ticks, "an abandoned async body kept producing side effects"
+
+
+def test_async_timeout_cancels_the_coroutine_and_retries() -> None:
+    app = App(app_id="async_timeouts")
+    ticker = _Ticker()
+
+    @app.task(max_retries=1, timeout=0.2)
+    async def slow() -> str:
+        return await ticker.run()
+
+    invocation = slow()
+    runner = app._build_runner(num_workers=1, idle_sleep_ms=1)
+    started = time.monotonic()
+    while runner.run_one():
+        pass
+    assert time.monotonic() - started < 2.5, "runner waited for the async bodies"
+    with pytest.raises(RuntimeError, match="TaskTimeoutError"):
+        invocation.result(timeout=1)
+    assert ticker.starts == 2, "one retry after the timeout"
+    ticker.assert_stopped(cancelled=2)
+    assert str(invocation.status) == "FAILED"
+
+
+def test_cancel_running_async_invocation_cancels_the_coroutine() -> None:
+    app = App(app_id="async_cancel_running")
+    app.config.cancellation_check_interval_seconds = 0.05
+    ticker = _Ticker()
+
+    @app.task
+    async def slow() -> str:
+        return await ticker.run()
+
+    app.run(num_workers=1, idle_sleep_ms=5, block=False)
+    try:
+        invocation = slow()
+        _wait_status(invocation, "RUNNING")
+        while ticker.ticks < 3:
+            time.sleep(0.01)
+        assert invocation.cancel() is True
+        with pytest.raises(InvocationCancelledError):
+            invocation.result(timeout=2)
+        ticker.assert_stopped(cancelled=1)
+        assert str(invocation.status) == "CANCELLED"
+        assert ticker.starts == 1
     finally:
         app.stop()

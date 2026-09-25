@@ -28,11 +28,17 @@ For detailed information on each version, please visit the [GitHub Releases page
   loses nothing, and the retry fires once when due (kill test).
 - Execution deadlines: `timeout_ms` / `timeout` fail an attempt with
   `TaskTimeoutError`. `retry_on_timeout` decides whether the attempt is
-  retried. Async bodies are dropped and process-pool workers are killed. Sync
-  threads are abandoned and their late result is discarded.
+  retried. Rust async bodies are aborted, Python `async def` bodies are
+  cancelled on their worker event loop (`CancelledError` at the next `await`)
+  and process-pool workers are killed. Sync threads are abandoned and their
+  late result is discarded.
 - Cancellation: new terminal status `CANCELLED`, `RustvelloApp::cancel`,
   Python `Invocation.cancel()`/`App.cancel()` and `rustvello cancel`. Running
-  attempts are abandoned within `cancellation_check_interval_seconds`.
+  attempts are abandoned within `cancellation_check_interval_seconds`, with
+  the same per-body rules as deadlines.
+- `AttemptSignal` / `current_attempt_signal()`: a sync task body can check
+  whether the runner abandoned its attempt (deadline or cancel) and stop
+  cooperatively, or register an `on_abandon` hook.
 - Defaults keep the previous behaviour, and task configs serialized before this
   release deserialize unchanged. See the "Retries, timeouts and cancellation"
   guide for the per-backend guarantees and the side-effect semantics.

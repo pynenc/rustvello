@@ -209,9 +209,12 @@ The following cancellation cases are covered by tests in both languages:
 | The body panics (Rust)                                                         | Error `task panicked: ...`; retried or `FAILED`                                                                                                                   |
 | The body is aborted on the runtime (Rust)                                      | Error type `TaskCancelled`; retried or `FAILED`                                                                                                                   |
 | The coroutine is cancelled (Python)                                            | Error type `CancelledError`; retried or `FAILED`                                                                                                                  |
+| The attempt exceeds its `timeout_ms` / `timeout` (Rust and Python)             | The body is aborted (Rust) or its coroutine cancelled (Python) at the next await; error type `TaskTimeoutError`, retried per `retry_on_timeout` or `FAILED`       |
+| The invocation is cancelled while running (Rust and Python)                    | The body is aborted (Rust) or its coroutine cancelled (Python) at the next await within `cancellation_check_interval_seconds`; status `CANCELLED`                 |
 | The worker is dropped mid-await (Rust bounded shutdown deadline, process exit) | The body is aborted, never left running detached. The invocation stays `RUNNING` under the dead worker, and stale-runner recovery re-routes it to another worker. |
 
 A cancelled body may have performed some of its side effects before the
 cancellation, and a recovered invocation runs again from the start. Keep async
-task bodies idempotent, as for any at-least-once task. Per-task time limits and
-cooperative cancellation have their own API and documentation.
+task bodies idempotent, as for any at-least-once task. See
+[Retries, timeouts and cancellation](retries-timeouts-cancellation.md) for the
+deadline and cancel API and the rules for synchronous bodies.
