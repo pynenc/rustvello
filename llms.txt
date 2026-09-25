@@ -1,12 +1,12 @@
 # Rustvello
 
-> Rustvello is a distributed task queue and orchestration engine with a Rust core and Python bindings (`pip install rustvello`, `cargo add rustvello`). Producers submit invocations of registered tasks (`@app.task` in Python, `#[rustvello::task]` in Rust, sync or async) to a shared backend; workers (`python -m rustvello.worker module:app`, `App.run()`, `into_runner()`) execute them. It has retries with durable exponential backoff, per-attempt timeouts, cancellation, cron triggers with exactly-once firings, workflows, and a monitoring API. Backends: SQLite and PostgreSQL (every guarantee, process-kill tested), Redis, MongoDB, RabbitMQ and in-memory (see the guarantee matrix). Status: beta.
+> Rustvello is a distributed task queue and orchestration engine with a Rust core and Python bindings (`pip install rustvello`, `cargo add rustvello`). Producers submit invocations of registered tasks (`@app.task` in Python, `#[rustvello::task]` in Rust, sync or async) to a shared backend; workers (`python -m rustvello.worker module:app`, `App.run()`, `into_runner()`) execute them. It has retries with durable exponential backoff, per-attempt timeouts, cancellation, cron triggers with exactly-once firings, idempotency keys for submissions, workflows, and a monitoring API. Backends: SQLite and PostgreSQL (every guarantee, process-kill tested), Redis, MongoDB, RabbitMQ and in-memory (see the guarantee matrix). Status: beta.
 
 Rules for agents:
 
 - Use the skill in `skills/rustvello/` (SKILL.md plus runnable examples); it matches the installed version only if `metadata.rustvello-version` equals the wheel's `major.minor`.
 - Every process of one application must use the same `app_id` and backend (for SQLite, the same file). Nothing runs unless a worker runs; `result(timeout=...)` raising `TimeoutError ... still PENDING` means no worker picked the invocation up.
-- Execution is at least once: give external side effects an idempotency key (`app.current_invocation().invocation_id` is stable across retries).
+- Execution is at least once: give external side effects an idempotency key (`app.current_invocation().invocation_id` is stable across retries). To turn a repeated client request into one invocation, submit with a key: `task.submit_with_key(request_id, **kwargs)` (Python) or `app.submit_call_with_key(key, &task, params, None)` (Rust); SQLite and PostgreSQL only.
 - To debug an invocation, call `GET /api/capabilities` first, then `GET /invocations/<id>/investigation` (status, stored error, history, runners). On SQLite without a server: `rustvello investigate <id> --app-id <app> --db-path <db> --format json` or `python skills/rustvello/scripts/investigate.py <id> --db-path <db> --app-id <app>`.
 - Never run `app.purge()` / `rustvello purge`, cancel production invocations, or delete a database file without the owner's approval; never print connection strings with passwords.
 - Durable retries with backoff need SQLite or PostgreSQL; Redis, MongoDB and RabbitMQ retry at once.
@@ -17,6 +17,8 @@ Rules for agents:
 - [Getting started](https://rustvello.readthedocs.io/en/latest/getting_started.html): Rust and Python apps, workers, backends, triggers
 - [Guarantee matrix](https://rustvello.readthedocs.io/en/latest/guarantees.html): what each backend promises when a process dies, with the tests that prove it
 - [Retries, timeouts and cancellation](https://rustvello.readthedocs.io/en/latest/retries-timeouts-cancellation.html): backoff options, durable delayed retries, deadlines per task body kind, cancellation, side effects and idempotency
+- [Idempotency and the at-least-once contract](https://rustvello.readthedocs.io/en/latest/idempotency.html): when a body runs again, keying side effects, `submit_with_key` / `InvocationId.from_key`
+- [When to use Rustvello](https://rustvello.readthedocs.io/en/latest/when-to-use.html): fit, non-goals and alternatives
 
 ## Docs
 
@@ -28,6 +30,8 @@ Rules for agents:
 - [Monitoring investigation API](https://rustvello.readthedocs.io/en/latest/contributing/agent-monitoring.html): `/api/capabilities`, investigation, timeline and list endpoints, the `rustvello investigate` CLI
 - [CLI](https://rustvello.readthedocs.io/en/latest/cli/index.html): `run`, `status`, `cancel`, `list`, `purge` (plus `investigate`, see the investigation API)
 - [Architecture](https://rustvello.readthedocs.io/en/latest/architecture.html): ports, backends, invocation state machine
+- [Migrating from Celery](https://rustvello.readthedocs.io/en/latest/migrating-from-celery.html): concept mapping and a runnable before/after example
+- [Benchmark against Celery](https://rustvello.readthedocs.io/en/latest/benchmarks.html): method, results and limits
 - [FAQ](https://rustvello.readthedocs.io/en/latest/faq.html)
 
 ## Optional

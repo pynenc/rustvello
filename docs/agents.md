@@ -13,6 +13,8 @@ the machine-facing monitoring API.
 | An index of this documentation for language models | `llms.txt` at the root of this documentation site and of the repository                                    |
 | Investigate an invocation                          | `GET /api/capabilities`, then `GET /invocations/<id>/investigation` ({doc}`contributing/agent-monitoring`) |
 | Which backend guarantees what                      | {doc}`guarantees` (also served in `/api/capabilities`)                                                     |
+| Retried bodies, keyed submissions and side effects | {doc}`idempotency`                                                                                         |
+| Whether Rustvello fits, or porting a Celery app    | {doc}`when-to-use`, {doc}`migrating-from-celery`                                                           |
 | Debugging recipes for this repository's own code   | [AGENTS.md](https://github.com/pynenc/rustvello/blob/main/AGENTS.md)                                       |
 
 ## The agent skill
@@ -22,8 +24,8 @@ with `name` and `description`, then instructions), with small examples and
 helper scripts. It needs no MCP server: everything runs through Python, the
 `rustvello` wheel and HTTP. It covers setting up an app on SQLite, sync and
 async tasks with retries, backoff, timeouts and cancellation, running workers,
-submitting and waiting, cron triggers, choosing a backend from the guarantee
-matrix, and investigating a failed invocation.
+submitting and waiting, idempotent (keyed) submission, cron triggers, choosing
+a backend from the guarantee matrix, and investigating a failed invocation.
 
 Install it where your agent looks for skills. For Claude Code:
 
@@ -84,6 +86,11 @@ On the producer side, `Invocation.result()` raises:
 | `RuntimeError("Task failed: <ErrorType>: <message>")` | The invocation is `FAILED` after the retries its task allows                                                           | Read `<ErrorType>`; `TaskTimeoutError` means an attempt exceeded its `timeout` ({doc}`retries-timeouts-cancellation`) |
 | `rustvello.InvocationCancelledError`                  | The invocation was cancelled                                                                                           | Find out who cancelled before resubmitting                                                                            |
 | `TimeoutError("Invocation … still PENDING after …s")` | No worker finished it in time; usually no worker runs for that `app_id` and backend, or it does not consume that queue | Start `python -m rustvello.worker module:app`; check the worker imported the task's module under the same name        |
+
+`TaskHandle.submit_with_key(key, ...)` raises when the same key was already
+submitted with other arguments or lineage ("different content or lineage"),
+and when the backend cannot submit durably ("does not support crash-consistent
+..."; use SQLite or PostgreSQL). See {doc}`idempotency`.
 
 `App.trigger(...).register()` raises `ValueError` for an invalid cron
 expression and for a trigger on a foreign (Rust) task, and `RuntimeError`

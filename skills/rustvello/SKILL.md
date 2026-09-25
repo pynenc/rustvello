@@ -1,9 +1,9 @@
 ---
 name: rustvello
-description: Build, run and debug Rustvello task queues from Python (and Rust). Covers setting up an app on SQLite, sync and async tasks with retries, backoff, timeouts and cancellation, running workers, submitting and waiting, cron triggers, choosing a backend from the guarantee matrix, and investigating a failed invocation through /api/capabilities and investigation reports. Use when code imports rustvello or the rustvello crate, or when asked to add, run or debug background tasks in a project that uses it.
+description: Build, run and debug Rustvello task queues from Python (and Rust). Covers setting up an app on SQLite, sync and async tasks with retries, backoff, timeouts and cancellation, running workers, submitting and waiting, idempotent (keyed) submission, cron triggers, choosing a backend from the guarantee matrix, and investigating a failed invocation through /api/capabilities and investigation reports. Use when code imports rustvello or the rustvello crate, or when asked to add, run or debug background tasks in a project that uses it.
 license: MIT
 metadata:
-  rustvello-version: "0.7"
+  rustvello-version: "0.8"
 ---
 
 # Rustvello
@@ -15,7 +15,7 @@ the calls shown here exist in the version below.
 
 ## Requirements
 
-- `rustvello` **0.7.x** (`pip install "rustvello>=0.7,<0.8"`), CPython 3.9+.
+- `rustvello` **0.8.x** (`pip install "rustvello>=0.8,<0.9"`), CPython 3.9+.
   Check with `python -c "import rustvello; print(rustvello.__version__)"`.
 - SQLite needs nothing else. Other backends need their server (PostgreSQL,
   Redis, MongoDB, RabbitMQ).
@@ -38,7 +38,9 @@ investigate|status|list|cancel` against a SQLite file.
   `python -m rustvello.worker module:app` as its own process.
 - Execution is **at least once**: a retry re-runs the whole body. Give external
   side effects an idempotency key, for example
-  `app.current_invocation().invocation_id` (stable across retries).
+  `app.current_invocation().invocation_id` (stable across retries). To make a
+  repeated _submission_ (a client retrying a request) create one invocation,
+  submit with a key: `task.submit_with_key(request_id, **kwargs)` (section 1).
 
 ## 1. Set up an app, define tasks, run a worker, submit and wait
 
@@ -89,6 +91,25 @@ Other ways to wait: `await invocation.result_async(timeout=...)` inside async
 code; `invocation.status` for a non-blocking check. For unit tests without a
 worker, `App(dev_mode_force_sync=True)` (or `RUSTVELLO__DEV_MODE_FORCE_SYNC=true`)
 runs tasks inline in the caller.
+
+### Submit at most once per request (idempotency key)
+
+`examples/idempotent_submit.py` runs this with a keyed side effect.
+
+```python
+invocation = add.submit_with_key("request-42", x=1, y=2)  # id = InvocationId.from_key(task key, key)
+again = add.submit_with_key("request-42", x=1, y=2)       # same key, same arguments: same invocation
+assert str(again.id) == str(invocation.id)  # compare ids as strings
+```
+
+- Needs SQLite or PostgreSQL (other backends refuse keyed submission). The same
+  key with other arguments raises.
+- Use it from the top-level client (a web handler, a retry loop around the
+  submit call). Inside a task, key the side effects with
+  `app.current_invocation().invocation_id` instead.
+- The key deduplicates submissions only: the body still runs at least once.
+- Rust: `app.submit_call_with_key(key, &MyTask::new(), params, None)`;
+  `InvocationId::from_key(task_id, key)` derives the same id in both languages.
 
 ## 2. Run a worker as its own process
 

@@ -50,7 +50,9 @@ For detailed information on each version, please visit the [GitHub Releases page
   task and a caller key. `RustvelloApp::submit_call_with_key` and
   `TaskHandle.submit_with_key` submit through the idempotent durable submission,
   so repeating a request with the same key returns the same invocation
-  (SQLite and PostgreSQL; other backends fail closed).
+  (SQLite and PostgreSQL; other backends fail closed). The agent skill,
+  `llms.txt` and "Using Rustvello from an agent" cover keyed submission, with a
+  runnable skill example (`examples/idempotent_submit.py`).
 - New guide: [Idempotency and the at-least-once contract](idempotency.md), with
   a new kill test (`idempotency_kill.rs`, in `make test-fault`) showing that a
   worker killed after its side effects has its body run again under the same
