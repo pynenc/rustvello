@@ -3,6 +3,7 @@
 from rustvello.rustvello import (
     AppConfig,
     ConcurrencyControlType,
+    InvocationCancelledError,
     InvocationId,
     InvocationResult,
     InvocationStatus,
@@ -82,6 +83,7 @@ __all__ = [
     # Public API — types and configuration
     "AppConfig",
     "ConcurrencyControlType",
+    "InvocationCancelledError",
     "InvocationId",
     "InvocationResult",
     "InvocationStatus",

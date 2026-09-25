@@ -337,6 +337,14 @@ impl RuntimePublication for RedisPublication {
         change: PublicationChange,
         auto_purge: bool,
     ) -> RustvelloResult<Option<InvocationStatusRecord>> {
+        if matches!(change, PublicationChange::DelayedRetry { .. }) {
+            // Not declared via supports_delayed_retry(); never publish it by mistake
+            // as an immediate reroute.
+            return Err(RustvelloError::NotSupported {
+                backend: "redis".to_owned(),
+                method: "durable delayed retry publication".to_owned(),
+            });
+        }
         for _ in 0..8 {
             let (old_json, old, _, mut invocation) = self.current(id).await?;
             let mut heartbeat_key = String::new();
@@ -432,6 +440,7 @@ impl RuntimePublication for RedisPublication {
                     InvocationStatus::Rerouted
                 }
                 PublicationChange::Reroute(_) => InvocationStatus::Rerouted,
+                PublicationChange::DelayedRetry { .. } => unreachable!("rejected above"),
             };
             if matches!(
                 change,

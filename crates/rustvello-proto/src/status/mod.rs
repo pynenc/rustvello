@@ -54,6 +54,13 @@ pub enum InvocationStatus {
     Failed,
     /// Marked for retry after a failure
     Retry,
+    /// Cancelled by a user request before it finished (terminal).
+    ///
+    /// Reachable from every non-terminal status and bypasses runner
+    /// ownership, so a client can cancel work another runner owns. A worker
+    /// still executing the attempt stops cooperatively and its late result
+    /// is discarded.
+    Cancelled,
 }
 
 /// All status variants, for iteration.
@@ -71,6 +78,7 @@ pub const ALL_STATUSES: &[InvocationStatus] = &[
     InvocationStatus::Success,
     InvocationStatus::Failed,
     InvocationStatus::Retry,
+    InvocationStatus::Cancelled,
 ];
 
 impl InvocationStatus {
@@ -125,6 +133,7 @@ impl fmt::Display for InvocationStatus {
             Self::Success => write!(f, "SUCCESS"),
             Self::Failed => write!(f, "FAILED"),
             Self::Retry => write!(f, "RETRY"),
+            Self::Cancelled => write!(f, "CANCELLED"),
         }
     }
 }
@@ -147,6 +156,7 @@ impl FromStr for InvocationStatus {
             "SUCCESS" => Ok(Self::Success),
             "FAILED" => Ok(Self::Failed),
             "RETRY" => Ok(Self::Retry),
+            "CANCELLED" => Ok(Self::Cancelled),
             other => Err(format!("unknown invocation status: {other}")),
         }
     }
@@ -258,6 +268,7 @@ fn build_config() -> StatusConfiguration {
                     Pending,
                     ConcurrencyControlled,
                     ConcurrencyControlledFinal,
+                    Cancelled,
                 ],
                 available_for_run: true,
                 releases_ownership: true,
@@ -267,7 +278,7 @@ fn build_config() -> StatusConfiguration {
         (
             ConcurrencyControlled,
             StatusDefinition {
-                allowed_transitions: vec![Rerouted],
+                allowed_transitions: vec![Rerouted, Cancelled],
                 releases_ownership: true,
                 ..StatusDefinition::new()
             },
@@ -275,7 +286,7 @@ fn build_config() -> StatusConfiguration {
         (
             Rerouted,
             StatusDefinition {
-                allowed_transitions: vec![Pending, ConcurrencyControlled],
+                allowed_transitions: vec![Pending, ConcurrencyControlled, Cancelled],
                 available_for_run: true,
                 releases_ownership: true,
                 ..StatusDefinition::new()
@@ -285,7 +296,7 @@ fn build_config() -> StatusConfiguration {
             Pending,
             StatusDefinition {
                 // PENDING_RECOVERY is for timeout recovery without ownership validation.
-                allowed_transitions: vec![Running, Killed, Rerouted, PendingRecovery],
+                allowed_transitions: vec![Running, Killed, Rerouted, PendingRecovery, Cancelled],
                 requires_ownership: true,
                 acquires_ownership: true,
                 ..StatusDefinition::new()
@@ -294,7 +305,7 @@ fn build_config() -> StatusConfiguration {
         (
             PendingRecovery,
             StatusDefinition {
-                allowed_transitions: vec![Rerouted],
+                allowed_transitions: vec![Rerouted, Cancelled],
                 releases_ownership: true,
                 overrides_ownership: true,
                 ..StatusDefinition::new()
@@ -303,7 +314,15 @@ fn build_config() -> StatusConfiguration {
         (
             Running,
             StatusDefinition {
-                allowed_transitions: vec![Paused, Killed, Retry, Success, Failed, RunningRecovery],
+                allowed_transitions: vec![
+                    Paused,
+                    Killed,
+                    Retry,
+                    Success,
+                    Failed,
+                    RunningRecovery,
+                    Cancelled,
+                ],
                 requires_ownership: true,
                 ..StatusDefinition::new()
             },
@@ -311,7 +330,7 @@ fn build_config() -> StatusConfiguration {
         (
             RunningRecovery,
             StatusDefinition {
-                allowed_transitions: vec![Rerouted],
+                allowed_transitions: vec![Rerouted, Cancelled],
                 releases_ownership: true,
                 overrides_ownership: true,
                 ..StatusDefinition::new()
@@ -320,7 +339,7 @@ fn build_config() -> StatusConfiguration {
         (
             Paused,
             StatusDefinition {
-                allowed_transitions: vec![Running, Killed],
+                allowed_transitions: vec![Running, Killed, Cancelled],
                 requires_ownership: true,
                 ..StatusDefinition::new()
             },
@@ -328,7 +347,7 @@ fn build_config() -> StatusConfiguration {
         (
             Killed,
             StatusDefinition {
-                allowed_transitions: vec![Rerouted],
+                allowed_transitions: vec![Rerouted, Cancelled],
                 releases_ownership: true,
                 ..StatusDefinition::new()
             },
@@ -336,7 +355,7 @@ fn build_config() -> StatusConfiguration {
         (
             Retry,
             StatusDefinition {
-                allowed_transitions: vec![Pending],
+                allowed_transitions: vec![Pending, Cancelled],
                 available_for_run: true,
                 releases_ownership: true,
                 ..StatusDefinition::new()
@@ -355,6 +374,15 @@ fn build_config() -> StatusConfiguration {
             StatusDefinition {
                 is_final: true,
                 releases_ownership: true,
+                ..StatusDefinition::new()
+            },
+        ),
+        (
+            Cancelled,
+            StatusDefinition {
+                is_final: true,
+                releases_ownership: true,
+                overrides_ownership: true,
                 ..StatusDefinition::new()
             },
         ),

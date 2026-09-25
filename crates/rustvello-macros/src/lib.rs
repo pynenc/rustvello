@@ -74,6 +74,12 @@ use syn::{
 /// | `blocking`      | `bool`     | Run on a blocking thread                         |
 /// | `queue`         | `&str`     | Logical broker queue                             |
 /// | `priority`      | `f64`      | Broker priority from -100.0 through 100.0       |
+/// | `retry_delay_ms` | `u64`     | First retry delay; 0 (default) retries at once   |
+/// | `retry_max_delay_ms` | `u64` | Cap of the exponential delay (default 300000)    |
+/// | `retry_backoff` | `f64`      | Delay growth factor per retry (default 2.0)      |
+/// | `retry_jitter`  | `&str`     | "equal" (default), "full" or "none"              |
+/// | `timeout_ms`    | `u64`      | Execution deadline of one attempt                |
+/// | `retry_on_timeout` | `bool`  | Whether timed-out attempts may retry (default true) |
 #[proc_macro_attribute]
 pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attrs = parse_macro_input!(attr as TaskAttrs);
@@ -122,6 +128,18 @@ struct TaskAttrs {
     blocking: Option<bool>,
     queue: Option<String>,
     priority: Option<f64>,
+    retry: RetryAttrs,
+}
+
+/// Retry backoff and deadline attributes (all optional).
+#[derive(Default)]
+struct RetryAttrs {
+    retry_delay_ms: Option<u64>,
+    retry_max_delay_ms: Option<u64>,
+    retry_backoff: Option<f64>,
+    retry_jitter: Option<String>,
+    timeout_ms: Option<u64>,
+    retry_on_timeout: Option<bool>,
 }
 
 impl Parse for TaskAttrs {
@@ -140,6 +158,7 @@ impl Parse for TaskAttrs {
         let mut blocking = None;
         let mut queue = None;
         let mut priority = None;
+        let mut retry = RetryAttrs::default();
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -258,6 +277,63 @@ impl Parse for TaskAttrs {
                     let lit: LitInt = input.parse()?;
                     parallel_batch_size = Some(lit.base10_parse()?);
                 }
+                "retry_delay_ms" => {
+                    check_dup!(retry.retry_delay_ms);
+                    let lit: LitInt = input.parse()?;
+                    retry.retry_delay_ms = Some(lit.base10_parse()?);
+                }
+                "retry_max_delay_ms" => {
+                    check_dup!(retry.retry_max_delay_ms);
+                    let lit: LitInt = input.parse()?;
+                    retry.retry_max_delay_ms = Some(lit.base10_parse()?);
+                }
+                "timeout_ms" => {
+                    check_dup!(retry.timeout_ms);
+                    let lit: LitInt = input.parse()?;
+                    let value: u64 = lit.base10_parse()?;
+                    if value == 0 {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "timeout_ms must be greater than 0 (omit it for no deadline)",
+                        ));
+                    }
+                    retry.timeout_ms = Some(value);
+                }
+                "retry_backoff" => {
+                    check_dup!(retry.retry_backoff);
+                    let lit: syn::Lit = input.parse()?;
+                    let value = match lit {
+                        syn::Lit::Float(lit) => lit.base10_parse::<f64>()?,
+                        syn::Lit::Int(lit) => lit.base10_parse::<f64>()?,
+                        other => {
+                            return Err(syn::Error::new_spanned(
+                                other,
+                                "retry_backoff must be a numeric literal",
+                            ));
+                        }
+                    };
+                    if !value.is_finite() || value < 1.0 {
+                        return Err(syn::Error::new(key.span(), "retry_backoff must be >= 1.0"));
+                    }
+                    retry.retry_backoff = Some(value);
+                }
+                "retry_jitter" => {
+                    check_dup!(retry.retry_jitter);
+                    let lit: LitStr = input.parse()?;
+                    let value = lit.value();
+                    if !matches!(value.as_str(), "none" | "full" | "equal") {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "retry_jitter must be \"none\", \"full\" or \"equal\"",
+                        ));
+                    }
+                    retry.retry_jitter = Some(value);
+                }
+                "retry_on_timeout" => {
+                    check_dup!(retry.retry_on_timeout);
+                    let lit: LitBool = input.parse()?;
+                    retry.retry_on_timeout = Some(lit.value());
+                }
                 other => {
                     let known = [
                         "max_retries",
@@ -274,6 +350,12 @@ impl Parse for TaskAttrs {
                         "blocking",
                         "queue",
                         "priority",
+                        "retry_delay_ms",
+                        "retry_max_delay_ms",
+                        "retry_backoff",
+                        "retry_jitter",
+                        "timeout_ms",
+                        "retry_on_timeout",
                     ];
                     let suggestion = known
                         .iter()
@@ -323,6 +405,7 @@ impl Parse for TaskAttrs {
             blocking,
             queue,
             priority,
+            retry,
         })
     }
 }
@@ -796,6 +879,33 @@ fn build_config(
 
     if let Some(batch) = attrs.parallel_batch_size {
         setters.push(quote! { config.parallel_batch_size = #batch; });
+    }
+
+    let retry = &attrs.retry;
+    if let Some(ms) = retry.retry_delay_ms {
+        setters.push(quote! { config.retry_delay_ms = #ms; });
+    }
+    if let Some(ms) = retry.retry_max_delay_ms {
+        setters.push(quote! { config.retry_max_delay_ms = #ms; });
+    }
+    if let Some(factor) = retry.retry_backoff {
+        setters.push(quote! { config.retry_backoff = #factor; });
+    }
+    if let Some(ref jitter) = retry.retry_jitter {
+        let variant = match jitter.as_str() {
+            "none" => quote! { None },
+            "full" => quote! { Full },
+            _ => quote! { Equal },
+        };
+        setters.push(quote! {
+            config.retry_jitter = #proto_path::config::RetryJitter::#variant;
+        });
+    }
+    if let Some(ms) = retry.timeout_ms {
+        setters.push(quote! { config.timeout_ms = ::core::option::Option::Some(#ms); });
+    }
+    if let Some(flag) = retry.retry_on_timeout {
+        setters.push(quote! { config.retry_on_timeout = #flag; });
     }
 
     quote! {

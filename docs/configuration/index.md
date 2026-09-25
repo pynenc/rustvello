@@ -63,22 +63,23 @@ PYNENC__CLIENT_DATA_STORE_CLS=RustSqliteClientDataStore
 
 Application-level settings that apply to the entire `RustvelloApp`.
 
-| Field                             | Type                      | Default       | Description                                                                             |
-| --------------------------------- | ------------------------- | ------------- | --------------------------------------------------------------------------------------- |
-| `app_id`                          | `String`                  | `"rustvello"` | Unique identifier for the application                                                   |
-| `broker_queues`                   | `Vec<String>`             | `["default"]` | Logical queues available for routing; `default` is inserted when omitted                |
-| `runner_queues`                   | `Vec<String>`             | `[]`          | Queues consumed by runners; empty consumes every broker queue                           |
-| `queue_selection_strategy`        | `enum`                    | `RoundRobin`  | Queue attempt order: `round_robin`, `random`, or `ordered`                              |
-| `priority_rules`                  | `Vec<BrokerPriorityRule>` | `[]`          | Task-ID wildcard rules; the highest matching priority overrides task priority           |
-| `dev_mode_force_sync`             | `bool`                    | `false`       | Execute tasks synchronously in-process (for testing)                                    |
-| `max_pending_seconds`             | `f64`                     | `300.0`       | Max seconds an invocation can stay `Pending` before recovery re-queues it               |
-| `heartbeat_interval_seconds`      | `f64`                     | `30.0`        | How often a runner publishes its heartbeat                                              |
-| `runner_dead_after_seconds`       | `u64`                     | `300`         | Heartbeat age threshold after which a runner is considered dead                         |
-| `recovery_check_interval_seconds` | `f64`                     | `60.0`        | How often the management loop scans for stale invocations                               |
-| `num_workers`                     | `usize`                   | CPU count     | Number of concurrent async workers per runner                                           |
-| `idle_sleep_ms`                   | `u64`                     | `100`         | Milliseconds a worker sleeps when the broker queue is empty                             |
-| `logging_level`                   | `String`                  | `"info"`      | Log level for both Rust and Python runtimes (`trace`, `debug`, `info`, `warn`, `error`) |
-| `log_format`                      | `LogFormat`               | `Text`        | Log output format: `Text` (human-readable) or `Json` (NDJSON)                           |
+| Field                                 | Type                      | Default       | Description                                                                             |
+| ------------------------------------- | ------------------------- | ------------- | --------------------------------------------------------------------------------------- |
+| `app_id`                              | `String`                  | `"rustvello"` | Unique identifier for the application                                                   |
+| `broker_queues`                       | `Vec<String>`             | `["default"]` | Logical queues available for routing; `default` is inserted when omitted                |
+| `runner_queues`                       | `Vec<String>`             | `[]`          | Queues consumed by runners; empty consumes every broker queue                           |
+| `queue_selection_strategy`            | `enum`                    | `RoundRobin`  | Queue attempt order: `round_robin`, `random`, or `ordered`                              |
+| `priority_rules`                      | `Vec<BrokerPriorityRule>` | `[]`          | Task-ID wildcard rules; the highest matching priority overrides task priority           |
+| `dev_mode_force_sync`                 | `bool`                    | `false`       | Execute tasks synchronously in-process (for testing)                                    |
+| `max_pending_seconds`                 | `f64`                     | `300.0`       | Max seconds an invocation can stay `Pending` before recovery re-queues it               |
+| `heartbeat_interval_seconds`          | `f64`                     | `30.0`        | How often a runner publishes its heartbeat                                              |
+| `runner_dead_after_seconds`           | `u64`                     | `300`         | Heartbeat age threshold after which a runner is considered dead                         |
+| `recovery_check_interval_seconds`     | `f64`                     | `60.0`        | How often the management loop scans for stale invocations                               |
+| `num_workers`                         | `usize`                   | CPU count     | Number of concurrent async workers per runner                                           |
+| `idle_sleep_ms`                       | `u64`                     | `100`         | Milliseconds a worker sleeps when the broker queue is empty                             |
+| `logging_level`                       | `String`                  | `"info"`      | Log level for both Rust and Python runtimes (`trace`, `debug`, `info`, `warn`, `error`) |
+| `log_format`                          | `LogFormat`               | `Text`        | Log output format: `Text` (human-readable) or `Json` (NDJSON)                           |
+| `cancellation_check_interval_seconds` | `f64`                     | `1.0`         | How often a worker re-reads a running invocation's status to notice a cancel (0 = off)  |
 
 See {doc}`../monitoring/logging` for details on the unified logging format.
 
@@ -89,23 +90,33 @@ See {doc}`../monitoring/logging` for details on the unified logging format.
 Per-task settings. Apply globally via `[task_defaults]` or per-task via `[tasks.<name>]`
 in a TOML file, or via env vars.
 
-| Field                        | Type                     | Default            | Description                                                          |
-| ---------------------------- | ------------------------ | ------------------ | -------------------------------------------------------------------- |
-| `max_retries`                | `u32`                    | `0`                | Maximum retry attempts on failure                                    |
-| `queue`                      | `String`                 | `"default"`        | Logical queue used for this task                                     |
-| `priority`                   | `f64`                    | `0.0`              | Priority within the queue, from `-100.0` through `100.0`             |
-| `concurrency_control`        | `ConcurrencyControlType` | `Unlimited`        | Execution-time concurrency mode                                      |
-| `running_concurrency`        | `Option<u32>`            | `None` (unlimited) | Max simultaneous running instances                                   |
-| `registration_concurrency`   | `ConcurrencyControlType` | `Unlimited`        | Registration-time dedup mode                                         |
-| `key_arguments`              | `Vec<String>`            | `[]`               | Arg names used as the concurrency key for `Keys` mode                |
-| `cache_results`              | `bool`                   | `false`            | Cache and return previous result for identical args                  |
-| `disable_cache_args`         | `Vec<String>`            | `[]`               | Args excluded from cache key computation                             |
-| `retry_for_errors`           | `Vec<String>`            | `[]`               | Error type names that trigger a retry                                |
-| `on_diff_non_key_args_raise` | `bool`                   | `false`            | Raise if a duplicate is found with different non-key args            |
-| `is_workflow_task`           | `bool`                   | `false`            | Internal marker set by `#[rustvello::workflow]` or language adapters |
-| `reroute_on_cc`              | `bool`                   | `false`            | Reroute to the existing invocation when hitting concurrency limits   |
-| `parallel_batch_size`        | `usize`                  | `100`              | Batch size used by `parallelize()`                                   |
-| `blocking`                   | `bool`                   | `false`            | Run on a blocking (OS) thread rather than Tokio                      |
+| Field                        | Type                     | Default            | Description                                                             |
+| ---------------------------- | ------------------------ | ------------------ | ----------------------------------------------------------------------- |
+| `max_retries`                | `u32`                    | `0`                | Maximum retry attempts on failure                                       |
+| `queue`                      | `String`                 | `"default"`        | Logical queue used for this task                                        |
+| `priority`                   | `f64`                    | `0.0`              | Priority within the queue, from `-100.0` through `100.0`                |
+| `concurrency_control`        | `ConcurrencyControlType` | `Unlimited`        | Execution-time concurrency mode                                         |
+| `running_concurrency`        | `Option<u32>`            | `None` (unlimited) | Max simultaneous running instances                                      |
+| `registration_concurrency`   | `ConcurrencyControlType` | `Unlimited`        | Registration-time dedup mode                                            |
+| `key_arguments`              | `Vec<String>`            | `[]`               | Arg names used as the concurrency key for `Keys` mode                   |
+| `cache_results`              | `bool`                   | `false`            | Cache and return previous result for identical args                     |
+| `disable_cache_args`         | `Vec<String>`            | `[]`               | Args excluded from cache key computation                                |
+| `retry_for_errors`           | `Vec<String>`            | `[]`               | Error type names that trigger a retry                                   |
+| `on_diff_non_key_args_raise` | `bool`                   | `false`            | Raise if a duplicate is found with different non-key args               |
+| `is_workflow_task`           | `bool`                   | `false`            | Internal marker set by `#[rustvello::workflow]` or language adapters    |
+| `reroute_on_cc`              | `bool`                   | `false`            | Reroute to the existing invocation when hitting concurrency limits      |
+| `parallel_batch_size`        | `usize`                  | `100`              | Batch size used by `parallelize()`                                      |
+| `blocking`                   | `bool`                   | `false`            | Run on a blocking (OS) thread rather than Tokio                         |
+| `retry_delay_ms`             | `u64`                    | `0`                | First retry delay; `0` retries immediately (previous behaviour)         |
+| `retry_max_delay_ms`         | `u64`                    | `300000`           | Cap of the exponential retry delay, before jitter                       |
+| `retry_backoff`              | `f64`                    | `2.0`              | Delay growth factor per retry (values below `1.0` act as `1.0`)         |
+| `retry_jitter`               | `RetryJitter`            | `equal`            | `equal`, `full` or `none`                                               |
+| `timeout_ms`                 | `Option<u64>`            | `None`             | Execution deadline of one attempt; expiry fails with `TaskTimeoutError` |
+| `retry_on_timeout`           | `bool`                   | `true`             | Whether a timed-out attempt may be retried                              |
+
+Retry delays are stored in the backend, not slept in a worker; see
+{doc}`../retries-timeouts-cancellation` for the backoff formula, per-backend
+durability, deadlines and cancellation.
 
 Use `#[rustvello::workflow]` to define workflow roots. Do not toggle
 `is_workflow_task` on an ordinary Rust task; the macro sets the marker and the

@@ -10,6 +10,7 @@
 //!
 //! The [`TaskRunner`] type alias points to [`PersistentTokioRunner`].
 
+mod attempt;
 mod bounded;
 mod control_plane;
 mod dispatcher;

@@ -108,6 +108,12 @@ impl SqliteBroker {
     }
 }
 
+/// Wall-clock milliseconds at which a delayed entry becomes deliverable.
+pub(crate) fn not_before_ms(delay: Duration) -> i64 {
+    let delay = i64::try_from(delay.as_millis()).unwrap_or(i64::MAX);
+    chrono::Utc::now().timestamp_millis().saturating_add(delay)
+}
+
 #[async_trait]
 impl Broker for SqliteBroker {
     fn publication_domain(&self) -> Option<rustvello_core::publication::PublicationDomain> {
@@ -134,6 +140,51 @@ impl Broker for SqliteBroker {
                 rusqlite::params![invocation_id.as_str(), task_id, queue_name, priority],
             )
             .map_err(sql_err)?;
+            Ok(())
+        })
+        .await
+    }
+
+    fn supports_delayed_delivery(&self) -> bool {
+        true
+    }
+
+    /// The entry is inserted with a delivery lease that nobody holds and that
+    /// expires at the not-before time, so retrieval and counts skip it until
+    /// then. Both rows commit in one transaction in the database file.
+    async fn route_invocation_after(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: Option<&TaskId>,
+        queue_name: &str,
+        priority: f64,
+        delay: Duration,
+    ) -> RustvelloResult<()> {
+        validate_routing(queue_name, priority)?;
+        let db = Arc::clone(&self.db);
+        let invocation_id = invocation_id.clone();
+        let task_id = task_id.map(ToString::to_string);
+        let queue_name = queue_name.to_owned();
+        blocking(move || {
+            let conn = db.conn.lock().map_err(lock_err)?;
+            let tx = rusqlite::Transaction::new_unchecked(
+                &conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )
+            .map_err(sql_err)?;
+            tx.execute(
+                "INSERT INTO broker_queue (invocation_id, task_id, queue_name, priority) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![invocation_id.as_str(), task_id, queue_name, priority],
+            )
+            .map_err(sql_err)?;
+            let row_id = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO broker_reservations (queue_id, expires_at_ms) VALUES (?1, ?2)",
+                rusqlite::params![row_id, not_before_ms(delay)],
+            )
+            .map_err(sql_err)?;
+            tx.commit().map_err(sql_err)?;
             Ok(())
         })
         .await
@@ -269,6 +320,27 @@ mod tests {
         broker.route_invocation(&id2).await.unwrap();
         assert_eq!(broker.retrieve_invocation(None).await.unwrap(), Some(id1));
         assert_eq!(broker.retrieve_invocation(None).await.unwrap(), Some(id2));
+    }
+
+    #[tokio::test]
+    async fn delayed_entry_is_hidden_until_due_then_delivered_once() {
+        let broker = make_broker();
+        assert!(broker.supports_delayed_delivery());
+        let id = InvocationId::new();
+        broker
+            .route_invocation_after(&id, None, DEFAULT_QUEUE, 0.0, Duration::from_millis(300))
+            .await
+            .unwrap();
+        assert_eq!(broker.retrieve_invocation(None).await.unwrap(), None);
+        assert_eq!(broker.count_invocations(None).await.unwrap(), 0);
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        assert_eq!(broker.count_invocations(None).await.unwrap(), 1);
+        assert_eq!(
+            broker.retrieve_invocation(None).await.unwrap(),
+            Some(id.clone())
+        );
+        // Delivered once: the new lease hides it from other consumers.
+        assert_eq!(broker.retrieve_invocation(None).await.unwrap(), None);
     }
 
     #[tokio::test]

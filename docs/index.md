@@ -14,6 +14,7 @@ installation
 getting_started
 architecture
 workflows
+retries-timeouts-cancellation
 configuration/index
 monitoring/index
 migration-0.2

@@ -346,6 +346,27 @@ impl PyRustvello {
         Ok(Some(result))
     }
 
+    /// Cancel an invocation that has not finished yet.
+    ///
+    /// Returns ``True`` when this call moved it to ``CANCELLED`` and ``False``
+    /// when it had already finished (success, failure or an earlier cancel).
+    /// A running attempt is abandoned by its worker within
+    /// ``AppConfig.cancellation_check_interval_seconds``; its late result is
+    /// discarded, but side effects it already performed are not undone.
+    fn cancel(&self, py: Python<'_>, invocation_id: &PyInvocationId) -> PyResult<bool> {
+        let app = Arc::clone(&self.inner);
+        let inv_id = invocation_id.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime()?
+                .block_on(async {
+                    let app = app.lock().await;
+                    app.cancel(&inv_id).await
+                })
+                .map(rustvello::orchestration::CancelOutcome::was_cancelled)
+                .map_err(to_py_err)
+        })
+    }
+
     /// Get the current status of an invocation.
     fn get_status(
         &self,

@@ -39,6 +39,14 @@ struct QueuedInvocation {
     task_id: Option<TaskId>,
     queue_name: String,
     priority: f64,
+    /// Delayed delivery: invisible to retrieval until this instant.
+    not_before: Option<tokio::time::Instant>,
+}
+
+impl QueuedInvocation {
+    fn is_due(&self, now: tokio::time::Instant) -> bool {
+        self.not_before.is_none_or(|at| at <= now)
+    }
 }
 
 impl MemBroker {
@@ -72,8 +80,36 @@ impl Broker for MemBroker {
             task_id: task_id.cloned(),
             queue_name: queue_name.to_owned(),
             priority,
+            not_before: None,
         });
         self.notify.notify_one();
+        Ok(())
+    }
+
+    /// Delayed entries live in the same process-local queue: they survive a
+    /// worker (runner) restart inside the process, not a process exit.
+    fn supports_delayed_delivery(&self) -> bool {
+        true
+    }
+
+    async fn route_invocation_after(
+        &self,
+        invocation_id: &InvocationId,
+        task_id: Option<&TaskId>,
+        queue_name: &str,
+        priority: f64,
+        delay: std::time::Duration,
+    ) -> RustvelloResult<()> {
+        validate_routing(queue_name, priority)?;
+        self.queue.lock().await.push_back(QueuedInvocation {
+            invocation_id: invocation_id.clone(),
+            task_id: task_id.cloned(),
+            queue_name: queue_name.to_owned(),
+            priority,
+            not_before: Some(tokio::time::Instant::now() + delay),
+        });
+        // Wake idle workers so they re-arm their wait at the new due time.
+        self.notify.notify_waiters();
         Ok(())
     }
 
@@ -98,11 +134,13 @@ impl Broker for MemBroker {
     ) -> RustvelloResult<Option<InvocationId>> {
         validate_routing(queue_name, 0.0)?;
         let mut queue = self.queue.lock().await;
+        let now = tokio::time::Instant::now();
         let selected = queue
             .iter()
             .enumerate()
             .filter(|(_, item)| {
                 item.queue_name == queue_name
+                    && item.is_due(now)
                     && task_id.is_none_or(|task_id| item.task_id.as_ref() == Some(task_id))
             })
             .max_by(|(left_index, left), (right_index, right)| {
@@ -129,11 +167,12 @@ impl Broker for MemBroker {
     ) -> RustvelloResult<Option<InvocationId>> {
         validate_routing(queue_name, 0.0)?;
         let mut queue = self.queue.lock().await;
+        let now = tokio::time::Instant::now();
         let selected = queue
             .iter()
             .enumerate()
             .filter(|(_, item)| {
-                if item.queue_name != queue_name {
+                if item.queue_name != queue_name || !item.is_due(now) {
                     return false;
                 }
                 item.task_id
@@ -168,10 +207,12 @@ impl Broker for MemBroker {
             validate_routing(queue_name, 0.0)?;
         }
         let queue = self.queue.lock().await;
+        let now = tokio::time::Instant::now();
         Ok(queue
             .iter()
             .filter(|item| {
-                (queue_names.is_empty() || queue_names.contains(&item.queue_name))
+                item.is_due(now)
+                    && (queue_names.is_empty() || queue_names.contains(&item.queue_name))
                     && task_id.is_none_or(|task_id| item.task_id.as_ref() == Some(task_id))
             })
             .count())
@@ -192,9 +233,28 @@ impl Broker for MemBroker {
 
     /// Zero-cost wait: blocks until new work is routed or cancelled.
     async fn wait_for_work(&self, cancel: &CancellationToken) -> bool {
+        let notified = self.notify.notified();
+        // Delayed entries produce no notification when they become due, so
+        // also wake at the earliest pending not-before time.
+        let next_due = {
+            let queue = self.queue.lock().await;
+            let now = tokio::time::Instant::now();
+            queue
+                .iter()
+                .filter_map(|item| item.not_before)
+                .filter(|at| *at > now)
+                .min()
+        };
+        let due = async {
+            match next_due {
+                Some(at) => tokio::time::sleep_until(at).await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             _ = cancel.cancelled() => false,
-            _ = self.notify.notified() => true,
+            _ = notified => true,
+            _ = due => true,
         }
     }
 }
@@ -203,6 +263,41 @@ impl Broker for MemBroker {
 mod tests {
     use super::*;
     use rustvello_proto::identifiers::TaskLanguage;
+
+    #[tokio::test(start_paused = true)]
+    async fn delayed_delivery_is_invisible_until_due_and_delivered_once() {
+        let broker = MemBroker::new();
+        assert!(broker.supports_delayed_delivery());
+        let id = InvocationId::new();
+        let task = TaskId::new("mem", "delayed");
+        broker
+            .route_invocation_after(
+                &id,
+                Some(&task),
+                DEFAULT_QUEUE,
+                0.0,
+                std::time::Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert_eq!(broker.retrieve_invocation(None).await.unwrap(), None);
+        assert_eq!(broker.count_invocations(None).await.unwrap(), 0);
+
+        // wait_for_work wakes at the due time without any new routing.
+        let cancel = CancellationToken::new();
+        let start = tokio::time::Instant::now();
+        assert!(broker.wait_for_work(&cancel).await);
+        assert!(start.elapsed() >= std::time::Duration::from_secs(5));
+
+        assert_eq!(
+            broker
+                .retrieve_invocation_for_language(TaskLanguage::Rust)
+                .await
+                .unwrap(),
+            Some(id)
+        );
+        assert_eq!(broker.retrieve_invocation(None).await.unwrap(), None);
+    }
 
     #[tokio::test]
     async fn test_route_and_retrieve() {
