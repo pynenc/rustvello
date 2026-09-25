@@ -6067,6 +6067,7 @@ dependencies = [
  "getrandom 0.3.2",
  "js-sys",
  "serde",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

@@ -16,6 +16,7 @@ architecture
 workflows
 configuration/index
 monitoring/index
+guarantees
 migration-0.2
 ```
 

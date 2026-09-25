@@ -85,14 +85,14 @@ Shared test functions are grouped by contract module:
 
 ## Known Limits
 
-| Area                            | Status                  | Notes                                                                                  |
-| ------------------------------- | ----------------------- | -------------------------------------------------------------------------------------- |
-| Docker backend tests            | Scheduled/manual        | `.github/workflows/backend-and-stress.yml` runs ignored suites against real containers |
-| Python bindings                 | Default CI              | PyO3 extension is built before pytest on supported Python versions                     |
-| Persistent contention           | SQLite covered          | Route/retrieve, claim, concurrency slot, and recovery tests run in the soak lane       |
-| Distributed stress              | Backend compliance only | Longer contention campaigns remain follow-up work for service-backed implementations   |
-| Exhaustive concurrency modeling | Not implemented         | Stress tests exercise contention, but the project does not yet use `loom`              |
-| SQLite broker routing           | Covered                 | Local SQLite still exercises task-aware, language-aware, and global routing            |
-| Atomic-service history          | Covered                 | Every orchestrator persists and queries bounded history through its native backend     |
+| Area                            | Status                            | Notes                                                                                                     |
+| ------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Docker backend tests            | Release gate, weekly, backend PRs | `.github/workflows/release-gate.yml` runs ignored suites against real containers and a PostgreSQL service |
+| Python bindings                 | Default CI                        | PyO3 extension is built before pytest on supported Python versions                                        |
+| Persistent contention           | SQLite covered                    | Route/retrieve, claim, concurrency slot, and recovery tests run in the soak lane                          |
+| Distributed stress              | Backend compliance only           | Longer contention campaigns remain follow-up work for service-backed implementations                      |
+| Exhaustive concurrency modeling | Not implemented                   | Stress tests exercise contention, but the project does not yet use `loom`                                 |
+| SQLite broker routing           | Covered                           | Local SQLite still exercises task-aware, language-aware, and global routing                               |
+| Atomic-service history          | Covered                           | Every orchestrator persists and queries bounded history through its native backend                        |
 
 See {doc}`backend-constraints` for backend facts and the normative contract rule.

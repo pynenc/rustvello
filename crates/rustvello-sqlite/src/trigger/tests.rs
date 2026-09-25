@@ -240,6 +240,7 @@ async fn monitoring_records_round_trip_and_filter() {
         }],
         claimed_at: Utc::now(),
         executed_at: None,
+        planned_invocation_id: None,
         triggered_invocation_id: None,
         atomic_service_run_id: None,
         atomic_service_runner_id: None,

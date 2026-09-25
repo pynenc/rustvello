@@ -1,0 +1,112 @@
+name: Release Gate
+
+# The durability gate: the single definition of the guarantee-matrix check, the
+# fault-injection suites and the external-backend suites.
+# - release-rust.yml and release-python.yml call it and make their publish jobs
+#   depend on it, so a release with a failing fault or backend suite is blocked;
+# - backend-and-stress.yml calls it weekly, on demand, and on pull requests that
+#   touch a backend or the contracts backends implement.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  guarantee-matrix:
+    name: Guarantee matrix is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Regenerate the matrix and compare with docs/guarantees.md
+        run: cargo test -p rustvello-core --lib guarantees -- --nocapture
+      - name: Publish the generated page as a build artifact
+        run: RUSTVELLO_WRITE_GUARANTEES=1 cargo test -p rustvello-core --lib guarantees::tests::docs_page_matches_declarations
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guarantee-matrix
+          path: docs/guarantees.md
+
+  fault-suites:
+    name: Fault suites (SQLite process kills, in-process trigger faults)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # publication, trigger and stale-owner process kills on SQLite, trigger
+      # outbox faults on the memory fallback path, SQLite suite with failpoints
+      - name: make test-fault
+        run: make test-fault
+
+  postgres-suites:
+    name: PostgreSQL suites and process kills
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      # an isolated server: the network gates and process kills need their own
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rustvello_gate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      RUSTVELLO_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=rustvello_gate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # compliance, network gates, publication and trigger process kills
+      - name: make test-fault-postgres
+        run: make test-fault-postgres
+
+  backend-suites:
+    name: Backend suite (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - rustvello-redis
+          - rustvello-mongo
+          - rustvello-mongo3
+          - rustvello-rabbitmq
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run backend compliance suite (Docker)
+        run: cargo test -p "${{ matrix.package }}" -- --include-ignored --test-threads=1
+
+  soak:
+    name: Persistent and runner soak tests
+    # long-running: weekly, on demand and before releases, not on every backend PR
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run high-volume runner tests
+        run: cargo test -p rustvello --test concurrency_stress_tests -- --ignored --test-threads=1
+      - name: Run SQLite contention tests
+        run: cargo test -p rustvello-sqlite --test stress -- --ignored --test-threads=1

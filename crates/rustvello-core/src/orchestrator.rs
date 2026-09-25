@@ -97,6 +97,11 @@ pub trait OrchestratorStatus: Send + Sync {
         None
     }
 
+    /// Backend profile in the guarantee matrix ([`crate::guarantees`]).
+    fn guarantee_profile(&self) -> Option<&'static str> {
+        None
+    }
+
     // --- Invocation registration ---
 
     /// Register a new invocation for the given call.

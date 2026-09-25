@@ -427,6 +427,7 @@ pub async fn test_monitoring_records(store: &dyn TriggerStore) {
         }],
         claimed_at: Utc::now(),
         executed_at: None,
+        planned_invocation_id: None,
         triggered_invocation_id: None,
         atomic_service_run_id: None,
         atomic_service_runner_id: None,
@@ -453,6 +454,138 @@ pub async fn test_monitoring_records(store: &dyn TriggerStore) {
             .unwrap(),
         vec![run]
     );
+}
+
+/// The trigger outbox: a claim records the run with its planned invocation,
+/// consumes its valid conditions, stays pending until completion, and a
+/// repeated claim neither re-claims nor resets a completed run.
+pub async fn test_trigger_run_outbox(store: &dyn TriggerStore) {
+    use rustvello_core::trigger::trigger_run_invocation_id;
+    use rustvello_proto::identifiers::InvocationId;
+
+    let vc = ValidCondition {
+        valid_condition_id: "outbox-valid".into(),
+        condition_id: ConditionId::from("outbox-condition"),
+        context: ConditionContext::Event(EventContext {
+            event_id: "outbox-event".into(),
+            event_code: "outbox".into(),
+            payload: serde_json::json!({}),
+        }),
+    };
+    store.record_valid_condition(&vc).await.unwrap();
+    let run_id = TriggerRunId::from("outbox-run");
+    let planned = trigger_run_invocation_id(&run_id);
+    assert_eq!(
+        planned,
+        trigger_run_invocation_id(&run_id),
+        "deterministic id"
+    );
+    assert!(InvocationId::try_from_string(planned.to_string()).is_ok());
+    let record = TriggerRunRecord {
+        trigger_run_id: run_id.clone(),
+        trigger_id: TriggerDefinitionId::from("outbox-trigger"),
+        task_id: test_task_id("outbox-target"),
+        logic: TriggerLogic::Or,
+        arguments: serde_json::json!({"n": 1}),
+        participants: Vec::new(),
+        claimed_at: Utc::now(),
+        executed_at: None,
+        planned_invocation_id: Some(planned.clone()),
+        triggered_invocation_id: None,
+        atomic_service_run_id: None,
+        atomic_service_runner_id: None,
+    };
+    let consumed = [vc.valid_condition_id.clone()];
+
+    assert_eq!(
+        store
+            .claim_trigger_runs_with_records(std::slice::from_ref(&record), &consumed)
+            .await
+            .unwrap(),
+        vec![true]
+    );
+    assert!(store.get_valid_conditions().await.unwrap().is_empty());
+    let pending = store.get_pending_trigger_runs(10).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].planned_invocation_id.as_ref(), Some(&planned));
+
+    // A second evaluator sees the claim, still consumes a re-recorded condition.
+    store.record_valid_condition(&vc).await.unwrap();
+    assert_eq!(
+        store
+            .claim_trigger_runs_with_records(std::slice::from_ref(&record), &consumed)
+            .await
+            .unwrap(),
+        vec![false]
+    );
+    assert!(store.get_valid_conditions().await.unwrap().is_empty());
+    assert_eq!(store.get_pending_trigger_runs(10).await.unwrap().len(), 1);
+
+    // Completion drains the outbox; a late duplicate claim does not reset it.
+    let mut completed = record.clone();
+    completed.triggered_invocation_id = Some(planned.clone());
+    completed.executed_at = Some(Utc::now());
+    store.store_trigger_run(&completed).await.unwrap();
+    assert!(store.get_pending_trigger_runs(10).await.unwrap().is_empty());
+    assert_eq!(
+        store
+            .claim_trigger_runs_with_records(std::slice::from_ref(&record), &consumed)
+            .await
+            .unwrap(),
+        vec![false]
+    );
+    assert!(store.get_pending_trigger_runs(10).await.unwrap().is_empty());
+    assert_eq!(
+        store
+            .get_trigger_run(&run_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .triggered_invocation_id,
+        Some(planned)
+    );
+
+    // Records without a planned invocation (written before the outbox) are never pending.
+    let mut legacy = record.clone();
+    legacy.trigger_run_id = TriggerRunId::from("outbox-legacy");
+    legacy.planned_invocation_id = None;
+    store.store_trigger_run(&legacy).await.unwrap();
+    assert!(store.get_pending_trigger_runs(10).await.unwrap().is_empty());
+}
+
+/// A backend's declared guarantees match what its ports actually provide.
+///
+/// `atomic_publication` may only be declared guaranteed by a control backend
+/// that exposes a runtime publication port, and trigger atomicity only by a
+/// store whose claim commits atomically.
+pub fn test_declared_guarantees(
+    control: &dyn rustvello_core::orchestrator::InvocationControlBackend,
+    store: &dyn TriggerStore,
+) {
+    use rustvello_core::guarantees::{backend_guarantees, GuaranteeLevel};
+    let profile = control
+        .guarantee_profile()
+        .expect("backend declares a guarantee profile");
+    let declared = backend_guarantees(profile).expect("profile is in the matrix");
+    if declared.atomic_publication.level == GuaranteeLevel::Guaranteed {
+        assert!(
+            control.runtime_publication().is_some(),
+            "{profile}: guaranteed atomic publication needs a publication port"
+        );
+    }
+    if control.runtime_publication().is_none() {
+        assert_eq!(
+            declared.atomic_publication.level,
+            GuaranteeLevel::NotSupported,
+            "{profile}: no publication port"
+        );
+    }
+    if declared.trigger_atomicity.level == GuaranteeLevel::Guaranteed {
+        assert!(
+            store.atomic_trigger_claims(),
+            "{profile}: guaranteed trigger atomicity needs atomic claims"
+        );
+    }
 }
 
 /// Macro to generate all trigger suite tests for a given setup expression.
@@ -568,6 +701,12 @@ macro_rules! trigger_suite {
         async fn suite_trigger_monitoring_records() {
             let store = $setup;
             $crate::trigger::test_monitoring_records(&store).await;
+        }
+
+        #[tokio::test]
+        async fn suite_trigger_run_outbox() {
+            let store = $setup;
+            $crate::trigger::test_trigger_run_outbox(&store).await;
         }
     };
 }
@@ -696,6 +835,13 @@ macro_rules! async_trigger_suite {
         async fn suite_trigger_monitoring_records() {
             let (_c, store) = $setup.await;
             $crate::trigger::test_monitoring_records(&store).await;
+        }
+
+        #[tokio::test]
+        #[ignore = "requires Docker"]
+        async fn suite_trigger_run_outbox() {
+            let (_c, store) = $setup.await;
+            $crate::trigger::test_trigger_run_outbox(&store).await;
         }
     };
 }

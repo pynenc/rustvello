@@ -113,14 +113,12 @@ jobs:
       - name: Build Rust API docs (docs.rs compat)
         run: cargo doc --workspace --all-features --no-deps --exclude py-rustvello
 
-  # ── Release gate: fault-injection and external-backend suites ──
-  backend-suite:
+  # ── Durability gate: fault suites and backend suites (release only) ──
+  release-gate:
     name: Release gate
     needs: check-version
-    if: >-
-      needs.check-version.outputs.is_release == 'true' ||
-      (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
-    uses: ./.github/workflows/backend-and-stress.yml
+    if: needs.check-version.outputs.is_release == 'true' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    uses: ./.github/workflows/release-gate.yml
 
   # ── Build sdist ──
   create-sdist:
@@ -243,12 +241,12 @@ jobs:
   publish-to-pypi:
     name: Publish to PyPI
     needs:
-      [check-version, verify-docs, backend-suite, create-sdist, build-wheels]
+      [check-version, verify-docs, release-gate, create-sdist, build-wheels]
     if: >-
       always() &&
       needs.check-version.result == 'success' &&
       needs.verify-docs.result == 'success' &&
-      needs.backend-suite.result == 'success' &&
+      needs.release-gate.result == 'success' &&
       needs.create-sdist.result == 'success' &&
       needs.build-wheels.result == 'success' &&
       (
@@ -315,11 +313,13 @@ jobs:
       - name: Summary
         run: |
           VERSION="${{ needs.pr-version.outputs.version || needs.check-version.outputs.version }}"
-          echo "### 📦 Published to TestPyPI" >> "$GITHUB_STEP_SUMMARY"
-          echo "Version: \`$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`\`\`bash" >> "$GITHUB_STEP_SUMMARY"
-          echo "pip install --index-url https://test.pypi.org/simple/ rustvello==$VERSION" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### 📦 Published to TestPyPI"
+            echo "Version: \`$VERSION\`"
+            echo "\`\`\`bash"
+            echo "pip install --index-url https://test.pypi.org/simple/ rustvello==$VERSION"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ── Comment on PR with TestPyPI install command ──
   pr-comment:

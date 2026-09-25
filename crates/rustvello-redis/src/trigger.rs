@@ -68,6 +68,8 @@ pub struct RedisTriggerStore {
     event_index_prefix: String,
     event_record_prefix: String,
     trigger_run_record_prefix: String,
+    /// Sorted set of pending outbox run ids, scored by claim time.
+    pending_runs: String,
 }
 
 impl RedisTriggerStore {
@@ -86,6 +88,7 @@ impl RedisTriggerStore {
             event_index_prefix: format!("{p}trg:event:"),
             event_record_prefix: format!("{p}trg:event_record:"),
             trigger_run_record_prefix: format!("{p}trg:run_record:"),
+            pending_runs: format!("{p}trg:run_pending"),
             pool,
         }
     }
@@ -514,16 +517,64 @@ impl TriggerStore for RedisTriggerStore {
         let json = serde_json::to_string(run).map_err(|e| RustvelloError::Serialization {
             message: e.to_string(),
         })?;
-        conn.set::<_, _, ()>(
+        let mut pipe = redis::pipe();
+        pipe.atomic().set(
             format!(
                 "{}{}",
                 &self.trigger_run_record_prefix,
                 run.trigger_run_id.as_str()
             ),
             json,
-        )
-        .await
-        .map_err(redis_err)
+        );
+        if run.is_pending() {
+            pipe.zadd(
+                &self.pending_runs,
+                run.trigger_run_id.as_str(),
+                run.claimed_at.timestamp_micros(),
+            );
+        } else {
+            pipe.zrem(&self.pending_runs, run.trigger_run_id.as_str());
+        }
+        pipe.query_async::<()>(&mut conn).await.map_err(redis_err)
+    }
+
+    async fn get_pending_trigger_runs(
+        &self,
+        limit: usize,
+    ) -> RustvelloResult<Vec<TriggerRunRecord>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.pool.conn().await?;
+        let stop = isize::try_from(limit).unwrap_or(isize::MAX) - 1;
+        let ids: Vec<String> = conn
+            .zrange(&self.pending_runs, 0, stop)
+            .await
+            .map_err(redis_err)?;
+        let mut runs = Vec::with_capacity(ids.len());
+        for id in ids {
+            let json: Option<String> = conn
+                .get(format!("{}{}", &self.trigger_run_record_prefix, id))
+                .await
+                .map_err(redis_err)?;
+            let run = json
+                .map(|value| {
+                    serde_json::from_str::<TriggerRunRecord>(&value).map_err(|e| {
+                        RustvelloError::Serialization {
+                            message: e.to_string(),
+                        }
+                    })
+                })
+                .transpose()?;
+            match run {
+                Some(run) if run.is_pending() => runs.push(run),
+                _ => conn
+                    .zrem::<_, _, ()>(&self.pending_runs, &id)
+                    .await
+                    .map_err(redis_err)?,
+            }
+        }
+        Ok(runs)
     }
 
     async fn get_trigger_run(
@@ -619,8 +670,8 @@ impl TriggerStore for RedisTriggerStore {
                 conn.del::<_, ()>(keys).await.map_err(redis_err)?;
             }
         }
-        // Also delete the singleton cron index key
-        conn.del::<_, ()>(&self.cron_index)
+        // Also delete the singleton cron index and outbox keys
+        conn.del::<_, ()>(&[&self.cron_index, &self.pending_runs])
             .await
             .map_err(redis_err)?;
         Ok(())

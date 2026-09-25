@@ -15,6 +15,10 @@ use super::SqliteOrchestrator;
 
 #[async_trait]
 impl OrchestratorStatus for SqliteOrchestrator {
+    fn guarantee_profile(&self) -> Option<&'static str> {
+        Some("sqlite")
+    }
+
     fn runtime_publication(
         &self,
     ) -> Option<Arc<dyn rustvello_core::publication::RuntimePublication>> {

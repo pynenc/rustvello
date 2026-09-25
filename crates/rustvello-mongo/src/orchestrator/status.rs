@@ -13,6 +13,10 @@ use crate::connection::mongo_err;
 
 #[async_trait]
 impl OrchestratorStatus for MongoOrchestrator {
+    fn guarantee_profile(&self) -> Option<&'static str> {
+        Some("mongodb")
+    }
+
     async fn register_invocation(&self, call: &CallDTO) -> RustvelloResult<InvocationId> {
         let inv_id = InvocationId::new();
         let record = InvocationStatusRecord {

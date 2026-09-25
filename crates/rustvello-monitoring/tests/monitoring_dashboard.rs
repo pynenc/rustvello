@@ -107,6 +107,7 @@ async fn test_event_and_trigger_run_monitoring_views() {
         }],
         claimed_at: timestamp,
         executed_at: Some(timestamp),
+        planned_invocation_id: None,
         triggered_invocation_id: Some(InvocationId::from_string("triggered-invocation")),
         atomic_service_run_id: None,
         atomic_service_runner_id: None,
@@ -263,6 +264,7 @@ async fn test_event_timeline_link_fits_generated_invocation_history() {
             }],
             claimed_at: invocation_start,
             executed_at: Some(invocation_start),
+            planned_invocation_id: None,
             triggered_invocation_id: Some(generated_id.clone()),
             atomic_service_run_id: None,
             atomic_service_runner_id: None,
@@ -1764,6 +1766,17 @@ async fn test_monitoring_capabilities_api() {
     assert!(body["timeline"]["filters"]
         .as_array()
         .is_some_and(|filters| filters.iter().any(|filter| filter == "runner_ids")));
+    let guarantees = &body["guarantees"];
+    assert_eq!(guarantees["schema_version"], 1);
+    let matrix = guarantees["matrix"].as_array().expect("guarantee matrix");
+    for backend in ["sqlite", "postgres", "redis", "mongodb", "memory"] {
+        let row = matrix
+            .iter()
+            .find(|row| row["backend"] == backend)
+            .unwrap_or_else(|| panic!("{backend} row"));
+        assert!(row["trigger_atomicity"]["level"].is_string());
+    }
+    assert!(guarantees["active"]["profile"].is_string());
 
     handle_keep_alive(server).await;
 }

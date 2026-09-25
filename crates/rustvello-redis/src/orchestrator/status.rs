@@ -14,6 +14,10 @@ use crate::connection::redis_err;
 
 #[async_trait]
 impl OrchestratorStatus for RedisOrchestrator {
+    fn guarantee_profile(&self) -> Option<&'static str> {
+        Some("redis")
+    }
+
     fn runtime_publication(
         &self,
     ) -> Option<std::sync::Arc<dyn rustvello_core::publication::RuntimePublication>> {

@@ -20,6 +20,8 @@ pub mod client_data_store;
 pub mod context;
 pub mod error;
 pub mod execution;
+pub mod failpoints;
+pub mod guarantees;
 pub mod invocation;
 pub mod logging;
 pub mod middleware;
