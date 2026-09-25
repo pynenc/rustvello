@@ -98,7 +98,7 @@ Feature flags:
 
 ```toml
 [dependencies]
-rustvello = { version = "0.5.2", features = ["sqlite"] }
+rustvello = { version = "0.6", features = ["sqlite"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
