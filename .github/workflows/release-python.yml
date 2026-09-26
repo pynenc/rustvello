@@ -260,12 +260,30 @@ jobs:
       id-token: write
 
     steps:
-      - name: Download sdists and wheels
+      # Only the build artifacts: the release gate uploads others (the guarantee
+      # matrix), which the publisher rejects as unknown distributions.
+      - name: Download the sdist
         uses: actions/download-artifact@v4
         with:
-          pattern: "*"
+          pattern: sdist-*
           path: dist
           merge-multiple: true
+
+      - name: Download the wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+
+      - name: Only wheels and sdists are published
+        run: |
+          stray=$(find dist -type f ! -name '*.whl' ! -name '*.tar.gz')
+          if [ -n "$stray" ]; then
+            echo "::error::not a distribution: $stray"
+            exit 1
+          fi
+          ls dist
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -297,12 +315,30 @@ jobs:
       id-token: write
 
     steps:
-      - name: Download sdists and wheels
+      # Only the build artifacts: the release gate uploads others (the guarantee
+      # matrix), which the publisher rejects as unknown distributions.
+      - name: Download the sdist
         uses: actions/download-artifact@v4
         with:
-          pattern: "*"
+          pattern: sdist-*
           path: dist
           merge-multiple: true
+
+      - name: Download the wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+
+      - name: Only wheels and sdists are published
+        run: |
+          stray=$(find dist -type f ! -name '*.whl' ! -name '*.tar.gz')
+          if [ -n "$stray" ]; then
+            echo "::error::not a distribution: $stray"
+            exit 1
+          fi
+          ls dist
 
       - name: Publish to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
