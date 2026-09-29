@@ -4399,6 +4399,7 @@ dependencies = [
  "rustvello-proto",
  "rustvello-sqlite",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
 ]
@@ -4620,6 +4621,7 @@ dependencies = [
  "rustvello-test-suite",
  "serde",
  "serde_json",
+ "tempfile",
  "testcontainers",
  "testcontainers-modules",
  "tokio",
