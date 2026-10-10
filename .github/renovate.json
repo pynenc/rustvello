@@ -1,0 +1,35 @@
+{
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": ["config:recommended", "schedule:monthly"],
+    "minimumReleaseAge": "15 days",
+    "internalChecksFilter": "strict",
+    "labels": ["skip-changelog"],
+    "enabledManagers": ["github-actions", "cargo", "pep621"],
+    "packageRules": [
+        {
+            "description": "Skip patch releases",
+            "matchUpdateTypes": ["patch"],
+            "enabled": false
+        },
+        {
+            "matchManagers": ["github-actions"],
+            "commitMessagePrefix": "ci:"
+        },
+        {
+            "matchManagers": ["cargo"],
+            "groupName": "rust-dependencies",
+            "commitMessagePrefix": "build(rust):"
+        },
+        {
+            "matchManagers": ["pep621"],
+            "matchFileNames": ["py-rustvello/**"],
+            "groupName": "python-dependencies",
+            "commitMessagePrefix": "chore(python):"
+        },
+        {
+            "matchManagers": ["pep621"],
+            "matchFileNames": ["!py-rustvello/**"],
+            "enabled": false
+        }
+    ]
+}
