@@ -58,7 +58,7 @@ env_logger = "0.11"
 hostname = "0.4"
 inventory = "0.3"
 log = "0.4"
-lru = "0.12"
+lru = "0.18"
 proptest = "1"
 pyo3 = { version = "0.22", features = ["multiple-pymethods"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
