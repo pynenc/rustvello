@@ -23,14 +23,14 @@ jobs:
     name: Guarantee matrix is current
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Regenerate the matrix and compare with docs/guarantees.md
         run: cargo test -p rustvello-core --lib guarantees -- --nocapture
       - name: Publish the generated page as a build artifact
         run: RUSTVELLO_WRITE_GUARANTEES=1 cargo test -p rustvello-core --lib guarantees::tests::docs_page_matches_declarations
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: guarantee-matrix
           path: docs/guarantees.md
@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # publication, trigger, stale-owner and delayed-retry process kills on
@@ -71,7 +71,7 @@ jobs:
     env:
       RUSTVELLO_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=rustvello_gate
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # compliance, network gates, publication, trigger and delayed-retry
@@ -92,7 +92,7 @@ jobs:
           - rustvello-mongo3
           - rustvello-rabbitmq
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run backend compliance suite (Docker)
@@ -105,7 +105,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run high-volume runner tests
