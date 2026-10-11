@@ -1,3 +1,6 @@
+# Version updates wait 15 days after a release (cooldown) and skip patch
+# releases; security updates are not delayed. The root Cargo.lock and uv.lock
+# cover py-rustvello too, so each ecosystem has one entry at "/".
 version: 2
 updates:
   # GitHub Actions
@@ -5,18 +8,25 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 15
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]
+    groups:
+      github-actions:
+        patterns: ["*"]
     commit-message:
       prefix: ci
     labels: ["skip-changelog"]
 
-  # Rust Components
+  # Rust crates, including py-rustvello
   - package-ecosystem: cargo
     directory: "/"
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 15
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]
@@ -27,27 +37,15 @@ updates:
     groups:
       rust-dependencies:
         patterns: ["*"]
+        update-types: ["minor"]
 
-  - package-ecosystem: cargo
-    directory: "/py-rustvello"
+  # Python (uv workspace: py-rustvello and the dev tooling)
+  - package-ecosystem: uv
+    directory: "/"
     schedule:
       interval: monthly
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-patch"]
-    commit-message:
-      prefix: build(python)
-      prefix-development: chore(python)
-    labels: ["skip-changelog"]
-    groups:
-      rust-python-dependencies:
-        patterns: ["*"]
-
-  # Python Components
-  - package-ecosystem: pip
-    directory: "/py-rustvello"
-    schedule:
-      interval: monthly
+    cooldown:
+      default-days: 15
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]
@@ -57,3 +55,4 @@ updates:
     groups:
       python-dependencies:
         patterns: ["*"]
+        update-types: ["minor"]
