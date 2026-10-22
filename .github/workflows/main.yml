@@ -69,7 +69,9 @@ jobs:
     needs: python-compatibility
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # ubuntu-24.04, not ubuntu-latest: setup-python has no Python 3.9 for
+        # Ubuntu 26.04, and requires-python still declares 3.9.
+        os: [ubuntu-24.04, macos-latest]
         python-version: ${{ fromJSON(needs.python-compatibility.outputs.versions) }}
         rust-version: ["stable"]
       fail-fast: false
@@ -108,7 +110,7 @@ jobs:
 
       - name: Upload coverage reports to Codecov (Python 3.12 on Ubuntu only)
         uses: codecov/codecov-action@v4
-        if: ${{ matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest' }}
+        if: ${{ matrix.python-version == '3.12' && matrix.os == 'ubuntu-24.04' }}
 
   check-docs:
     name: Documentation build
@@ -214,6 +216,13 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
+
+      # PyO3 builds against the Python on PATH; the runner's own (3.14 on
+      # Ubuntu 26.04) is newer than PyO3 0.22 supports.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
