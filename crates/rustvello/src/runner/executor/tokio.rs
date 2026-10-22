@@ -211,7 +211,7 @@ mod tests {
             traceparent: Some(
                 "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
             ),
-            tracestate: Some("ih=worker".to_string()),
+            tracestate: Some("example=worker".to_string()),
         };
         let mut invocation = invocation_context();
         invocation.task_id = task_id.clone();

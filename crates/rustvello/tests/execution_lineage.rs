@@ -29,7 +29,7 @@ impl EventEmitter for RecordingEmitter {
 fn parent() -> TraceContextCarrier {
     TraceContextCarrier {
         traceparent: Some(PARENT.into()),
-        tracestate: Some("ih=lineage".into()),
+        tracestate: Some("example=lineage".into()),
     }
 }
 
@@ -186,7 +186,7 @@ async fn nested_submissions(executor: ExecutorKind, blocking: bool) {
         );
         assert_eq!(
             stored.trace_context.tracestate.as_deref(),
-            Some("ih=lineage")
+            Some("example=lineage")
         );
     }
     for started in started {
