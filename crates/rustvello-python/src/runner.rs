@@ -503,6 +503,7 @@ impl PyTaskRunnerBuilder {
                 command: command.clone(),
                 env: env.clone(),
                 kind: rustvello_proto::identifiers::ExecutorKind::Python,
+                expected_tasks: Vec::new(),
             });
         }
 

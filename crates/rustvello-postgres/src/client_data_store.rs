@@ -25,6 +25,10 @@ impl PostgresClientDataStore {
 
 #[async_trait]
 impl ClientDataStore for PostgresClientDataStore {
+    fn backend_name(&self) -> &'static str {
+        "PostgreSQL"
+    }
+
     async fn store(&self, key: &str, value: &str) -> RustvelloResult<()> {
         let client = self.db.conn().await?;
         client

@@ -272,7 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|value| format!(".{}", value.to_string_lossy()))
         .unwrap_or_default();
     let effective_database = database_path.with_file_name(format!("{stem}_{APP_ID}{extension}"));
-    let token = std::env::var("OTLP_BEARER_TOKEN").or_else(|_| std::env::var("POET_OTLP_TOKEN"))?;
+    let token = std::env::var("OTLP_BEARER_TOKEN")?;
     let exporter = OtlpLifecycleExporter::new(OtlpLifecycleConfig::new(endpoint, token))?;
     let accounting = exporter.accounting();
     let emitter = BoundedAsyncEmitter::new(
@@ -339,7 +339,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             SerializedArguments::new(),
             Some(TraceContextCarrier {
                 traceparent: Some(TRACEPARENT.to_owned()),
-                tracestate: Some("ih=rust".to_owned()),
+                tracestate: Some("example=rust".to_owned()),
             }),
         )
         .await?;
@@ -353,7 +353,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     SerializedArguments::new(),
                     Some(TraceContextCarrier {
                         traceparent: Some(format!("00-{UNSAMPLED_TRACE_ID}-{INCOMING_SPAN_ID}-00")),
-                        tracestate: Some("ih=rust".to_owned()),
+                        tracestate: Some("example=rust".to_owned()),
                     }),
                 )
                 .await?,
@@ -388,9 +388,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
         if !status.success() {
-            let token = std::env::var("OTLP_BEARER_TOKEN")
-                .or_else(|_| std::env::var("POET_OTLP_TOKEN"))
-                .unwrap_or_default();
+            let token = std::env::var("OTLP_BEARER_TOKEN").unwrap_or_default();
             let stderr = String::from_utf8_lossy(&stderr).replace(&token, "<redacted>");
             return Err(format!("worker {pid} failed: {stderr}").into());
         }

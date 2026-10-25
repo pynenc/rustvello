@@ -183,6 +183,10 @@ impl RedisBroker {
 
 #[async_trait]
 impl Broker for RedisBroker {
+    fn backend_name(&self) -> &'static str {
+        "Redis"
+    }
+
     fn publication_domain(&self) -> Option<rustvello_core::publication::PublicationDomain> {
         Some(Arc::clone(&self.pool.domain))
     }

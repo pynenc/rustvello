@@ -29,7 +29,7 @@ impl EventEmitter for RecordingEmitter {
 fn parent() -> TraceContextCarrier {
     TraceContextCarrier {
         traceparent: Some(PARENT.into()),
-        tracestate: Some("ih=lineage".into()),
+        tracestate: Some("example=lineage".into()),
     }
 }
 
@@ -186,7 +186,7 @@ async fn nested_submissions(executor: ExecutorKind, blocking: bool) {
         );
         assert_eq!(
             stored.trace_context.tracestate.as_deref(),
-            Some("ih=lineage")
+            Some("example=lineage")
         );
     }
     for started in started {
@@ -415,9 +415,8 @@ mod relocation {
 
     #[tokio::test]
     async fn retry_identity_survives_independent_processes() {
-        let dir = std::env::temp_dir().join(format!("rustvello-lineage-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&dir).unwrap();
-        let path = dir.join("shared.db");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.db");
         let path = path.to_str().unwrap();
         let app = app(path).await;
         let invocation = app

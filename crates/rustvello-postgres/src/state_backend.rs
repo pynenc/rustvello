@@ -33,6 +33,10 @@ impl PostgresStateBackend {
 
 #[async_trait]
 impl StateBackendCore for PostgresStateBackend {
+    fn backend_name(&self) -> &'static str {
+        "PostgreSQL"
+    }
+
     fn publication_domain(&self) -> Option<rustvello_core::publication::PublicationDomain> {
         Some(Arc::clone(&self.db.domain))
     }

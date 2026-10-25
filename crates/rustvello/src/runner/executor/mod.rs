@@ -26,6 +26,14 @@ pub(crate) use tokio::TokioExecutor;
 pub(crate) trait TaskExecutor: Send + Sync {
     fn kind(&self) -> ExecutorKind;
 
+    /// Prepare the executor before the runner takes work, so a configuration
+    /// mistake (a worker process that cannot start or registers fewer tasks
+    /// than the runner) stops the runner at start-up instead of failing
+    /// every invocation.
+    async fn start(&self) -> RustvelloResult<()> {
+        Ok(())
+    }
+
     async fn execute(
         &self,
         task: Arc<dyn DynTask>,

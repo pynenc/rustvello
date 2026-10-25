@@ -211,8 +211,22 @@ impl PersistentTokioRunner {
     /// Each worker speaks the JSON-lines protocol of the subprocess executor; the control
     /// plane, heartbeats and recovery stay here. For Python this gives one interpreter, and
     /// therefore one GIL, per worker.
-    pub fn with_subprocess_executor(mut self, spec: SubprocessSpec) -> Self {
+    pub fn with_subprocess_executor(mut self, mut spec: SubprocessSpec) -> Self {
         self.control_plane.executor_kind = spec.kind;
+        if spec.expected_tasks.is_empty() {
+            // Every task of this runner's language must exist in the worker too.
+            let language = self.control_plane.runner_language;
+            spec.expected_tasks = self
+                .control_plane
+                .task_catalog
+                .registry()
+                .task_ids()
+                .into_iter()
+                .filter(|task_id| task_id.language() == language)
+                .map(ToString::to_string)
+                .collect();
+            spec.expected_tasks.sort();
+        }
         self.executor = Arc::new(SubprocessExecutor::new(spec.clone(), self.num_workers));
         self.subprocess = Some(spec);
         self

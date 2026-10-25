@@ -36,7 +36,8 @@ struct RunnersOverviewTemplate {
 }
 
 #[allow(dead_code)]
-struct RunnerRow {
+#[derive(serde::Serialize)]
+pub(crate) struct RunnerRow {
     runner_id: String,
     short_id: String,
     runner_cls: String,
@@ -114,7 +115,7 @@ pub fn router() -> Router<AppState> {
         .route("/{runner_id}", axum::routing::get(detail))
 }
 
-async fn collect_runner_rows(app: &crate::AppInstance) -> Vec<RunnerRow> {
+pub(crate) async fn collect_runner_rows(app: &crate::AppInstance) -> Vec<RunnerRow> {
     let timeout = app.config.runner_dead_after_seconds;
     let active_runners = app
         .orchestrator

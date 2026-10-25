@@ -467,6 +467,7 @@ pub fn init_logging(config: &LogConfig) {
                 }
                 LogStream::Stderr => {
                     let _ = fmt_subscriber()
+                        .with_writer(io::stderr)
                         .with_env_filter(env_filter)
                         .with_target(false)
                         .event_format(formatter)
@@ -492,6 +493,7 @@ pub fn init_logging(config: &LogConfig) {
                 }
                 LogStream::Stderr => {
                     let _ = fmt_subscriber()
+                        .with_writer(io::stderr)
                         .with_env_filter(env_filter)
                         .with_target(false)
                         .event_format(formatter)

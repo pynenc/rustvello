@@ -13,6 +13,7 @@ dev = [
     "pre-commit>=2.20.0",
     "tox-uv>=1.11.3",
     "pytest-cov>=4.0.0",
+    "pytest-xdist>=3.5",
     "pytest-asyncio>=0.24.0",
     "ruff>=0.6.9",
     "maturin>=1.7.4",

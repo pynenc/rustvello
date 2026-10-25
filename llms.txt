@@ -10,6 +10,9 @@ Rules for agents:
 - To debug an invocation, call `GET /api/capabilities` first, then `GET /invocations/<id>/investigation` (status, stored error, history, runners). On SQLite without a server: `rustvello investigate <id> --app-id <app> --db-path <db> --format json` or `python skills/rustvello/scripts/investigate.py <id> --db-path <db> --app-id <app>`.
 - Never run `app.purge()` / `rustvello purge`, cancel production invocations, or delete a database file without the owner's approval; never print connection strings with passwords.
 - Durable retries with backoff need SQLite or PostgreSQL; Redis, MongoDB and RabbitMQ retry at once.
+- Health and probes: `app.health()` / `GET /health` (200 or 503, per-component JSON) / `python -m rustvello.doctor module:app` (exit 1: a backend refused a read, 2: no runner alive). JSON for scripts: `/api/runners`, `/api/invocations?status=Failed`, `/api/queues`, `/api/config`.
+- Submit by name without the task's code: `app.send_task("module.task", kwargs, queue=...)`; `app.get_task` only finds tasks whose module was imported.
+- MongoDB data lives in `<mongo_db>_<app_id>` (`readWrite` on it); `mongo_db_verbatim=True` uses the name as given. Rights per backend: the storage-and-permissions page.
 
 ## Start here
 
@@ -26,9 +29,10 @@ Rules for agents:
 - [Async tasks](https://rustvello.readthedocs.io/en/latest/async_tasks.html): `async fn` / `async def` tasks, event loops, cancellation at `await`
 - [Workflows](https://rustvello.readthedocs.io/en/latest/workflows.html): workflow roots, child identity, deterministic replay helpers
 - [Configuration](https://rustvello.readthedocs.io/en/latest/configuration/index.html): `RUSTVELLO__*` environment variables, TOML, per-task settings
-- [Monitoring](https://rustvello.readthedocs.io/en/latest/monitoring/index.html): dashboard, trigger and event evidence, logging
+- [Storage layout and permissions](https://rustvello.readthedocs.io/en/latest/storage-and-permissions.html): what each backend creates, database names, minimal rights, what fails when one is missing
+- [Monitoring](https://rustvello.readthedocs.io/en/latest/monitoring/index.html): dashboard (embedded assets, read-only mode, `python -m rustvello.monitor`), `/health`, JSON API, logging
 - [Monitoring investigation API](https://rustvello.readthedocs.io/en/latest/contributing/agent-monitoring.html): `/api/capabilities`, investigation, timeline and list endpoints, the `rustvello investigate` CLI
-- [CLI](https://rustvello.readthedocs.io/en/latest/cli/index.html): `run`, `status`, `cancel`, `list`, `purge` (plus `investigate`, see the investigation API)
+- [CLI](https://rustvello.readthedocs.io/en/latest/cli/index.html): `run`, `status`, `cancel`, `list`, `purge` (plus `investigate`, see the investigation API); Python `rustvello.worker`, `rustvello.doctor`, `rustvello.monitor`
 - [Architecture](https://rustvello.readthedocs.io/en/latest/architecture.html): ports, backends, invocation state machine
 - [Migrating from Celery](https://rustvello.readthedocs.io/en/latest/migrating-from-celery.html): concept mapping and a runnable before/after example
 - [Benchmark against Celery](https://rustvello.readthedocs.io/en/latest/benchmarks.html): method, results and limits

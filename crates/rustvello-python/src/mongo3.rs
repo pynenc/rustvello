@@ -22,11 +22,24 @@ impl PyMongo3Pool {
     ///
     /// The effective database name is `{db_name}_{app_id}`, providing
     /// per-application isolation when multiple apps share the same cluster.
+    /// With `verbatim=True` the database is `db_name` exactly (no suffix).
     #[new]
-    fn new(uri: &str, db_name: &str, app_id: &str) -> Self {
+    #[pyo3(signature = (uri, db_name, app_id, verbatim=false))]
+    fn new(uri: &str, db_name: &str, app_id: &str, verbatim: bool) -> Self {
+        let inner = if verbatim {
+            MongoPool::with_exact_database(uri, db_name, None)
+        } else {
+            MongoPool::new(uri, db_name, app_id)
+        };
         Self {
-            inner: Arc::new(MongoPool::new(uri, db_name, app_id)),
+            inner: Arc::new(inner),
         }
+    }
+
+    /// The database this pool uses: the name the credentials need `readWrite` on.
+    #[getter]
+    fn database_name(&self) -> &str {
+        self.inner.database_name()
     }
 }
 

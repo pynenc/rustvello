@@ -305,7 +305,8 @@ fn build_config() -> StatusConfiguration {
         (
             PendingRecovery,
             StatusDefinition {
-                allowed_transitions: vec![Rerouted, Cancelled],
+                // Failed: the recovery limit was reached.
+                allowed_transitions: vec![Rerouted, Failed, Cancelled],
                 releases_ownership: true,
                 overrides_ownership: true,
                 ..StatusDefinition::new()
@@ -330,7 +331,8 @@ fn build_config() -> StatusConfiguration {
         (
             RunningRecovery,
             StatusDefinition {
-                allowed_transitions: vec![Rerouted, Cancelled],
+                // Failed: the recovery limit was reached.
+                allowed_transitions: vec![Rerouted, Failed, Cancelled],
                 releases_ownership: true,
                 overrides_ownership: true,
                 ..StatusDefinition::new()

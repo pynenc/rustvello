@@ -66,6 +66,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # rustvello-python embeds Python through PyO3 0.22, which supports up
+      # to 3.13; the runner's own Python is newer on Ubuntu 26.04.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 

@@ -81,6 +81,24 @@ and list routes, accepted timeline filters, timestamp rules, and the matching
 direct-backend CLI command. Treat `schema_version` as the compatibility key for
 agent integrations.
 
+### Health And JSON Lists
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' "$BASE/health"   # 200 or 503
+curl -sS "$BASE/api/health" | jq '.status, .problems'
+curl -sS "$BASE/api/runners" | jq '.count, .runners[] | {runner_cls, hostname, last_heartbeat_secs_ago}'
+curl -sS "$BASE/api/invocations?status=Failed&limit=20" | jq '.invocations[] | {invocation_id, task_id, status}'
+curl -sS "$BASE/api/queues" | jq
+curl -sS "$BASE/api/config" | jq '.implementations, .config.runner_queues'
+```
+
+`/health` probes every backend with one read; 503 means a backend refused
+the monitor's credentials and the body names it. "No active runners" is in
+`problems`, not an error. Without a server:
+`python -m rustvello.doctor module:app --json` prints the same report and
+exits 1 (backend error) or 2 (no runners). A monitor started read-only
+(`RUSTVELLO_MONITORING_READ_ONLY=1`) answers 403 to purge, rerun and cancel.
+
 ### Invocation Endpoints
 
 ```bash

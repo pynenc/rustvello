@@ -381,7 +381,7 @@ mod tests {
             traceparent: Some(
                 "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
             ),
-            tracestate: Some("ih=test".to_string()),
+            tracestate: Some("example=test".to_string()),
         };
 
         let invocation_id = app
@@ -461,7 +461,7 @@ mod tests {
             traceparent: Some(
                 "00-80e1afed08e019fc1110464cfa66635c-7a085853722dc6d2-01".to_string(),
             ),
-            tracestate: Some("ih=child".to_string()),
+            tracestate: Some("example=child".to_string()),
         };
         let parent = InvocationContext {
             invocation_id: InvocationId::new(),

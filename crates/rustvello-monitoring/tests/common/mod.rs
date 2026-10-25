@@ -185,6 +185,11 @@ pub fn init_tracing() {
 /// Binds to `127.0.0.1:0` so the OS assigns a random free port — this ensures
 /// tests never collide, mirroring pynmon's `get_free_port()` strategy.
 pub async fn start_test_server(setup: TestAppSetup) -> TestServer {
+    start_test_server_with(setup, false).await
+}
+
+/// `start_test_server` with the monitor's read-only switch.
+pub async fn start_test_server_with(setup: TestAppSetup, read_only: bool) -> TestServer {
     init_tracing();
     let instance = AppInstance {
         app_id: setup.config.app_id.clone(),
@@ -201,7 +206,9 @@ pub async fn start_test_server(setup: TestAppSetup) -> TestServer {
     let mut apps = HashMap::new();
     apps.insert(app_id.clone(), instance);
 
-    let state = rustvello_monitoring::state::AppState::new(apps, &app_id).expect("state creation");
+    let state = rustvello_monitoring::state::AppState::new(apps, &app_id)
+        .expect("state creation")
+        .with_read_only(read_only);
     let router = rustvello_monitoring::server::build_router(state);
 
     // Bind to port 0 — the OS picks a free port

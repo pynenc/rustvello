@@ -147,21 +147,103 @@ start_monitor(
     "my-app",
     MonitorConfig {
         bind: SocketAddr::from(([0, 0, 0, 0], 8000)),
-        log_level: "info".into(),
+        ..MonitorConfig::default()
     },
 ).await?;
 ```
 
 Open a browser at `http://localhost:8000` to view the dashboard.
 
+### From Python
+
+```python
+server = app.start_monitor(host="0.0.0.0", port=8000, read_only=True)  # MonitorServer
+print(server.url, server.is_running())
+server.stop()
+```
+
+`App.start_monitor(block=True)` serves until SIGTERM or Ctrl-C and then
+returns, so it can be the body of a monitor process. The launcher does the
+same from the command line and exits non-zero when a backend refuses the
+monitor's credentials:
+
+```bash
+python -m rustvello.monitor package.module:app --host 0.0.0.0 --port 8000 --read-only
+```
+
+The dashboard's CSS, JavaScript and logo are compiled into the binary (the
+wheel, the CLI), so a monitor runs anywhere without a source checkout. For
+front-end work, `RUSTVELLO_MONITORING_STATIC_DIR=crates/rustvello-monitoring/static`
+serves the files from disk instead.
+
+### Read-only mode
+
+`read_only=True`, `--read-only` or `RUSTVELLO_MONITORING_READ_ONLY=1` refuses
+every request that changes data (purge, rerun, cancel answer 403) and hides
+the purge buttons, so the monitor can be exposed to more people safely.
+`/api/capabilities` reports `read_only`.
+
+### Start-up check and `/health`
+
+Before serving, the monitor reads every component once; a refused read fails
+the start with the backend's own error (Python: `RuntimeError`; Rust:
+`check_backends: false` in `MonitorConfig` skips it). `GET /health` (and
+`/api/health`) returns the same report while serving: HTTP 200 when every
+component answered, 503 otherwise, with one JSON body:
+
+```json
+{
+  "status": "ok",
+  "app_id": "shop",
+  "components": {
+    "broker": { "status": "ok", "implementation": "MongoDB 3.6" },
+    "orchestrator": { "status": "ok", "implementation": "MongoDB 3.6" },
+    "state_backend": {
+      "status": "error",
+      "implementation": "MongoDB 3.6",
+      "error": "state backend error: not authorized on rustvello_shop ..."
+    },
+    "client_data_store": { "status": "ok", "implementation": "MongoDB 3.6" },
+    "trigger_store": { "status": "ok", "implementation": "Trigger store" }
+  },
+  "runners": { "active": 0, "dead_after_seconds": 300 },
+  "queues": { "default": 0, "hpa": 12 },
+  "problems": [
+    "state_backend: ...",
+    "no active runners (no heartbeat in the last 300s)"
+  ]
+}
+```
+
+Having no runners is a `problem`, not an error: a monitor pod stays healthy
+while the workers are down. `App.health()` returns the same dictionary
+without a server, and `python -m rustvello.doctor module:app` prints it and
+exits non-zero on a refused read (1) or no runners (2) ([CLI](../cli/index.md)).
+
+### JSON API for scripts and agents
+
+Everything the pages show is available as JSON; `GET /api/capabilities`
+lists the routes:
+
+| Route                                                          | Content                                                                                  |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `/api/runners`                                                 | Active runners: class, language, executor, host, pid, heartbeat age                      |
+| `/api/invocations?status=Failed&task_id=...&limit=50&offset=0` | Invocations by status (newest first) with task id, timestamps and the investigation link |
+| `/invocations/{id}/investigation`                              | One invocation: status, stored error, history, runners, workflow                         |
+| `/api/queues`                                                  | Queued invocations per declared queue                                                    |
+| `/api/config`                                                  | Effective `AppConfig`, backend implementations, registered tasks                         |
+| `/api/health`                                                  | The health report above                                                                  |
+
 ---
 
 ## MonitorConfig
 
-| Field       | Type         | Default          | Description                         |
-| ----------- | ------------ | ---------------- | ----------------------------------- |
-| `bind`      | `SocketAddr` | `127.0.0.1:8000` | Address and port to listen on       |
-| `log_level` | `String`     | `"info"`         | Monitoring server log level setting |
+| Field            | Type         | Default          | Description                                                           |
+| ---------------- | ------------ | ---------------- | --------------------------------------------------------------------- |
+| `bind`           | `SocketAddr` | `127.0.0.1:8000` | Address and port to listen on                                         |
+| `log_level`      | `String`     | `"info"`         | Monitoring server log level setting                                   |
+| `read_only`      | `bool`       | `false`          | Refuse purge, rerun and cancel; also `RUSTVELLO_MONITORING_READ_ONLY` |
+| `check_backends` | `bool`       | `true`           | Probe every backend before serving; a refused read is an error        |
 
 ---
 
@@ -233,6 +315,8 @@ implement authentication by default. For production deployments:
 
 - Bind to `127.0.0.1` and expose via a reverse proxy (nginx, Caddy) with authentication
 - Or restrict network access to the monitoring port at the firewall/VPC level
+- Run it read-only (`read_only=True` / `RUSTVELLO_MONITORING_READ_ONLY=1`) when
+  more people than the operators can reach it
 
 CSRF origin validation is enforced on all state-mutating routes.
 

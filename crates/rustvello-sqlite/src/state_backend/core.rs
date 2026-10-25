@@ -18,6 +18,10 @@ use super::SqliteStateBackend;
 
 #[async_trait]
 impl StateBackendCore for SqliteStateBackend {
+    fn backend_name(&self) -> &'static str {
+        "SQLite"
+    }
+
     fn publication_domain(&self) -> Option<rustvello_core::publication::PublicationDomain> {
         Some(Arc::clone(&self.db.domain))
     }

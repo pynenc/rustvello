@@ -24,6 +24,7 @@ def create_backends(
     postgres_url: str = "",
     mongo_url: str = "",
     mongo_db: str = "",
+    mongo_db_verbatim: bool = False,
     broker: str | None = None,
     rabbitmq_url: str = "",
     rabbitmq_prefix: str = "",
@@ -54,6 +55,7 @@ def create_backends(
         postgres_url=postgres_url,
         mongo_url=mongo_url,
         mongo_db=mongo_db,
+        mongo_db_verbatim=mongo_db_verbatim,
     )
     if broker == "rabbitmq":
         from rustvello.rustvello import RustRabbitmqBroker
@@ -73,6 +75,7 @@ def _create_component_backends(
     postgres_url: str,
     mongo_url: str,
     mongo_db: str,
+    mongo_db_verbatim: bool,
 ) -> dict[str, Any]:
     if backend == "sqlite":
         from rustvello.rustvello import (
@@ -142,7 +145,7 @@ def _create_component_backends(
             RustMongoTriggerStore,
         )
 
-        mongo_pool = RustMongoPool(mongo_url, mongo_db, app_id)
+        mongo_pool = RustMongoPool(mongo_url, mongo_db, app_id, verbatim=mongo_db_verbatim)
         return {
             "orchestrator": RustMongoOrchestrator(mongo_pool),
             "state_backend": RustMongoStateBackend(mongo_pool),
@@ -162,7 +165,7 @@ def _create_component_backends(
         )
 
         # MongoDB 3.6+ through the legacy (v2) driver
-        mongo3_pool = RustMongo3Pool(mongo_url, mongo_db, app_id)
+        mongo3_pool = RustMongo3Pool(mongo_url, mongo_db, app_id, verbatim=mongo_db_verbatim)
         return {
             "orchestrator": RustMongo3Orchestrator(mongo3_pool),
             "state_backend": RustMongo3StateBackend(mongo3_pool),

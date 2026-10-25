@@ -23,6 +23,10 @@ impl PostgresBroker {
 
 #[async_trait]
 impl Broker for PostgresBroker {
+    fn backend_name(&self) -> &'static str {
+        "PostgreSQL"
+    }
+
     fn publication_domain(&self) -> Option<rustvello_core::publication::PublicationDomain> {
         Some(Arc::clone(&self.db.domain))
     }

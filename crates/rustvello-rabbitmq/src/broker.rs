@@ -226,6 +226,10 @@ impl RabbitMqBroker {
 
 #[async_trait]
 impl Broker for RabbitMqBroker {
+    fn backend_name(&self) -> &'static str {
+        "RabbitMQ"
+    }
+
     async fn route_invocation_with_options(
         &self,
         invocation_id: &InvocationId,

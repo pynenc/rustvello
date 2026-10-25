@@ -456,6 +456,17 @@ impl PyAppConfig {
         self.inner.max_pending_seconds
     }
 
+    /// Recoveries after which an invocation fails (`0`: no limit).
+    #[getter]
+    fn max_invocation_recoveries(&self) -> u32 {
+        self.inner.max_invocation_recoveries
+    }
+
+    #[setter]
+    fn set_max_invocation_recoveries(&mut self, value: u32) {
+        self.inner.max_invocation_recoveries = value;
+    }
+
     #[getter]
     fn heartbeat_interval_seconds(&self) -> u64 {
         self.inner.heartbeat_interval_seconds

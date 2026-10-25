@@ -4,6 +4,93 @@ For detailed information on each version, please visit the [GitHub Releases page
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-25
+
+Operations feedback from a Celery migration on Kubernetes (MongoDB 3.6, RabbitMQ).
+
+- Fix: the monitoring dashboard served from the wheel had no CSS, JavaScript or
+  logo (every `/static/*` answered 404) because the assets were looked up on
+  disk in a source checkout. They are now compiled into the binary
+  (`include_dir`), so `App.start_monitor` and the CLI are self-contained. The
+  source-tree and CI fallback paths are gone; `RUSTVELLO_MONITORING_STATIC_DIR`
+  still serves a directory from disk for front-end work, and a value that is
+  not a directory is logged and ignored.
+- Runners fail loudly at start-up: the runner context write and read, the
+  first heartbeat, the active-runner read and the queue depth read are checked
+  before any work, and the first refused action stops the process with a
+  non-zero exit and a message naming the backend, the action and the backend's
+  own error (for MongoDB, `not authorized on <db>`). Heartbeat failures are
+  logged at `ERROR`, rate-limited to one line per minute with a count, with an
+  `INFO` line on recovery; before, they were `WARN` lines that were easy to miss.
+- `GET /health` (and `/api/health`) reports every component: 200 when every
+  backend answered, 503 otherwise, with a JSON body (`status`, `components`
+  with implementation and error, `runners.active`, `queues`, `problems`). The
+  monitor probes the backends before serving and refuses to start when one
+  refuses its credentials (`check_backends=False`, `--no-check` skip it).
+- JSON API for scripts and agents: `/api/runners`, `/api/invocations?status=`,
+  `/api/queues`, `/api/config`; `/api/capabilities` lists them (new fields only, so `schema_version` stays 1).
+- `python -m rustvello.doctor module:app [--json]` prints the health report and
+  exits 1 on a refused read or 2 when no runner is alive, for Kubernetes probes.
+  `App.health()` returns the same dictionary.
+- `python -m rustvello.monitor module:app [--read-only]` serves the dashboard
+  until SIGTERM or Ctrl-C; `App.start_monitor(block=True)` does the same in a
+  script. Before, a monitor process that was PID 1 in a container ignored
+  SIGTERM because nothing handled it.
+- Read-only monitor: `App.start_monitor(read_only=True)`, `--read-only` or
+  `RUSTVELLO_MONITORING_READ_ONLY=1` refuses purge, rerun and cancel (403) and
+  hides the purge buttons.
+- `App.send_task("module.task", kwargs, queue=..., priority=...)` submits a
+  task by name from a process that never imports its code (Celery's
+  `send_task`); a proxy carries the routing. `App.get_task` errors now say to
+  import the module or use `send_task`.
+- Fix: recovery could leave invocations in `RUNNING_RECOVERY` forever. The
+  non-atomic path (MongoDB, MongoDB 3.6, Redis, in-memory) wrote the recovery
+  status before resolving the task's route, so a task unknown to the
+  recovering process stopped there, and the error aborted the rest of the
+  pass. Now the route is resolved first (an unknown task is left untouched
+  for a runner that knows it), one invocation's error is logged and the pass
+  continues, and invocations left in `RUNNING_RECOVERY` / `PENDING_RECOVERY`
+  are recovered again once stale, on every backend.
+- Recovery limit: an invocation recovered `max_invocation_recoveries` times
+  (default 3, `0` for no limit) fails with a stored `RecoveryLimitExceeded`
+  error instead of being re-queued forever. Both recovery statuses may now
+  move to `FAILED`.
+- `App.run()` and `App.start_monitor()` start the Rust logger from the
+  configuration (`logging_level`, `log_format`, `compact_log_context`, so
+  `RUSTVELLO__LOGGING_LEVEL` applies); before, runner warnings and errors
+  were dropped unless the application called `init_logging()`. An earlier
+  `init_logging()` call keeps its settings.
+- Fix: `init_logging(stream="stderr")`, the default, wrote to stdout: the
+  stderr branch never set its writer. Logs now go to stderr, so a program's
+  own stdout stays clean.
+- Fix: a worker that dequeued a task it did not know returned an error after
+  setting the invocation to `Running`, which left it `Running` until stale
+  recovery. It now fails the invocation with a stored `TaskNotRegistered`
+  error that says to import the module in the worker image.
+- Worker processes (`App.run(num_processes=...)`) announce the tasks they
+  registered; a worker whose `import_path` loads fewer tasks than the runner
+  knows is refused at start-up with the module and the missing tasks named,
+  instead of failing every invocation in the child. `App.run` and the Celery
+  guide say that the `import_path` module must import every task module
+  (Celery's `include`).
+- Backends report their implementation (`SQLite`, `PostgreSQL`, `Redis`,
+  `MongoDB`, `MongoDB 3.6`, `RabbitMQ`) on the dashboard, in `/health` and in
+  `/api/config`, instead of "Unknown".
+- MongoDB: `App(mongo_db_verbatim=True)` (and `RustMongoPool(...,
+verbatim=True)`) uses `mongo_db` as the database name with no `_<app_id>`
+  suffix; the pools expose `database_name`. The `App` docstring says that
+  `mongo_db` is a prefix and applies to `mongo3` too.
+- Docs: a storage layout and permissions page (names and minimal rights per
+  backend, what `purge()` needs), more Celery rows (`send_task`,
+  `soft_time_limit`, `worker_prefetch_multiplier`, liveness probes, Flower,
+  `acks_late` and the "no invocation lost, no accidental repetition" contract),
+  the invocation id in log lines, and `llms.txt` entries for all of the above.
+- Typed: `App.start_monitor` returns `MonitorServer` (exported from
+  `rustvello`), which gains `url` and `read_only`.
+- Rust: `MonitorConfig` gains `read_only` and `check_backends`;
+  `serve_with_options`, `check_backends` and `health::health_report` are
+  public; `Broker::backend_name` is a new defaulted trait method.
+
 ## 0.8.0 - 2026-09-25
 
 - Fix: Python `app.trigger(...).register()` stored nothing, so cron and

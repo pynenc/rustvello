@@ -31,6 +31,10 @@ impl MongoBroker {
 
 #[async_trait]
 impl Broker for MongoBroker {
+    fn backend_name(&self) -> &'static str {
+        "MongoDB"
+    }
+
     async fn route_invocation_with_options(
         &self,
         invocation_id: &InvocationId,

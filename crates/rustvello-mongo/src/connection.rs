@@ -37,18 +37,37 @@ impl MongoPool {
         app_id: &str,
         max_pool_size: Option<u32>,
     ) -> Self {
+        Self::build(uri, format!("{db_name}_{app_id}"), max_pool_size)
+    }
+
+    /// Create a pool whose database is `db_name` exactly, with no `_{app_id}`
+    /// suffix: for operators who provision and grant databases ahead of time.
+    ///
+    /// Every process of the application (workers, producers, the monitor) must
+    /// then use the same `db_name`; nothing else isolates two apps that share it.
+    pub fn with_exact_database(uri: &str, db_name: &str, max_pool_size: Option<u32>) -> Self {
+        Self::build(uri, db_name.to_owned(), max_pool_size)
+    }
+
+    fn build(uri: &str, db_name: String, max_pool_size: Option<u32>) -> Self {
         let mut uri_string = uri.to_string();
         if let Some(size) = max_pool_size {
             // Append maxPoolSize as a connection-string option
             let sep = if uri_string.contains('?') { '&' } else { '?' };
             uri_string = format!("{uri_string}{sep}maxPoolSize={size}");
         }
-        let effective_db_name = format!("{db_name}_{app_id}");
         Self {
             uri: uri_string,
-            db_name: effective_db_name,
+            db_name,
             client: OnceCell::new(),
         }
+    }
+
+    /// The database this pool reads and writes (`{db_name}_{app_id}`, or the
+    /// exact name given to [`MongoPool::with_exact_database`]). This is the
+    /// database the credentials need `readWrite` on.
+    pub fn database_name(&self) -> &str {
+        &self.db_name
     }
 
     /// Get (or lazily create) a handle to the configured database.

@@ -16,6 +16,7 @@ mod control_plane;
 mod dispatcher;
 mod executor;
 pub(crate) mod executor_common;
+mod failure_log;
 mod persistent_tokio;
 #[cfg(feature = "rayon")]
 mod rayon_runner;

@@ -69,7 +69,7 @@ def test_durable_replay_restores_original_w3c_context_and_rejects_drift(tmp_path
     request_id = InvocationId()
     carrier = {
         "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-        "tracestate": "ih=replay",
+        "tracestate": "example=replay",
     }
     for _ in range(2):
         token = attach(extract(carrier))
@@ -77,7 +77,7 @@ def test_durable_replay_restores_original_w3c_context_and_rejects_drift(tmp_path
             assert str(work.submit_with_id(request_id).id) == str(request_id)
         finally:
             detach(token)
-    changed = {**carrier, "tracestate": "ih=changed"}
+    changed = {**carrier, "tracestate": "example=changed"}
     token = attach(extract(changed))
     try:
         with pytest.raises(Exception, match="different content or lineage"):

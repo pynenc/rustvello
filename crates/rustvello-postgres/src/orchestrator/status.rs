@@ -14,6 +14,10 @@ use crate::db::{parse_status, pg_err};
 
 #[async_trait]
 impl OrchestratorStatus for PostgresOrchestrator {
+    fn backend_name(&self) -> &'static str {
+        "PostgreSQL"
+    }
+
     fn guarantee_profile(&self) -> Option<&'static str> {
         Some("postgres")
     }

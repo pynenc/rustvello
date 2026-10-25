@@ -9,11 +9,13 @@
       "flush_telemetry",
       "foreign_task",
       "get_task",
+      "health",
       "import_path",
       "purge",
       "queue_depth",
       "queue_depths",
       "run",
+      "send_task",
       "start_monitor",
       "stop",
       "task",
@@ -54,6 +56,7 @@
     "InvocationId",
     "InvocationResult",
     "InvocationStatus",
+    "MonitorServer",
     "RustMemBroker",
     "RustMemClientDataStore",
     "RustMemOrchestrator",
@@ -124,6 +127,7 @@
       "import_path",
       "mongo_auth_source",
       "mongo_db",
+      "mongo_db_verbatim",
       "mongo_host",
       "mongo_password",
       "mongo_port",
@@ -149,9 +153,12 @@
       "worker_env"
     ],
     "App.start_monitor": [
+      "block",
+      "check_backends",
       "host",
       "log_level",
-      "port"
+      "port",
+      "read_only"
     ],
     "App.task": [
       "_is_workflow_task",
@@ -211,5 +218,5 @@
       "seconds"
     ]
   },
-  "version": "0.8.0"
+  "version": "0.9.0"
 }

@@ -710,9 +710,8 @@ dev_mode_force_sync = true
 max_pending_seconds = 500
 heartbeat_interval_seconds = 20
 "#;
-        let dir = std::env::temp_dir().join("rustvello_test_toml");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("test.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.toml");
         std::fs::write(&path, toml).unwrap();
 
         let app = Rustvello::builder()
@@ -725,8 +724,6 @@ heartbeat_interval_seconds = 20
         assert!(app.config.dev_mode_force_sync);
         assert_eq!(app.config.max_pending_seconds, 500);
         assert_eq!(app.config.heartbeat_interval_seconds, 20);
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
@@ -736,9 +733,8 @@ heartbeat_interval_seconds = 20
 app_id = "toml-app"
 max_pending_seconds = 500
 "#;
-        let dir = std::env::temp_dir().join("rustvello_test_toml_priority");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("priority.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("priority.toml");
         std::fs::write(&path, toml).unwrap();
 
         let app = Rustvello::builder()
@@ -751,8 +747,6 @@ max_pending_seconds = 500
         assert_eq!(app.config.app_id, "programmatic-app");
         // max_pending_seconds not set programmatically, so TOML wins
         assert_eq!(app.config.max_pending_seconds, 500);
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
@@ -773,9 +767,8 @@ dev_mode_force_sync = true
 max_pending_seconds = 111
 heartbeat_interval_seconds = 11
 "#;
-        let dir = std::env::temp_dir().join("rustvello_test_full_priority");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("full.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("full.toml");
         std::fs::write(&path, toml).unwrap();
 
         std::env::set_var("RUSTVELLO__APP_ID", "env-app");
@@ -800,7 +793,6 @@ heartbeat_interval_seconds = 11
         assert_eq!(app.config.heartbeat_interval_seconds, 11);
 
         clear_env_vars();
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

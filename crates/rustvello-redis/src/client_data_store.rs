@@ -29,6 +29,10 @@ impl RedisClientDataStore {
 
 #[async_trait]
 impl ClientDataStore for RedisClientDataStore {
+    fn backend_name(&self) -> &'static str {
+        "Redis"
+    }
+
     async fn store(&self, key: &str, value: &str) -> RustvelloResult<()> {
         let mut conn = self.pool.conn().await?;
         let rkey = format!("{}{}", self.key_prefix, key);

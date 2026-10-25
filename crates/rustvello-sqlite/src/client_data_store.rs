@@ -25,6 +25,10 @@ impl SqliteClientDataStore {
 
 #[async_trait]
 impl ClientDataStore for SqliteClientDataStore {
+    fn backend_name(&self) -> &'static str {
+        "SQLite"
+    }
+
     async fn store(&self, key: &str, value: &str) -> RustvelloResult<()> {
         let db = Arc::clone(&self.db);
         let key = key.to_owned();

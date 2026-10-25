@@ -115,11 +115,39 @@ pub(crate) async fn execute_invocation_common(
 
     tracing::Span::current().record("task_id", tracing::field::display(&inv_dto.task_id));
 
-    let task = deps.task_catalog.get(&inv_dto.task_id).ok_or_else(|| {
-        RustvelloError::TaskNotRegistered {
-            task_id: inv_dto.task_id.clone(),
+    // A task this worker does not know fails permanently with a stored error
+    // instead of staying RUNNING until stale recovery: a worker image missing
+    // the module, or a name submitted by `send_task` that nothing implements.
+    let Some(task) = deps.task_catalog.get(&inv_dto.task_id) else {
+        let message = format!(
+            "task {} is not registered in this runner: import the module that defines it in the \
+             process that runs the worker (with worker processes, the runner process must \
+             register it too), or route it to a runner that has it",
+            inv_dto.task_id
+        );
+        tracing::error!("Invocation status:failed permanently: {message}");
+        let written = deps
+            .lifecycle
+            .set_invocation_exception_with_context(
+                invocation_id,
+                "TaskNotRegistered",
+                &message,
+                worker_runner_id,
+                &inv_dto.task_id,
+                call_dto.serialized_arguments.0.clone(),
+            )
+            .await;
+        if !discard_if_cancelled(deps, invocation_id, written).await? {
+            if let Err(e) = deps
+                .lifecycle
+                .release_nontransactional_concurrency_slot(invocation_id)
+                .await
+            {
+                tracing::warn!("Failed to remove from CC index: {}", e);
+            }
         }
-    })?;
+        return Ok(());
+    };
     let resolved_task_config =
         deps.task_catalog
             .resolve_config(&deps.app_config, &inv_dto.task_id, task.config());

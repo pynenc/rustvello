@@ -284,14 +284,11 @@ impl Runner for RayonRunner {
                     self.control_plane.runner_language,
                     self.control_plane.executor_kind,
                 );
-            if let Err(e) = self
-                .control_plane
-                .state_backend
-                .store_runner_context(&runner_ctx)
-                .await
-            {
-                tracing::warn!("Failed to store runner context: {}", e);
-            }
+            // Fail at once when a backend refuses this runner's reads or writes;
+            // this also stores the runner context and the first heartbeat.
+            self.control_plane
+                .startup_check(&self.runner_id, &runner_ctx)
+                .await?;
 
             for worker_runner_id in self.worker_slot_ids() {
                 let worker_ctx = runner_ctx.new_child(worker_runner_id.to_string(), "RayonWorker");
@@ -308,8 +305,6 @@ impl Runner for RayonRunner {
                     );
                 }
             }
-
-            self.heartbeat().await.ok();
 
             let main_ctx = RunnerContext::new_with_runtime(
                 self.runner_id.clone(),
@@ -339,13 +334,13 @@ impl Runner for RayonRunner {
                 Duration::from_secs(self.control_plane.config.heartbeat_interval_seconds);
             let mut last_heartbeat = Instant::now();
 
+            let heartbeat_failures = super::failure_log::FailureLog::new("runner heartbeat");
             while !self.is_shutdown() {
                 if last_heartbeat.elapsed() >= heartbeat_interval {
-                    self.heartbeat().await.ok();
+                    heartbeat_failures.record(&self.heartbeat().await);
                     for worker_id in self.active_worker_ids() {
-                        if let Err(e) = self.control_plane.heartbeat(&worker_id, false).await {
-                            tracing::warn!("rayon worker:{} heartbeat failed: {}", worker_id, e);
-                        }
+                        heartbeat_failures
+                            .record(&self.control_plane.heartbeat(&worker_id, false).await);
                     }
                     last_heartbeat = Instant::now();
                 }
