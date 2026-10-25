@@ -62,7 +62,7 @@ macro_rules! impl_py_state_backend {
 
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| {
+                py.detach(|| {
                     rt.block_on(async {
                         backend.upsert_invocation(&inv, &call).await?;
                         if let Some(ref wf) = workflow {
@@ -84,7 +84,7 @@ macro_rules! impl_py_state_backend {
                 let id = crate::utils::parse_invocation_id(invocation_id)?;
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.store_result(&id, result)))
+                py.detach(|| rt.block_on(backend.store_result(&id, result)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -97,7 +97,7 @@ macro_rules! impl_py_state_backend {
                 let id = crate::utils::parse_invocation_id(invocation_id)?;
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.get_result(&id)))
+                py.detach(|| rt.block_on(backend.get_result(&id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -119,7 +119,7 @@ macro_rules! impl_py_state_backend {
                 };
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.store_error(&id, &error)))
+                py.detach(|| rt.block_on(backend.store_error(&id, &error)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -133,7 +133,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let error = py
-                    .allow_threads(|| rt.block_on(backend.get_error(&id)))
+                    .detach(|| rt.block_on(backend.get_error(&id)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(error.map(|e| e.to_string()))
             }
@@ -148,7 +148,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let error = py
-                    .allow_threads(|| rt.block_on(backend.get_error(&id)))
+                    .detach(|| rt.block_on(backend.get_error(&id)))
                     .map_err(crate::error::to_py_err)?;
                 match error {
                     Some(e) => {
@@ -165,7 +165,7 @@ macro_rules! impl_py_state_backend {
                 use rustvello_core::state_backend::StateBackendCore;
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.purge()))
+                py.detach(|| rt.block_on(backend.purge()))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -230,7 +230,7 @@ macro_rules! impl_py_state_backend {
                 };
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.add_history(&history)))
+                py.detach(|| rt.block_on(backend.add_history(&history)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -244,7 +244,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let history = py
-                    .allow_threads(|| rt.block_on(backend.get_history(&id)))
+                    .detach(|| rt.block_on(backend.get_history(&id)))
                     .map_err(crate::error::to_py_err)?;
                 serde_json::to_string(&history)
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
@@ -262,7 +262,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let inv = py
-                    .allow_threads(|| rt.block_on(backend.get_invocation(&id)))
+                    .detach(|| rt.block_on(backend.get_invocation(&id)))
                     .map_err(crate::error::to_py_err)?;
                 serde_json::to_string(&inv)
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
@@ -276,7 +276,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let call = py
-                    .allow_threads(|| rt.block_on(backend.get_call(&cid)))
+                    .detach(|| rt.block_on(backend.get_call(&cid)))
                     .map_err(crate::error::to_py_err)?;
                 serde_json::to_string(&call)
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
@@ -294,7 +294,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let children = py
-                    .allow_threads(|| rt.block_on(backend.get_child_invocations(&id)))
+                    .detach(|| rt.block_on(backend.get_child_invocations(&id)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(children.iter().map(|c| c.to_string()).collect())
             }
@@ -310,7 +310,7 @@ macro_rules! impl_py_state_backend {
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.store_workflow_run(&wf)))
+                py.detach(|| rt.block_on(backend.store_workflow_run(&wf)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -319,7 +319,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let types = py
-                    .allow_threads(|| rt.block_on(backend.get_all_workflow_types()))
+                    .detach(|| rt.block_on(backend.get_all_workflow_types()))
                     .map_err(crate::error::to_py_err)?;
                 Ok(types.iter().map(|t| t.to_string()).collect())
             }
@@ -337,7 +337,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let runs = py
-                    .allow_threads(|| rt.block_on(backend.get_workflow_runs(&task_id)))
+                    .detach(|| rt.block_on(backend.get_workflow_runs(&task_id)))
                     .map_err(crate::error::to_py_err)?;
                 runs.iter()
                     .map(|r| {
@@ -358,7 +358,7 @@ macro_rules! impl_py_state_backend {
                 let id = crate::utils::parse_invocation_id(workflow_invocation_id)?;
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.set_workflow_data(&id, key, value)))
+                py.detach(|| rt.block_on(backend.set_workflow_data(&id, key, value)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -372,7 +372,7 @@ macro_rules! impl_py_state_backend {
                 let id = crate::utils::parse_invocation_id(workflow_invocation_id)?;
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.get_workflow_data(&id, key)))
+                py.detach(|| rt.block_on(backend.get_workflow_data(&id, key)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -386,7 +386,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let invocations = py
-                    .allow_threads(|| rt.block_on(backend.get_workflow_invocations(&id)))
+                    .detach(|| rt.block_on(backend.get_workflow_invocations(&id)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(invocations.iter().map(|i| i.to_string()).collect())
             }
@@ -400,7 +400,7 @@ macro_rules! impl_py_state_backend {
                 use rustvello_core::state_backend::StateBackendQuery;
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.store_app_info(app_id, info_json)))
+                py.detach(|| rt.block_on(backend.store_app_info(app_id, info_json)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -412,7 +412,7 @@ macro_rules! impl_py_state_backend {
                 use rustvello_core::state_backend::StateBackendQuery;
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.get_app_info(app_id)))
+                py.detach(|| rt.block_on(backend.get_app_info(app_id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -423,7 +423,7 @@ macro_rules! impl_py_state_backend {
                 use rustvello_core::state_backend::StateBackendQuery;
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.get_all_app_infos()))
+                py.detach(|| rt.block_on(backend.get_all_app_infos()))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -438,7 +438,7 @@ macro_rules! impl_py_state_backend {
                 let sub_id = crate::utils::parse_invocation_id(sub_invocation_id)?;
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| {
+                py.detach(|| {
                     rt.block_on(backend.store_workflow_sub_invocation(&wf_id, &sub_id))
                 })
                 .map_err(crate::error::to_py_err)
@@ -454,7 +454,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let ids = py
-                    .allow_threads(|| rt.block_on(backend.get_workflow_sub_invocations(&wf_id)))
+                    .detach(|| rt.block_on(backend.get_workflow_sub_invocations(&wf_id)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(ids.iter().map(|id| id.to_string()).collect())
             }
@@ -464,7 +464,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let runs = py
-                    .allow_threads(|| rt.block_on(backend.get_all_workflow_runs()))
+                    .detach(|| rt.block_on(backend.get_all_workflow_runs()))
                     .map_err(crate::error::to_py_err)?;
                 runs.iter()
                     .map(|r| {
@@ -519,7 +519,7 @@ macro_rules! impl_py_state_backend {
                 };
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.store_runner_context(&ctx)))
+                py.detach(|| rt.block_on(backend.store_runner_context(&ctx)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -532,7 +532,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let ctx = py
-                    .allow_threads(|| rt.block_on(backend.get_runner_context(runner_id)))
+                    .detach(|| rt.block_on(backend.get_runner_context(runner_id)))
                     .map_err(crate::error::to_py_err)?;
                 match ctx {
                     Some(c) => {
@@ -554,7 +554,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let contexts = py
-                    .allow_threads(|| {
+                    .detach(|| {
                         rt.block_on(backend.get_runner_contexts_by_parent(parent_runner_id))
                     })
                     .map_err(crate::error::to_py_err)?;
@@ -579,7 +579,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let ids = py
-                    .allow_threads(|| {
+                    .detach(|| {
                         rt.block_on(backend.get_invocation_ids_by_runner(runner_id, limit, offset))
                     })
                     .map_err(crate::error::to_py_err)?;
@@ -594,7 +594,7 @@ macro_rules! impl_py_state_backend {
                 use rustvello_core::state_backend::StateBackendRunner;
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(backend.count_invocations_by_runner(runner_id)))
+                py.detach(|| rt.block_on(backend.count_invocations_by_runner(runner_id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -623,7 +623,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let history = py
-                    .allow_threads(|| {
+                    .detach(|| {
                         rt.block_on(backend.get_history_in_timerange(start, end, limit, offset))
                     })
                     .map_err(crate::error::to_py_err)?;
@@ -640,7 +640,7 @@ macro_rules! impl_py_state_backend {
                 let backend = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let contexts = py
-                    .allow_threads(|| rt.block_on(backend.get_matching_runner_contexts(partial_id)))
+                    .detach(|| rt.block_on(backend.get_matching_runner_contexts(partial_id)))
                     .map_err(crate::error::to_py_err)?;
                 contexts
                     .iter()

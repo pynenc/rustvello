@@ -57,7 +57,7 @@ pub(crate) fn apply_retry_policy(
 }
 
 /// Python wrapper for TaskConfig.
-#[pyclass(name = "TaskConfig")]
+#[pyclass(name = "TaskConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyTaskConfig {
     pub inner: TaskConfig,
@@ -215,7 +215,7 @@ impl PyTaskConfig {
 }
 
 /// Python wrapper for AppConfig.
-#[pyclass(name = "AppConfig")]
+#[pyclass(name = "AppConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyAppConfig {
     pub inner: AppConfig,
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn task_config_defaults() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let cfg = PyTaskConfig::new(0, "unlimited", None, false, "default", 0.0, false, vec![])
                 .unwrap();
             assert_eq!(cfg.max_retries(), 0);
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn task_config_custom_values() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let cfg = PyTaskConfig::new(
                 3,
                 "task",
@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn task_config_all_concurrency_types() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             for cc in &["unlimited", "task", "argument", "none"] {
                 assert!(
                     PyTaskConfig::new(0, cc, None, false, "default", 0.0, false, vec![]).is_ok()
@@ -591,7 +591,7 @@ mod tests {
 
     #[test]
     fn task_config_invalid_concurrency_type() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let result =
                 PyTaskConfig::new(0, "invalid", None, false, "default", 0.0, false, vec![]);
             assert!(result.is_err());
@@ -600,7 +600,7 @@ mod tests {
 
     #[test]
     fn task_config_repr() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let cfg = PyTaskConfig::new(2, "unlimited", None, true, "default", 0.0, true, vec![])
                 .unwrap();
             let repr = cfg.__repr__();

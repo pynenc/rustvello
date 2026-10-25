@@ -5,7 +5,7 @@
 ///
 /// Each backend keeps its own `#[new]` constructor in a separate
 /// `#[pymethods]` block. This macro generates the remaining 10 methods,
-/// all of which release the GIL via `py.allow_threads()`.
+/// all of which release the GIL via `py.detach()`.
 macro_rules! impl_py_broker {
     ($py_type:ty) => {
         #[pyo3::pymethods]
@@ -20,7 +20,7 @@ macro_rules! impl_py_broker {
                 let id = crate::utils::parse_invocation_id(invocation_id)?;
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(broker.route_invocation(&id)))
+                py.detach(|| rt.block_on(broker.route_invocation(&id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -37,7 +37,7 @@ macro_rules! impl_py_broker {
                     .collect::<pyo3::PyResult<_>>()?;
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(broker.route_invocations(&ids)))
+                py.detach(|| rt.block_on(broker.route_invocations(&ids)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -47,7 +47,7 @@ macro_rules! impl_py_broker {
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let result = py
-                    .allow_threads(|| rt.block_on(broker.retrieve_invocation(None)))
+                    .detach(|| rt.block_on(broker.retrieve_invocation(None)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(result.map(|id| id.as_str().to_string()))
             }
@@ -57,7 +57,7 @@ macro_rules! impl_py_broker {
                 use rustvello_core::broker::Broker;
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(broker.count_invocations(None)))
+                py.detach(|| rt.block_on(broker.count_invocations(None)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -66,7 +66,7 @@ macro_rules! impl_py_broker {
                 use rustvello_core::broker::Broker;
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(broker.purge(None)))
+                py.detach(|| rt.block_on(broker.purge(None)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -87,7 +87,7 @@ macro_rules! impl_py_broker {
                 );
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(broker.route_invocation_for_task(&id, &task_id)))
+                py.detach(|| rt.block_on(broker.route_invocation_for_task(&id, &task_id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -107,7 +107,7 @@ macro_rules! impl_py_broker {
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let result = py
-                    .allow_threads(|| rt.block_on(broker.retrieve_invocation(Some(&task_id))))
+                    .detach(|| rt.block_on(broker.retrieve_invocation(Some(&task_id))))
                     .map_err(crate::error::to_py_err)?;
                 Ok(result.map(|id| id.as_str().to_string()))
             }
@@ -125,7 +125,7 @@ macro_rules! impl_py_broker {
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let result = py
-                    .allow_threads(|| {
+                    .detach(|| {
                         rt.block_on(broker.retrieve_invocation_for_language(language))
                     })
                     .map_err(crate::error::to_py_err)?;
@@ -147,7 +147,7 @@ macro_rules! impl_py_broker {
                 );
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(broker.count_invocations(Some(&task_id))))
+                py.detach(|| rt.block_on(broker.count_invocations(Some(&task_id))))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -166,7 +166,7 @@ macro_rules! impl_py_broker {
                 );
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(broker.purge(Some(&task_id))))
+                py.detach(|| rt.block_on(broker.purge(Some(&task_id))))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -191,7 +191,7 @@ macro_rules! impl_py_broker {
                 let task_id = crate::utils::optional_task_id(language, task_module, task_name)?;
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| {
+                py.detach(|| {
                     rt.block_on(broker.route_invocation_with_options(
                         &id,
                         task_id.as_ref(),
@@ -224,7 +224,7 @@ macro_rules! impl_py_broker {
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 for id in &ids {
-                    py.allow_threads(|| {
+                    py.detach(|| {
                         rt.block_on(broker.route_invocation_with_options(
                             id,
                             task_id.as_ref(),
@@ -259,20 +259,20 @@ macro_rules! impl_py_broker {
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
                 let result = match (task_id, language) {
-                    (Some(task_id), _) => py.allow_threads(|| {
+                    (Some(task_id), _) => py.detach(|| {
                         rt.block_on(broker.retrieve_invocation_from_queue(queue_name, Some(&task_id)))
                     }),
                     (None, Some(language)) => {
                         let language = language
                             .parse::<rustvello_proto::identifiers::TaskLanguage>()
                             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-                        py.allow_threads(|| {
+                        py.detach(|| {
                             rt.block_on(
                                 broker.retrieve_invocation_for_language_from_queue(language, queue_name),
                             )
                         })
                     }
-                    (None, None) => py.allow_threads(|| {
+                    (None, None) => py.detach(|| {
                         rt.block_on(broker.retrieve_invocation_from_queue(queue_name, None))
                     }),
                 }
@@ -294,7 +294,7 @@ macro_rules! impl_py_broker {
                 let task_id = crate::utils::optional_task_id(language, task_module, task_name)?;
                 let broker = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| {
+                py.detach(|| {
                     rt.block_on(broker.count_invocations_in_queues(&queue_names, task_id.as_ref()))
                 })
                 .map_err(crate::error::to_py_err)

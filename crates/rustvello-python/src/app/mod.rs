@@ -53,7 +53,7 @@ impl PyRustvello {
     /// Switch synchronous in-process execution on or off at runtime (tests flip this).
     fn set_dev_mode_force_sync(&self, py: Python<'_>, enabled: bool) -> PyResult<()> {
         let app = Arc::clone(&self.inner);
-        py.allow_threads(|| {
+        py.detach(|| {
             shared_runtime()?.block_on(async {
                 app.lock().await.config.dev_mode_force_sync = enabled;
             });
@@ -70,7 +70,7 @@ impl PyRustvello {
         let emitter = crate::telemetry::emitter(endpoint, bearer_token)?;
         let app = Arc::clone(&self.inner);
         let shared = Arc::new(emitter.clone());
-        py.allow_threads(|| {
+        py.detach(|| {
             shared_runtime()?.block_on(async {
                 app.lock()
                     .await
@@ -101,7 +101,7 @@ impl PyRustvello {
         let emitter = self.telemetry.as_ref().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err("OTLP telemetry is not enabled")
         })?;
-        py.allow_threads(|| crate::telemetry::flush(emitter, timeout_ms))
+        py.detach(|| crate::telemetry::flush(emitter, timeout_ms))
     }
 
     #[pyo3(signature = (timeout_ms=5000))]
@@ -113,7 +113,7 @@ impl PyRustvello {
         let emitter = self.telemetry.as_ref().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err("OTLP telemetry is not enabled")
         })?;
-        py.allow_threads(|| crate::telemetry::shutdown(emitter, timeout_ms))
+        py.detach(|| crate::telemetry::shutdown(emitter, timeout_ms))
     }
 
     /// Register a Python callable as a task.
@@ -123,7 +123,7 @@ impl PyRustvello {
         py: Python<'_>,
         module: &str,
         name: &str,
-        func: PyObject,
+        func: Py<PyAny>,
         config: Option<PyTaskConfig>,
         replace: bool,
     ) -> PyResult<()> {
@@ -134,7 +134,7 @@ impl PyRustvello {
         // Wrap the Python function in a Rust closure
         let py_func = func.clone_ref(py);
         let task_fn: rustvello_core::task::TaskFn = Arc::new(move |args_json: String| {
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let result = py_func
                     .call1(py, (args_json,))
                     .map_err(|e| RustvelloError::runner_err(e.to_string()))?;
@@ -148,7 +148,7 @@ impl PyRustvello {
 
         // Release the GIL while waiting on the async lock so other Python
         // threads are not blocked during startup task registration.
-        py.allow_threads(|| {
+        py.detach(|| {
             shared_runtime()?.block_on(async {
                 let mut app = self.inner.lock().await;
                 if replace {
@@ -164,7 +164,7 @@ impl PyRustvello {
     fn unregister_task(&self, py: Python<'_>, module: &str, name: &str) -> PyResult<bool> {
         let task_id = TaskId::try_for_language(TaskLanguage::Python, module, name)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        py.allow_threads(|| {
+        py.detach(|| {
             shared_runtime()?.block_on(async {
                 let mut app = self.inner.lock().await;
                 Ok(app.unregister_task(&task_id))
@@ -190,7 +190,7 @@ impl PyRustvello {
         let task_id = parse_task_id(language, module, name)?;
         let task_config = config.map(|c| c.inner).unwrap_or_default();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             shared_runtime()?.block_on(async {
                 let mut app = self.inner.lock().await;
                 app.register_foreign_task(task_id, task_config)
@@ -217,7 +217,7 @@ impl PyRustvello {
     ) -> PyResult<()> {
         let task_id = parse_task_id(language, module, name)?;
         let task_config = config.map(|c| c.inner).unwrap_or_default();
-        py.allow_threads(|| {
+        py.detach(|| {
             shared_runtime()?.block_on(async {
                 let mut app = self.inner.lock().await;
                 if replace {
@@ -233,7 +233,7 @@ impl PyRustvello {
     /// function or as a proxy.
     fn has_task(&self, py: Python<'_>, language: &str, module: &str, name: &str) -> PyResult<bool> {
         let task_id = parse_task_id(language, module, name)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             shared_runtime()?.block_on(async {
                 let app = self.inner.lock().await;
                 Ok(app.task_registry().get_dyn(&task_id).is_some())
@@ -262,7 +262,7 @@ impl PyRustvello {
         }
 
         let app = Arc::clone(&self.inner);
-        let inv_id = py.allow_threads(|| {
+        let inv_id = py.detach(|| {
             shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -303,7 +303,7 @@ impl PyRustvello {
 
         let app = Arc::clone(&self.inner);
         let requested_id = invocation_id.map(|id| id.inner.clone());
-        let inv_id = py.allow_threads(|| {
+        let inv_id = py.detach(|| {
             shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -340,7 +340,7 @@ impl PyRustvello {
         let app = Arc::clone(&self.inner);
         let waiter_id = waiter.inner.clone();
         let waited_on_id = waited_on.inner.clone();
-        py.allow_threads(|| {
+        py.detach(|| {
             shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -376,7 +376,7 @@ impl PyRustvello {
         }
 
         let app = Arc::clone(&self.inner);
-        let result = py.allow_threads(|| {
+        let result = py.detach(|| {
             shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -398,7 +398,7 @@ impl PyRustvello {
     fn cancel(&self, py: Python<'_>, invocation_id: &PyInvocationId) -> PyResult<bool> {
         let app = Arc::clone(&self.inner);
         let inv_id = invocation_id.inner.clone();
-        py.allow_threads(|| {
+        py.detach(|| {
             shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -417,7 +417,7 @@ impl PyRustvello {
     ) -> PyResult<PyInvocationStatus> {
         let app = Arc::clone(&self.inner);
         let inv_id = invocation_id.inner.clone();
-        let status = py.allow_threads(|| {
+        let status = py.detach(|| {
             shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -437,7 +437,7 @@ impl PyRustvello {
     ) -> PyResult<Option<String>> {
         let app = Arc::clone(&self.inner);
         let inv_id = invocation_id.inner.clone();
-        py.allow_threads(|| {
+        py.detach(|| {
             shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -522,7 +522,7 @@ mod tests {
 
     #[test]
     fn new_without_config() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let app = PyRustvello::new(None).unwrap();
             assert_eq!(app.__repr__(), "Rustvello(...)");
         });
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn new_with_default_config() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let config = PyAppConfig {
                 inner: rustvello_proto::config::AppConfig::default(),
             };
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn submit_unknown_task_returns_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let app = PyRustvello::new(None).unwrap();
             let result = app.submit(py, "unknown_module", "unknown_func", None, None, None);
             assert!(result.is_err());
