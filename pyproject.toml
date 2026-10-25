@@ -12,11 +12,11 @@ dev = [
     "pytest>=7.2.0",
     "pre-commit>=2.20.0",
     "tox-uv>=1.11.3",
-    "pytest-cov>=4.0.0",
+    "pytest-cov>=7.1.0",
     "pytest-xdist>=3.5",
     "pytest-asyncio>=0.24.0",
-    "ruff>=0.6.9",
-    "maturin>=1.7.4",
+    "ruff>=0.17.0",
+    "maturin>=1.15.0",
     "mypy>=1.13.0",
     "tomli>=2.0; python_version < '3.11'",
     # exercised by the W3C trace-context tests; the wheel itself only needs it through the telemetry extra
@@ -26,10 +26,10 @@ docs = [
     "sphinx>=7.0",
     "sphinx-copybutton>=0.5.2",
     "sphinx-design>=0.5.0",
-    "sphinx-inline-tabs>=2023.4.21",
+    "sphinx-inline-tabs>=2025.12.21.14",
     "sphinxcontrib-mermaid>=0.9",
     "myst-parser>=2",
-    "furo>=2023",
+    "furo>=2025.12.19",
 ]
 
 [tool.mypy]
