@@ -201,11 +201,15 @@ impl OrchestratorConcurrency for RedisOrchestrator {
                 end
             end
 
-            -- Every indexed member owns or reserves one execution slot.
+            -- Every indexed member owns or reserves one execution slot. This
+            -- invocation's own entry (left by an attempt that recovery
+            -- rerouted) is not counted against it.
             local active = 0
             if intersection then
                 for id, _ in pairs(intersection) do
-                    active = active + 1
+                    if id ~= inv_id then
+                        active = active + 1
+                    end
                 end
             end
 

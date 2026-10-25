@@ -93,7 +93,8 @@ impl OrchestratorRecovery for SqliteOrchestrator {
                     "SELECT sr.invocation_id FROM status_records sr
                      LEFT JOIN runner_heartbeats rh ON sr.runner_id = rh.runner_id
                      WHERE sr.status = 'RUNNING'
-                       AND (rh.last_heartbeat IS NULL OR rh.last_heartbeat < ?1)",
+                       AND ((rh.last_heartbeat IS NULL AND sr.timestamp < ?1)
+                            OR rh.last_heartbeat < ?1)",
                 )
                 .map_err(sql_err)?;
 

@@ -361,8 +361,8 @@ async fn test_recover_stale_pending_invocation() {
 #[tokio::test]
 async fn test_recover_stale_running_invocation() {
     let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
-    let orchestrator: Arc<dyn InvocationControlBackend> =
-        Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
+    let mem_orchestrator = Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
+    let orchestrator: Arc<dyn InvocationControlBackend> = Arc::clone(&mem_orchestrator) as _;
     let state_backend: Arc<dyn StateBackend> =
         Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
 
@@ -417,6 +417,10 @@ async fn test_recover_stale_running_invocation() {
         .set_invocation_status(&inv_id, InvocationStatus::Running, Some(&dead_runner_id))
         .await
         .unwrap();
+    // The dead runner never heartbeated and its RUNNING status is old.
+    mem_orchestrator
+        .backdate_status_for_testing(&inv_id, chrono::Duration::seconds(600))
+        .await;
 
     let recovered = runner.recover_stale_invocations().await.unwrap();
     assert_eq!(recovered, 1);
@@ -781,6 +785,21 @@ fn make_runner_with_config(
     (runner, orchestrator, state_backend, broker)
 }
 
+/// An invocation registered and stored but not queued: it already runs on
+/// another runner, so this runner must never dequeue it.
+async fn register_running_elsewhere(
+    orchestrator: &dyn InvocationControlBackend,
+    state_backend: &dyn StateBackend,
+    task_id: &TaskId,
+    args: SerializedArguments,
+) -> InvocationId {
+    let call = CallDTO::new(task_id.clone(), args);
+    let inv_id = orchestrator.register_invocation(&call).await.unwrap();
+    let dto = InvocationDTO::new(inv_id.clone(), task_id.clone(), call.call_id.clone());
+    state_backend.upsert_invocation(&dto, &call).await.unwrap();
+    inv_id
+}
+
 async fn submit_invocation(
     orchestrator: &dyn InvocationControlBackend,
     state_backend: &dyn StateBackend,
@@ -842,7 +861,7 @@ async fn test_cc_reroute_on_cc_re_enqueues() {
     let mut args2 = SerializedArguments::new();
     args2.insert("x", "6");
 
-    let inv1 = submit_invocation(&*orchestrator, &*state_backend, &*broker, &task_id, args1).await;
+    let inv1 = register_running_elsewhere(&*orchestrator, &*state_backend, &task_id, args1).await;
     let _inv2 = submit_invocation(&*orchestrator, &*state_backend, &*broker, &task_id, args2).await;
 
     let fake_runner = RunnerId::from_string("fake-runner");
@@ -880,7 +899,7 @@ async fn test_cc_final_rejection_without_reroute() {
     let mut args2 = SerializedArguments::new();
     args2.insert("x", "20");
 
-    let inv1 = submit_invocation(&*orchestrator, &*state_backend, &*broker, &task_id, args1).await;
+    let inv1 = register_running_elsewhere(&*orchestrator, &*state_backend, &task_id, args1).await;
     let inv2 = submit_invocation(&*orchestrator, &*state_backend, &*broker, &task_id, args2).await;
 
     let fake_runner = RunnerId::from_string("fake-runner");
@@ -1344,6 +1363,11 @@ async fn orphaned_running(fixture: &RecoveryFixture, task: &str) -> InvocationId
             .await
             .unwrap();
     }
+    // Old enough for recovery: the dead runner never heartbeated.
+    fixture
+        .mem_orchestrator
+        .backdate_status_for_testing(&inv_id, chrono::Duration::seconds(600))
+        .await;
     inv_id
 }
 
@@ -1484,7 +1508,9 @@ mod sqlite_recovery {
     #[tokio::test]
     async fn unknown_task_is_left_untouched_and_the_pass_continues() {
         let dir = tempfile::tempdir().unwrap();
-        let fixture = sqlite_fixture(dir.path(), AppConfig::default());
+        let mut config = AppConfig::default();
+        config.runner_dead_after_seconds = 0;
+        let fixture = sqlite_fixture(dir.path(), config);
         let unknown = orphaned_running(&fixture, "unknown").await;
         let known = orphaned_running(&fixture, "known").await;
         assert_eq!(fixture.runner.recover_stale_invocations().await.unwrap(), 1);
@@ -1519,6 +1545,7 @@ mod sqlite_recovery {
         let dir = tempfile::tempdir().unwrap();
         let mut config = AppConfig::default();
         config.max_invocation_recoveries = 1;
+        config.runner_dead_after_seconds = 0;
         let fixture = sqlite_fixture(dir.path(), config);
         let inv_id = orphaned_running(&fixture, "known").await;
         fixture
@@ -1543,4 +1570,119 @@ mod sqlite_recovery {
             .unwrap();
         assert_eq!(error.error_type, "RecoveryLimitExceeded");
     }
+}
+
+/// Client report: a fresh worker's running invocation was rerouted by another
+/// pod's recovery; when the task finished, the completion was rejected
+/// (`REROUTED -> SUCCESS`) and the concurrency slot leaked for good, so the
+/// task could never run again. The attempt must end cleanly and free the slot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rejected_completion_after_a_reroute_releases_the_slot() {
+    let mut config = TaskConfig::default();
+    config.concurrency_control = ConcurrencyControlType::Task;
+    config.running_concurrency = Some(1);
+
+    let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
+    let orchestrator: Arc<dyn InvocationControlBackend> =
+        Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
+    let state_backend: Arc<dyn StateBackend> =
+        Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
+    let task_id = TaskId::new("test", "slow");
+    let mut registry = TaskRegistry::new();
+    registry
+        .register(TaskDefinition::new(
+            task_id.clone(),
+            config.clone(),
+            Arc::new(|_args: String| {
+                std::thread::sleep(Duration::from_millis(400));
+                Ok("1".to_owned())
+            }),
+        ))
+        .unwrap();
+    let runner = Arc::new(PersistentTokioRunner::new(
+        "test-app".to_string(),
+        AppConfig::default(),
+        Arc::clone(&broker),
+        Arc::clone(&orchestrator),
+        Arc::clone(&state_backend),
+        Arc::new(registry),
+        None,
+    ));
+
+    let inv_id = submit_invocation(
+        &*orchestrator,
+        &*state_backend,
+        &*broker,
+        &task_id,
+        SerializedArguments::new(),
+    )
+    .await;
+    let attempt = {
+        let runner = Arc::clone(&runner);
+        tokio::spawn(async move { runner.run_one().await })
+    };
+    for _ in 0..200 {
+        if orchestrator
+            .get_invocation_status(&inv_id)
+            .await
+            .unwrap()
+            .status
+            == InvocationStatus::Running
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // Another pod's recovery takes the invocation over while it runs.
+    let recoverer = RunnerId::from_string("other-pod-recovery");
+    for status in [
+        InvocationStatus::RunningRecovery,
+        InvocationStatus::Rerouted,
+    ] {
+        orchestrator
+            .set_invocation_status(&inv_id, status, Some(&recoverer))
+            .await
+            .unwrap();
+    }
+
+    let outcome = attempt.await.unwrap();
+    assert!(
+        outcome.is_ok(),
+        "a rejected completion is a discarded outcome, not a worker error: {outcome:?}"
+    );
+    assert_eq!(
+        orchestrator
+            .get_invocation_status(&inv_id)
+            .await
+            .unwrap()
+            .status,
+        InvocationStatus::Rerouted
+    );
+
+    // The slot is free: another invocation of the task can take it.
+    let other = submit_invocation(
+        &*orchestrator,
+        &*state_backend,
+        &*broker,
+        &task_id,
+        SerializedArguments::new(),
+    )
+    .await;
+    orchestrator
+        .set_invocation_status(&other, InvocationStatus::Pending, Some(&recoverer))
+        .await
+        .unwrap();
+    assert!(
+        orchestrator
+            .try_acquire_concurrency_slot(
+                &other,
+                &task_id,
+                &config,
+                Some(&SerializedArguments::new())
+            )
+            .await
+            .unwrap(),
+        "the taken-over attempt released its concurrency slot"
+    );
 }

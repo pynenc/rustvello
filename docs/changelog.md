@@ -6,6 +6,21 @@ For detailed information on each version, please visit the [GitHub Releases page
 
 ## 0.9.1 - 2026-10-26
 
+- Fix: a fresh worker's running invocation could be "recovered" within
+  seconds, and its concurrency slot then leaked for good, blocking the task
+  (reported after a pod start: the main queue was blocked for about an hour).
+  Four changes, on every backend:
+  - each worker sends its first heartbeat when it is registered (and after a
+    reconnect), not at the next management cycle;
+  - a runner with no heartbeat yet gets a grace period: its RUNNING
+    invocation counts as stale only once the RUNNING status itself is older
+    than `runner_dead_after_seconds`;
+  - when a completion is rejected because recovery took the invocation over,
+    the attempt ends cleanly (no worker restart), the outcome is discarded
+    with a warning, and the concurrency slot is released unless the rerouted
+    copy already runs elsewhere;
+  - a concurrency slot check no longer counts the invocation's own leftover
+    entry, so its rerouted copy can run.
 - Wheels use Python's stable ABI (`abi3`): one wheel per platform for every
   CPython from 3.12 up, including 3.14, instead of one per Python version. A
   release shrinks from 21 wheels (about 370 MB) to 5.

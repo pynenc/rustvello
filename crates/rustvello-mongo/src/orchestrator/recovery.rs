@@ -100,8 +100,7 @@ impl OrchestratorRecovery for MongoOrchestrator {
                     { "heartbeat.timestamp": { "$lt": &threshold_str } },
                 ],
             } },
-            // Project only _id
-            doc! { "$project": { "_id": 1 } },
+            doc! { "$project": { "_id": 1, "record": 1, "heartbeat": 1 } },
         ];
 
         let mut cursor = col.aggregate(pipeline).await.map_err(mongo_err)?;
@@ -109,6 +108,20 @@ impl OrchestratorRecovery for MongoOrchestrator {
         use futures_util::StreamExt;
         while let Some(doc_result) = StreamExt::next(&mut cursor).await {
             let d = doc_result.map_err(mongo_err)?;
+            // A runner that has not sent its first heartbeat yet (a worker
+            // that just started) is not dead: without a heartbeat the
+            // invocation is stale only once its RUNNING status is older than
+            // the threshold too.
+            if !d.contains_key("heartbeat") {
+                let recent = d
+                    .get_str("record")
+                    .ok()
+                    .and_then(|raw| super::deserialize_record(raw).ok())
+                    .is_some_and(|record| record.timestamp >= threshold);
+                if recent {
+                    continue;
+                }
+            }
             if let Ok(id) = d.get_str("_id") {
                 stale.push(InvocationId::from_string(id.to_string()));
             }

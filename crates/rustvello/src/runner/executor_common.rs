@@ -137,7 +137,13 @@ pub(crate) async fn execute_invocation_common(
                 call_dto.serialized_arguments.0.clone(),
             )
             .await;
-        if !discard_if_cancelled(deps, invocation_id, written).await? {
+        let discarded = discarded_outcome(deps, invocation_id, worker_runner_id, written).await?;
+        if !matches!(
+            discarded,
+            Some(Discarded::TakenOver {
+                holder_running: true
+            })
+        ) {
             if let Err(e) = deps
                 .lifecycle
                 .release_nontransactional_concurrency_slot(invocation_id)
@@ -262,13 +268,14 @@ pub(crate) async fn execute_invocation_common(
 
     // --- 8. Handle result ---
     if interruption == Some(Interruption::Cancelled) {
-        finish_cancelled(
+        finish_discarded(
             deps,
             invocation_id,
             worker_runner_id,
             &inv_dto.task_id,
             Some(telemetry_context),
             exec_start.elapsed(),
+            Discarded::Cancelled,
         )
         .await;
         return Ok(());
@@ -285,14 +292,17 @@ pub(crate) async fn execute_invocation_common(
                     call_dto.serialized_arguments.0.clone(),
                 )
                 .await;
-            if discard_if_cancelled(deps, invocation_id, written).await? {
-                finish_cancelled(
+            if let Some(reason) =
+                discarded_outcome(deps, invocation_id, worker_runner_id, written).await?
+            {
+                finish_discarded(
                     deps,
                     invocation_id,
                     worker_runner_id,
                     &inv_dto.task_id,
                     Some(telemetry_context),
                     exec_start.elapsed(),
+                    reason,
                 )
                 .await;
                 return Ok(());
@@ -387,14 +397,17 @@ pub(crate) async fn execute_invocation_common(
                         delay,
                     )
                     .await;
-                if discard_if_cancelled(deps, invocation_id, written).await? {
-                    finish_cancelled(
+                if let Some(reason) =
+                    discarded_outcome(deps, invocation_id, worker_runner_id, written).await?
+                {
+                    finish_discarded(
                         deps,
                         invocation_id,
                         worker_runner_id,
                         &inv_dto.task_id,
                         None,
                         exec_duration,
+                        reason,
                     )
                     .await;
                     return Ok(());
@@ -423,14 +436,17 @@ pub(crate) async fn execute_invocation_common(
                         call_dto.serialized_arguments.0.clone(),
                     )
                     .await;
-                if discard_if_cancelled(deps, invocation_id, written).await? {
-                    finish_cancelled(
+                if let Some(reason) =
+                    discarded_outcome(deps, invocation_id, worker_runner_id, written).await?
+                {
+                    finish_discarded(
                         deps,
                         invocation_id,
                         worker_runner_id,
                         &inv_dto.task_id,
                         None,
                         exec_duration,
+                        reason,
                     )
                     .await;
                     return Ok(());
@@ -470,13 +486,29 @@ pub(crate) async fn execute_invocation_common(
 
 /// `Ok(true)` when a lifecycle write failed only because a user cancelled the
 /// invocation meanwhile: the attempt's outcome is discarded, not an error.
-async fn discard_if_cancelled(
+/// Why an attempt's outcome was not written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Discarded {
+    /// A user cancelled the invocation while it ran.
+    Cancelled,
+    /// Recovery rerouted the invocation while this attempt ran (for example a
+    /// runner that looked dead). `holder_running` is true when another worker
+    /// already runs the rerouted copy and so holds its concurrency slot.
+    TakenOver { holder_running: bool },
+}
+
+/// Whether a rejected outcome write means "discard this attempt" instead of
+/// an error. A rejection by the status machine or ownership fencing is
+/// expected after a cancellation or a recovery reroute; anything else is a
+/// real error.
+async fn discarded_outcome(
     deps: &ExecutionDeps,
     invocation_id: &InvocationId,
+    worker_runner_id: &RunnerId,
     written: RustvelloResult<()>,
-) -> RustvelloResult<bool> {
+) -> RustvelloResult<Option<Discarded>> {
     match written {
-        Ok(()) => Ok(false),
+        Ok(()) => Ok(None),
         Err(
             error @ (RustvelloError::InvalidStatusTransition { .. }
             | RustvelloError::OwnershipViolation { .. }
@@ -484,37 +516,71 @@ async fn discard_if_cancelled(
         ) => {
             if deps.lifecycle.is_cancelled(invocation_id).await {
                 tracing::info!(%invocation_id, "invocation was cancelled; late attempt outcome discarded");
-                Ok(true)
-            } else {
-                Err(error)
+                return Ok(Some(Discarded::Cancelled));
             }
+            let record = deps.lifecycle.current_status(invocation_id).await;
+            let current = record.as_ref().map(|record| record.status);
+            let holder_running = matches!(
+                current,
+                Some(InvocationStatus::Pending | InvocationStatus::Running)
+            );
+            // Still ours (an ambiguous write, not a take-over): keep the error so
+            // the worker is retired and its heartbeat cannot pin the invocation.
+            if holder_running
+                && record.as_ref().and_then(|record| record.runner_id.as_ref())
+                    == Some(worker_runner_id)
+            {
+                return Err(error);
+            }
+            tracing::warn!(
+                %invocation_id,
+                %error,
+                current = ?current,
+                "attempt outcome rejected: the invocation was taken over (recovered) while it ran; outcome discarded"
+            );
+            Ok(Some(Discarded::TakenOver { holder_running }))
         }
         Err(error) => Err(error),
     }
 }
 
-/// Bookkeeping for an attempt whose invocation was cancelled by a user.
-async fn finish_cancelled(
+/// Bookkeeping for an attempt whose outcome was discarded: the invocation was
+/// cancelled, or recovery took it over while it ran.
+///
+/// The concurrency slot is released unless another worker already runs the
+/// rerouted copy (it holds the slot and releases it when it ends); a slot
+/// kept by a taken-over attempt would block the task for good.
+async fn finish_discarded(
     deps: &ExecutionDeps,
     invocation_id: &InvocationId,
     worker_runner_id: &RunnerId,
     task_id: &rustvello_proto::identifiers::TaskId,
     telemetry_context: Option<TaskAttemptContext>,
     duration: std::time::Duration,
+    reason: Discarded,
 ) {
-    if let Err(e) = deps
-        .lifecycle
-        .release_nontransactional_concurrency_slot(invocation_id)
-        .await
-    {
-        tracing::warn!("Failed to remove from CC index: {}", e);
+    let release = !matches!(
+        reason,
+        Discarded::TakenOver {
+            holder_running: true
+        }
+    );
+    if release {
+        if let Err(e) = deps
+            .lifecycle
+            .release_nontransactional_concurrency_slot(invocation_id)
+            .await
+        {
+            tracing::warn!("Failed to remove from CC index: {}", e);
+        }
     }
+    let label = match reason {
+        Discarded::Cancelled => "InvocationCancelled",
+        Discarded::TakenOver { .. } => "InvocationTakenOver",
+    };
     if let Some(context) = telemetry_context {
-        deps.emitter.on_task_lifecycle(&TaskLifecycleEvent::failed(
-            context,
-            "InvocationCancelled",
-            duration,
-        ));
+        deps.emitter
+            .on_task_lifecycle(&TaskLifecycleEvent::failed(context, label, duration));
     }
     if let Some(ref ws) = deps.worker_states {
         if let Ok(mut ws) = ws.lock() {
@@ -524,7 +590,12 @@ async fn finish_cancelled(
                 state.started_at = None;
                 state.last_result = Some(LastResult::Failed {
                     task_id: task_id.clone(),
-                    error: "invocation cancelled".to_owned(),
+                    error: match reason {
+                        Discarded::Cancelled => "invocation cancelled".to_owned(),
+                        Discarded::TakenOver { .. } => {
+                            "invocation taken over by recovery".to_owned()
+                        }
+                    },
                 });
                 state.invocations_completed += 1;
             }

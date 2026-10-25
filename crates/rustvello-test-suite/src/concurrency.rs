@@ -75,6 +75,50 @@ pub async fn test_try_acquire_slot_at_limit(orch: &dyn InvocationControlBackend)
     assert!(!acquired, "Second slot should be rejected at limit");
 }
 
+/// An invocation whose own slot entry is still indexed (an attempt that
+/// recovery rerouted) can acquire its slot again; another invocation cannot.
+pub async fn test_own_slot_entry_does_not_block_reacquire(orch: &dyn InvocationControlBackend) {
+    let task_id = test_task_id("cc_own_entry");
+    let mut config = TaskConfig::default();
+    config.concurrency_control = ConcurrencyControlType::Task;
+    config.running_concurrency = Some(1);
+
+    let mut args = SerializedArguments::new();
+    args.insert("x", "1");
+
+    let call1 = CallDTO::new(task_id.clone(), args.clone());
+    let inv1 = orch.register_invocation(&call1).await.unwrap();
+    let runner = rustvello_proto::identifiers::RunnerId::from_string("own-entry-runner");
+    orch.set_invocation_status(&inv1, InvocationStatus::Pending, Some(&runner))
+        .await
+        .unwrap();
+    assert!(orch
+        .try_acquire_concurrency_slot(&inv1, &task_id, &config, Some(&args))
+        .await
+        .unwrap());
+    // The rerouted copy of the same invocation asks again.
+    assert!(
+        orch.try_acquire_concurrency_slot(&inv1, &task_id, &config, Some(&args))
+            .await
+            .unwrap(),
+        "an invocation's own leftover entry must not count against it"
+    );
+
+    let call2 = CallDTO::new(task_id.clone(), args.clone());
+    let inv2 = orch.register_invocation(&call2).await.unwrap();
+    let runner2 = rustvello_proto::identifiers::RunnerId::from_string("own-entry-runner-2");
+    orch.set_invocation_status(&inv2, InvocationStatus::Pending, Some(&runner2))
+        .await
+        .unwrap();
+    assert!(
+        !orch
+            .try_acquire_concurrency_slot(&inv2, &task_id, &config, Some(&args))
+            .await
+            .unwrap(),
+        "another invocation is still refused at the limit"
+    );
+}
+
 /// After releasing a slot, a new invocation can acquire it.
 pub async fn test_try_acquire_after_release(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("cc_release");
@@ -282,6 +326,12 @@ macro_rules! concurrency_suite {
         }
 
         #[tokio::test]
+        async fn suite_cc_own_slot_entry_does_not_block_reacquire() {
+            let orch = $setup;
+            $crate::concurrency::test_own_slot_entry_does_not_block_reacquire(&orch).await;
+        }
+
+        #[tokio::test]
         async fn suite_cc_try_acquire_after_release() {
             let orch = $setup;
             $crate::concurrency::test_try_acquire_after_release(&orch).await;
@@ -329,6 +379,13 @@ macro_rules! async_concurrency_suite {
         async fn suite_cc_try_acquire_at_limit() {
             let (_c, orch) = $setup.await;
             $crate::concurrency::test_try_acquire_slot_at_limit(&orch).await;
+        }
+
+        #[tokio::test]
+        #[ignore = "requires Docker"]
+        async fn suite_cc_own_slot_entry_does_not_block_reacquire() {
+            let (_c, orch) = $setup.await;
+            $crate::concurrency::test_own_slot_entry_does_not_block_reacquire(&orch).await;
         }
 
         #[tokio::test]

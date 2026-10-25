@@ -69,7 +69,9 @@ impl OrchestratorRecovery for MemOrchestrator {
                 if let Some(ref runner_id) = record.runner_id {
                     match state.heartbeats.get(runner_id.as_str()) {
                         Some(last_hb) => (now - *last_hb).num_seconds() > dead_seconds,
-                        None => true, // No heartbeat ever registered — consider dead
+                        // No heartbeat yet (a worker that just started): stale
+                        // only once the RUNNING status itself is old.
+                        None => record.timestamp < now - chrono::Duration::seconds(dead_seconds),
                     }
                 } else {
                     // No runner_id on a Running invocation — shouldn't happen but treat as stale
