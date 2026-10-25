@@ -80,7 +80,9 @@ jobs:
   pr-version:
     name: PR Version
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    # Dependabot PRs build no wheels and upload nothing to TestPyPI: their
+    # tests run in Main CI, and their uploads filled TestPyPI's 10 GB quota.
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
     outputs:
       version: ${{ steps.set-version.outputs.version }}
       pep440_version: ${{ steps.set-version.outputs.pep440_version }}
@@ -106,6 +108,12 @@ jobs:
     if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
+
+      # PyO3 0.22 supports Python up to 3.13; ubuntu-latest (26.04) ships 3.14.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable

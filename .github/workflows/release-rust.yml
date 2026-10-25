@@ -52,6 +52,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # PyO3 0.22 supports Python up to 3.13; ubuntu-latest (26.04) ships 3.14.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 

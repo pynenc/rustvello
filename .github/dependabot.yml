@@ -1,6 +1,11 @@
 # Version updates wait 15 days after a release (cooldown) and skip patch
 # releases; security updates are not delayed. The root Cargo.lock and uv.lock
 # cover py-rustvello too, so each ecosystem has one entry at "/".
+#
+# One pull request per ecosystem (minor and major updates grouped), and no
+# automatic rebase when main moves: a merge to main used to rebase every open
+# Dependabot PR and start about 8 workflows for each. Comment
+# "@dependabot rebase" on a PR to refresh it.
 version: 2
 updates:
   # GitHub Actions
@@ -8,6 +13,8 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
+    rebase-strategy: disabled
+    open-pull-requests-limit: 2
     cooldown:
       default-days: 15
     ignore:
@@ -25,6 +32,8 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
+    rebase-strategy: disabled
+    open-pull-requests-limit: 2
     cooldown:
       default-days: 15
     ignore:
@@ -37,13 +46,15 @@ updates:
     groups:
       rust-dependencies:
         patterns: ["*"]
-        update-types: ["minor"]
+        update-types: ["minor", "major"]
 
   # Python (uv workspace: py-rustvello and the dev tooling)
   - package-ecosystem: uv
     directory: "/"
     schedule:
       interval: monthly
+    rebase-strategy: disabled
+    open-pull-requests-limit: 2
     cooldown:
       default-days: 15
     ignore:
@@ -55,4 +66,4 @@ updates:
     groups:
       python-dependencies:
         patterns: ["*"]
-        update-types: ["minor"]
+        update-types: ["minor", "major"]
