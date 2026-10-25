@@ -78,7 +78,11 @@ impl RabbitMqBroker {
         );
         let channel = self.conn.channel().await.map_err(broker_err)?;
         let state = channel
-            .queue_declare(&queue_name, QueueDeclareOptions::default(), arguments)
+            .queue_declare(
+                queue_name.as_str().into(),
+                QueueDeclareOptions::default(),
+                arguments,
+            )
             .await
             .map_err(broker_err)?;
         self.logical_queues
@@ -134,7 +138,10 @@ impl RabbitMqBroker {
         let mut held = Vec::new();
         for _ in 0..message_count {
             let Some(message) = channel
-                .basic_get(&queue_name, BasicGetOptions { no_ack: false })
+                .basic_get(
+                    queue_name.as_str().into(),
+                    BasicGetOptions { no_ack: false },
+                )
                 .await
                 .map_err(broker_err)?
             else {
@@ -191,7 +198,10 @@ impl RabbitMqBroker {
         let mut count = 0;
         for _ in 0..message_count {
             let Some(message) = channel
-                .basic_get(&queue_name, BasicGetOptions { no_ack: false })
+                .basic_get(
+                    queue_name.as_str().into(),
+                    BasicGetOptions { no_ack: false },
+                )
                 .await
                 .map_err(broker_err)?
             else {
@@ -251,8 +261,8 @@ impl Broker for RabbitMqBroker {
         let channel = self.conn.channel().await.map_err(broker_err)?;
         channel
             .basic_publish(
-                "",
-                &self.queue_name(queue_name, language),
+                "".into(),
+                self.queue_name(queue_name, language).into(),
                 BasicPublishOptions::default(),
                 &envelope,
                 BasicProperties::default().with_priority(Self::priority_rank(priority)),
@@ -381,7 +391,7 @@ impl Broker for RabbitMqBroker {
                 self.ensure_queue(&queue_name, language).await?;
                 channel
                     .queue_purge(
-                        &self.queue_name(&queue_name, language),
+                        self.queue_name(&queue_name, language).into(),
                         QueuePurgeOptions::default(),
                     )
                     .await
