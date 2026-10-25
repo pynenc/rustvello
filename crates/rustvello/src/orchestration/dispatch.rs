@@ -224,7 +224,7 @@ pub(crate) fn queue_names_for_retrieval(config: &AppConfig) -> Vec<String> {
             let start = NEXT_QUEUE_INDEX.fetch_add(1, Ordering::Relaxed) % queues.len();
             queues.rotate_left(start);
         }
-        QueueSelectionStrategy::Random => queues.shuffle(&mut rand::thread_rng()),
+        QueueSelectionStrategy::Random => queues.shuffle(&mut rand::rng()),
         _ => {}
     }
     queues

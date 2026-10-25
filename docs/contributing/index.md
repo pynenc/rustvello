@@ -17,7 +17,7 @@ testing/index
 ## Prerequisites
 
 - [Rust](https://www.rust-lang.org/tools/install) (stable toolchain, 1.85+)
-- [Python](https://www.python.org/downloads/) 3.9+ for wheels; 3.12+ for development
+- [Python](https://www.python.org/downloads/) 3.12+
 - [uv](https://docs.astral.sh/uv/) (Python package manager)
 - [maturin](https://www.maturin.rs/) (for building Python bindings)
 - [make](https://www.gnu.org/software/make/) (build automation)

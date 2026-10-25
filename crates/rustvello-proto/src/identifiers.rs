@@ -52,7 +52,9 @@ impl std::str::FromStr for TaskLanguage {
 /// Local runtime used by a runner process to execute task code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ExecutorKind {
+    #[default]
     Tokio,
     TokioBlocking,
     Rayon,
@@ -67,12 +69,6 @@ impl ExecutorKind {
             Self::Rayon => "rayon",
             Self::Python => "python",
         }
-    }
-}
-
-impl Default for ExecutorKind {
-    fn default() -> Self {
-        Self::Tokio
     }
 }
 

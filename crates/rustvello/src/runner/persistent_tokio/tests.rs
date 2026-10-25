@@ -434,9 +434,7 @@ async fn test_recover_stale_running_invocation() {
 #[test]
 fn test_default_workers_matches_cpu_count() {
     let (runner, _, _) = make_runner();
-    let expected = std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(1);
+    let expected = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
     assert_eq!(runner.num_workers(), expected);
     assert!(runner.num_workers() >= 1);
 }

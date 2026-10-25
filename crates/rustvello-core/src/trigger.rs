@@ -219,7 +219,7 @@ pub trait TriggerStore: Send + Sync {
             .into_iter()
             .filter(TriggerRunRecord::is_pending)
             .collect();
-        runs.sort_by(|left, right| left.claimed_at.cmp(&right.claimed_at));
+        runs.sort_by_key(|left| left.claimed_at);
         runs.truncate(limit);
         Ok(runs)
     }

@@ -60,7 +60,7 @@ pub fn render_family_tree_svg(root: &FamilyTreeNode, focus_id: Option<&str>) -> 
     }
 
     // Sort globally by created_at (time-ordered layout like pynmon)
-    flat_nodes.sort_by(|a, b| a.node.created_at.cmp(&b.node.created_at));
+    flat_nodes.sort_by_key(|a| a.node.created_at);
 
     // Assign positions using weighted column scoring
     let (x_positions, y_positions) = assign_positions(&flat_nodes);

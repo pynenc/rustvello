@@ -7,6 +7,7 @@ app = App()
 @app.task
 def nap():
     import time
+
     time.sleep(60)
 
 

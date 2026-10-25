@@ -158,7 +158,7 @@ pub fn start_monitor(
         .map_err(|error| {
             pyo3::exceptions::PyOSError::new_err(format!("cannot bind {bind}: {error}"))
         })?;
-    let address = listener.local_addr().map_or(bind, |address| address);
+    let address = listener.local_addr().unwrap_or(bind);
     let options = MonitorOptions {
         read_only,
         // Already checked above, so a transient error cannot kill the task silently.

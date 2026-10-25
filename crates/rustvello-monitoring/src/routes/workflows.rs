@@ -273,9 +273,7 @@ async fn collect_workflow_data(
                 app.orchestrator.get_invocation_status(&inv_id)
             );
             let (_, member_count) = members.unwrap_or_default();
-            let status = status
-                .map(|record| record.status)
-                .unwrap_or(InvocationStatus::Registered);
+            let status = status.map_or(InvocationStatus::Registered, |record| record.status);
             let full_id = inv_id.to_string();
             let (invocations_url, timeline_url, _) =
                 workflow_run_urls(&tid.to_string(), &full_id, page_request.limit);
@@ -774,8 +772,7 @@ async fn children(
             .orchestrator
             .get_invocation_status(child_id)
             .await
-            .map(|r| r.status)
-            .unwrap_or(InvocationStatus::Registered);
+            .map_or(InvocationStatus::Registered, |r| r.status);
         let badge = status_colors::badge_class(&status);
 
         // Get task_id from the invocation DTO

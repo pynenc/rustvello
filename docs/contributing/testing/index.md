@@ -93,10 +93,9 @@ version updates both checks together:
 make python-versions
 ```
 
-Rustvello currently builds version-specific PyO3 wheels for Python 3.9 through
-3.13. The CI suite installs and tests the extension on every declared version.
-This is intentionally different from an `abi3` build: `abi3` can reduce the
-number of wheels, but only when the extension uses PyO3's limited stable API.
+Rustvello builds one `abi3` wheel per platform: Python's stable ABI, so the
+same wheel loads on every CPython from 3.12 up. The CI suite builds and tests
+the extension on every declared version.
 
 ## Test Categories And CI Lanes
 

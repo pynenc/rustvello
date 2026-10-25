@@ -9,31 +9,23 @@ use serde::{Deserialize, Serialize};
 /// Log output format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[derive(Default)]
 pub enum LogFormat {
     /// Human-readable text with optional ANSI colors.
+    #[default]
     Text,
     /// Structured JSON (one object per line).
     Json,
 }
 
-impl Default for LogFormat {
-    fn default() -> Self {
-        Self::Text
-    }
-}
-
 /// Output stream selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[derive(Default)]
 pub enum LogStream {
+    #[default]
     Stderr,
     Stdout,
-}
-
-impl Default for LogStream {
-    fn default() -> Self {
-        Self::Stderr
-    }
 }
 
 /// Configuration for logging output.

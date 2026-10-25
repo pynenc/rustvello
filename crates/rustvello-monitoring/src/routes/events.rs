@@ -444,7 +444,7 @@ async fn detail(
                 run.triggered_invocation_id
                     .as_ref()
                     .into_iter()
-                    .chain(run.source_invocation_ids().into_iter())
+                    .chain(run.source_invocation_ids())
                     .map(ToString::to_string)
                     .collect(),
             ),

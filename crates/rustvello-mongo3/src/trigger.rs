@@ -496,7 +496,7 @@ impl TriggerStore for Mongo3TriggerStore {
             }
             events.push(event);
         }
-        events.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+        events.sort_by_key(|left| std::cmp::Reverse(left.timestamp));
         if let Some(limit) = query.limit {
             events.truncate(limit);
         }
@@ -622,7 +622,7 @@ impl TriggerStore for Mongo3TriggerStore {
             }
             runs.push(run);
         }
-        runs.sort_by(|left, right| right.claimed_at.cmp(&left.claimed_at));
+        runs.sort_by_key(|left| std::cmp::Reverse(left.claimed_at));
         if let Some(limit) = query.limit {
             runs.truncate(limit);
         }

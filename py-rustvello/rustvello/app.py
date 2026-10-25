@@ -61,10 +61,10 @@ import sys
 import threading
 import time
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from enum import Enum
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from rustvello.backends import create_backends as _create_backends
 from rustvello.rustvello import (

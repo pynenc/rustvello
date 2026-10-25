@@ -569,7 +569,7 @@ impl TriggerStore for PostgresTriggerStore {
             }
             events.push(event);
         }
-        events.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+        events.sort_by_key(|left| std::cmp::Reverse(left.timestamp));
         if let Some(offset) = query.offset {
             events = events.into_iter().skip(offset).collect();
         }
@@ -728,7 +728,7 @@ impl TriggerStore for PostgresTriggerStore {
             }
             runs.push(run);
         }
-        runs.sort_by(|left, right| right.claimed_at.cmp(&left.claimed_at));
+        runs.sort_by_key(|left| std::cmp::Reverse(left.claimed_at));
         if let Some(limit) = query.limit {
             runs.truncate(limit);
         }

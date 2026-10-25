@@ -124,8 +124,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     needs: python-compatibility
     strategy:
-      # ubuntu-24.04, not ubuntu-latest: setup-python has no Python 3.9 for
-      # Ubuntu 26.04, and requires-python still declares 3.9.
+      # ubuntu-24.04: a runner image setup-python fully supports for every
+      # declared Python version.
       matrix: ${{ fromJSON(needs.python-compatibility.outputs.matrix) }}
       fail-fast: false
     steps:

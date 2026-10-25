@@ -147,14 +147,14 @@ impl TimelineDataBuilder {
                     .iter()
                     .filter(|s| s.invocation_id == chain.invocation_id)
                     .map(|s| s.x + s.width)
-                    .last();
+                    .next_back();
                 // Check points
                 let pt_end = lane
                     .points
                     .iter()
                     .filter(|p| p.invocation_id == chain.invocation_id)
                     .map(|p| p.x)
-                    .last();
+                    .next_back();
                 // Return the rightmost
                 return match (seg_end, pt_end) {
                     (Some(s), Some(p)) => Some(s.max(p)),

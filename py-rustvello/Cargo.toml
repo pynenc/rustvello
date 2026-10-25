@@ -12,7 +12,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rustvello-python = { workspace = true, features = ["all-backends", "monitoring"] }
-pyo3 = { workspace = true, features = ["extension-module"] }
+# abi3: one wheel per platform for every CPython from 3.12 up (stable ABI).
+pyo3 = { workspace = true, features = ["extension-module", "abi3-py312"] }
 
 [package.metadata.maturin]
 module-name = "rustvello"

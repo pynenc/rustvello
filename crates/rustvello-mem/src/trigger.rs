@@ -333,7 +333,7 @@ impl TriggerStore for MemTriggerStore {
             })
             .cloned()
             .collect();
-        events.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+        events.sort_by_key(|left| std::cmp::Reverse(left.timestamp));
         if let Some(offset) = query.offset {
             events = events.into_iter().skip(offset).collect();
         }
@@ -391,7 +391,7 @@ impl TriggerStore for MemTriggerStore {
             })
             .cloned()
             .collect();
-        runs.sort_by(|left, right| right.claimed_at.cmp(&left.claimed_at));
+        runs.sort_by_key(|left| std::cmp::Reverse(left.claimed_at));
         if let Some(limit) = query.limit {
             runs.truncate(limit);
         }
@@ -547,7 +547,7 @@ mod tests {
         let trigger = TriggerDefinitionDTO {
             trigger_id: TriggerDefinitionDTO::compute_trigger_id(
                 &task_id,
-                &[cond_id.clone()],
+                std::slice::from_ref(&cond_id),
                 TriggerLogic::And,
             ),
             task_id,
@@ -575,7 +575,7 @@ mod tests {
         let trigger = TriggerDefinitionDTO {
             trigger_id: TriggerDefinitionDTO::compute_trigger_id(
                 &task_id,
-                &[cond_id.clone()],
+                std::slice::from_ref(&cond_id),
                 TriggerLogic::Or,
             ),
             task_id,

@@ -357,7 +357,7 @@ impl StateBackendQuery for RedisStateBackend {
     ) -> RustvelloResult<Vec<InvocationId>> {
         let mut conn = self.pool.conn().await?;
         let members: Vec<String> = conn
-            .smembers(format!("{}{}", &self.child_prefix, parent_invocation_id))
+            .smembers(format!("{}{}", self.child_prefix, parent_invocation_id))
             .await
             .map_err(redis_err)?;
         Ok(members.into_iter().map(InvocationId::from_string).collect())
@@ -567,7 +567,7 @@ impl StateBackendRunner for RedisStateBackend {
         parent_runner_id: &str,
     ) -> RustvelloResult<Vec<StoredRunnerContext>> {
         let mut conn = self.pool.conn().await?;
-        let keys = scan_keys(&mut conn, &format!("{}*", &self.runner_prefix)).await?;
+        let keys = scan_keys(&mut conn, &format!("{}*", self.runner_prefix)).await?;
         let mut result = Vec::new();
         for key in keys {
             let val: Option<String> = conn.get(&key).await.map_err(redis_err)?;
@@ -652,7 +652,7 @@ impl StateBackendRunner for RedisStateBackend {
         partial_id: &str,
     ) -> RustvelloResult<Vec<StoredRunnerContext>> {
         let mut conn = self.pool.conn().await?;
-        let pattern = format!("{}*{}*", &self.runner_prefix, partial_id);
+        let pattern = format!("{}*{}*", self.runner_prefix, partial_id);
         let keys = scan_keys(&mut conn, &pattern).await?;
         let mut result = Vec::new();
         for key in keys {

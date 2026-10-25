@@ -41,7 +41,7 @@ def echo_addr() -> Iterator[tuple[str, int]]:
         while not stop.is_set():
             try:
                 conn, _ = server.accept()
-            except (socket.timeout, OSError):
+            except (TimeoutError, OSError):
                 continue
             threading.Thread(target=serve, args=(conn,), daemon=True).start()
 
