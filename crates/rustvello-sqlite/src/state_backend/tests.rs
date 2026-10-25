@@ -255,7 +255,7 @@ async fn test_get_invocation_with_workflow_round_trip() {
     let wf = WorkflowIdentity::root(inv_id.clone(), task_id.clone());
     let trace_context = TraceContextCarrier {
         traceparent: Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string()),
-        tracestate: Some("ih=sqlite".to_string()),
+        tracestate: Some("example=sqlite".to_string()),
     };
 
     let inv = InvocationDTO::with_workflow(

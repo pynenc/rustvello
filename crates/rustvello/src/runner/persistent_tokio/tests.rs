@@ -204,7 +204,7 @@ async fn test_retry_on_failure() {
     let inv_id = orchestrator.register_invocation(&call).await.unwrap();
     let trace_context = TraceContextCarrier {
         traceparent: Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string()),
-        tracestate: Some("ih=retry".to_string()),
+        tracestate: Some("example=retry".to_string()),
     };
     let inv_dto = InvocationDTO::new(inv_id.clone(), task_id, call.call_id.clone())
         .with_trace_context(trace_context.clone());

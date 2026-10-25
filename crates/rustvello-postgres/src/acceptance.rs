@@ -74,7 +74,7 @@ fn submission(id: &InvocationId) -> SubmissionPublication {
     inv.parent_invocation_id = Some(InvocationId::from_string("parent-invocation"));
     inv.trace_context = TraceContextCarrier {
         traceparent: Some("00-11111111111111111111111111111111-2222222222222222-01".into()),
-        tracestate: Some("ih=qualified".into()),
+        tracestate: Some("example=qualified".into()),
     };
     SubmissionPublication {
         invocation: inv,

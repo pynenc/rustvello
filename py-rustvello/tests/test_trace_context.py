@@ -20,7 +20,7 @@ def _otel_modules(events: list[object]) -> dict[str, ModuleType]:
 
     def inject(carrier: dict[str, str]) -> None:
         carrier["traceparent"] = TRACEPARENT
-        carrier["tracestate"] = "ih=test"
+        carrier["tracestate"] = "example=test"
 
     def extract(carrier: dict[str, str]) -> object:
         events.append(("extract", carrier.copy()))
@@ -46,20 +46,20 @@ def _otel_modules(events: list[object]) -> dict[str, ModuleType]:
 
 def test_active_python_context_is_injected_as_w3c_carrier() -> None:
     with patch.dict(sys.modules, _otel_modules([])):
-        assert _current_trace_carrier() == (TRACEPARENT, "ih=test")
+        assert _current_trace_carrier() == (TRACEPARENT, "example=test")
 
 
 def test_worker_attaches_and_detaches_persisted_context() -> None:
     events: list[object] = []
     with (
         patch.dict(sys.modules, _otel_modules(events)),
-        patch("rustvello.app.get_current_trace_context", return_value=(TRACEPARENT, "ih=test")),
+        patch("rustvello.app.get_current_trace_context", return_value=(TRACEPARENT, "example=test")),
         _invocation_trace_context(),
     ):
         events.append("task")
 
     assert events == [
-        ("extract", {"traceparent": TRACEPARENT, "tracestate": "ih=test"}),
+        ("extract", {"traceparent": TRACEPARENT, "tracestate": "example=test"}),
         ("attach", "remote-context"),
         "task",
         ("detach", "token"),
@@ -70,7 +70,7 @@ def test_low_level_binding_accepts_valid_and_rejects_invalid_traceparent() -> No
     app = Rustvello()
     app.register_task("trace", "task", Mock(return_value="null"))
 
-    assert app.submit("trace", "task", {}, TRACEPARENT, "ih=test") is not None
+    assert app.submit("trace", "task", {}, TRACEPARENT, "example=test") is not None
     with pytest.raises(Exception, match="invalid W3C traceparent"):
         app.submit("trace", "task", {}, "invalid", None)
 
@@ -105,7 +105,7 @@ def test_real_python_context_survives_fail_once_retry_on_distinct_workers(
         span_id=int("00f067aa0ba902b7", 16),
         is_remote=False,
         trace_flags=TraceFlags(TraceFlags.SAMPLED),
-        trace_state=TraceState((("ih", "python"),)),
+        trace_state=TraceState((("example", "python"),)),
     )
     token = attach(set_span_in_context(NonRecordingSpan(span_context)))
     try:
@@ -125,21 +125,21 @@ def test_real_python_context_survives_fail_once_retry_on_distinct_workers(
         assert traceparent != TRACEPARENT
         assert traceparent[3:35] == TRACEPARENT[3:35]
         assert traceparent.endswith("-01")
-        assert tracestate == "ih=python"
+        assert tracestate == "example=python"
     state_backend = app._backend_objects["state_backend"]
     stored = json.loads(state_backend.get_invocation(str(invocation.id)))
     history = json.loads(state_backend.get_history(str(invocation.id)))
     running_workers = [item["runner_id"] for item in history if item["status_record"]["status"] == "Running"]
     assert stored["trace_context"] == {
         "traceparent": TRACEPARENT,
-        "tracestate": "ih=python",
+        "tracestate": "example=python",
     }
     assert len(running_workers) == 2
     assert running_workers[0] != running_workers[1]
     identity = json.loads(state_backend.get_workflow_data(str(invocation.id), "rustvello.execution.identity.v1"))
     assert identity["attempt"] == 1
-    assert identity["execution_trace_context"] == {"traceparent": carriers[1][0], "tracestate": "ih=python"}
-    assert identity["previous_attempt_trace_context"] == {"traceparent": carriers[0][0], "tracestate": "ih=python"}
+    assert identity["execution_trace_context"] == {"traceparent": carriers[1][0], "tracestate": "example=python"}
+    assert identity["previous_attempt_trace_context"] == {"traceparent": carriers[0][0], "tracestate": "example=python"}
 
 
 def test_real_nested_python_submission_uses_execution_as_parent(tmp_path: Path) -> None:

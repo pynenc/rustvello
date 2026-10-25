@@ -21,7 +21,7 @@ use rustvello_core::observability::{
 pub const MAPPING_REVISION: &str = "rustvello-otel.v1";
 pub const INSTRUMENTATION_SCOPE: &str = "rustvello.lifecycle";
 pub const INSTRUMENTATION_SCOPE_VERSION: &str = "1";
-/// Maximum protobuf request body accepted by the qualified IH receiver.
+/// Maximum protobuf request body accepted by the qualified OTLP receiver.
 pub const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 
 mod transport;

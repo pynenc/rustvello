@@ -80,7 +80,7 @@ impl Fixture {
 fn carrier() -> TraceContextCarrier {
     TraceContextCarrier {
         traceparent: Some("00-11111111111111111111111111111111-2222222222222222-01".into()),
-        tracestate: Some("ih=qualified".into()),
+        tracestate: Some("example=qualified".into()),
     }
 }
 fn id() -> InvocationId {
