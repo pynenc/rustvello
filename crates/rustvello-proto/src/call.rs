@@ -39,7 +39,7 @@ impl SerializedArguments {
             hasher.update(ev.as_bytes());
             hasher.update(b";");
         }
-        format!("{:x}", hasher.finalize())
+        crate::hex::lower_hex(&hasher.finalize())
     }
 }
 

@@ -17,7 +17,7 @@ pub(super) fn argument_filter_id(filter: &Option<BTreeMap<String, serde_json::Va
             // which uses ", " and ": " separators. BTreeMap iteration is sorted by key.
             let json = python_compatible_json(f);
             let hash = Sha256::digest(json.as_bytes());
-            format!("static_{:x}", hash)
+            format!("static_{}", crate::hex::lower_hex(&hash))
         }
     }
 }
@@ -31,7 +31,7 @@ pub(super) fn result_filter_id(filter: &Option<serde_json::Value>) -> String {
         Some(v) => {
             let json = serde_json::to_string(v).unwrap_or_default();
             let hash = Sha256::digest(json.as_bytes());
-            format!("{:x}", hash)
+            crate::hex::lower_hex(&hash)
         }
     }
 }

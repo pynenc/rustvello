@@ -8,6 +8,7 @@
 
 pub mod call;
 pub mod config;
+mod hex;
 pub mod identifiers;
 pub mod invocation;
 pub mod status;
