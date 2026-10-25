@@ -38,6 +38,11 @@ test-python: develop ## Run Python tests with pytest
 	@echo "🚀 Testing Python: Running pytest"
 	@uv run python -m pytest py-rustvello/ --cov --cov-config=pyproject.toml --cov-report=xml
 
+.PHONY: test-python-only
+test-python-only: ## Run Python tests in parallel against the already installed extension (CI, after make install)
+	@echo "🚀 Testing Python: Running pytest -n auto"
+	@uv run python -m pytest py-rustvello/ -n auto --cov --cov-config=pyproject.toml --cov-report=xml
+
 .PHONY: python-versions
 python-versions: ## Print Python versions supported by py-rustvello metadata
 	@$(PYTHON_BIN) scripts/python_compatibility.py

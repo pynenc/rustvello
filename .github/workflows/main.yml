@@ -7,12 +7,19 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
+# A new push to a pull request cancels its older run: macOS runners are the
+# scarce resource, and a superseded run would hold them for 30+ minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   python-compatibility:
     name: Read supported Python versions
     runs-on: ubuntu-latest
     outputs:
       versions: ${{ steps.versions.outputs.versions }}
+      matrix: ${{ steps.versions.outputs.matrix }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -22,9 +29,23 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Every supported Python on Ubuntu. macOS: the oldest and newest only on
+      # pull requests (macOS runners are scarce), every version on main.
       - name: Read package metadata
         id: versions
-        run: echo "versions=$(python scripts/python_compatibility.py --format json)" >> "$GITHUB_OUTPUT"
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          versions=$(python scripts/python_compatibility.py --format json)
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+          python - "$versions" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, os, sys
+          versions = json.loads(sys.argv[1])
+          macos = versions if os.environ["EVENT"] != "pull_request" else list(dict.fromkeys([versions[0], versions[-1]]))
+          cells = [{"os": "ubuntu-24.04", "python-version": v} for v in versions]
+          cells += [{"os": "macos-latest", "python-version": v} for v in macos]
+          print("matrix=" + json.dumps({"include": cells}))
+          PY
 
   quality:
     name: Code quality (lint, format, clippy)
@@ -63,17 +84,49 @@ jobs:
       - name: Run code quality checks
         run: make check
 
-  tests-and-type-check:
-    name: Tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
+  # The Rust workspace does not depend on the Python version: test it once
+  # per system instead of once per matrix cell.
+  rust-tests:
+    name: Rust tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+      fail-fast: false
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # The rustvello-python crate's own tests link libpython.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-tests
+
+      - name: Run the Rust workspace tests
+        run: make test-rust
+
+      # Fault suites kill SQLite processes; Linux is enough, the release gate
+      # runs them again before a release.
+      - name: Run the fault-injection suites
+        if: ${{ matrix.os == 'ubuntu-24.04' }}
+        run: make test-fault
+
+  python-tests:
+    name: Python tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     needs: python-compatibility
     strategy:
-      matrix:
-        # ubuntu-24.04, not ubuntu-latest: setup-python has no Python 3.9 for
-        # Ubuntu 26.04, and requires-python still declares 3.9.
-        os: [ubuntu-24.04, macos-latest]
-        python-version: ${{ fromJSON(needs.python-compatibility.outputs.versions) }}
-        rust-version: ["stable"]
+      # ubuntu-24.04, not ubuntu-latest: setup-python has no Python 3.9 for
+      # Ubuntu 26.04, and requires-python still declares 3.9.
+      matrix: ${{ fromJSON(needs.python-compatibility.outputs.matrix) }}
       fail-fast: false
     steps:
       - name: Check out the repository
@@ -92,21 +145,17 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - uses: actions/cache@v4
+      # One cache per system for every Python version: the extension's Rust
+      # dependencies are the same, only the final link differs.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-test-
+          shared-key: python-extension
 
-      - name: Install dependencies
+      - name: Install dependencies and build the extension
         run: make install
 
-      - name: Run tests
-        run: make test
+      - name: Run the Python tests
+        run: make test-python-only
 
       - name: Upload coverage reports to Codecov (Python 3.12 on Ubuntu only)
         uses: codecov/codecov-action@v4
