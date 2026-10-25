@@ -32,9 +32,11 @@ Yes — there are two ways:
 
    app = App(backend="sqlite", db_path="./tasks.db")
 
+
    @app.task(max_retries=2)
    def add(x: int, y: int) -> int:
        return x + y
+
 
    inv = add(1, 2)
    result = inv.result(timeout=30)  # 3

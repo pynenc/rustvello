@@ -61,14 +61,15 @@ Pickle is not supported.
 @app.task(autoretry_for=(ConnectionError,), max_retries=3, retry_backoff=True)
 def fetch_price(sku): ...
 
+
 # Rustvello
 @app.task(
     max_retries=3,
     retry_for=(ConnectionError,),
-    retry_delay=1.0,        # Celery's retry_backoff=True starts at 1 s
-    retry_backoff=2.0,      # and doubles
+    retry_delay=1.0,  # Celery's retry_backoff=True starts at 1 s
+    retry_backoff=2.0,  # and doubles
     retry_max_delay=600.0,  # retry_backoff_max
-    retry_jitter="full",    # retry_jitter=True (Rustvello defaults to "equal")
+    retry_jitter="full",  # retry_jitter=True (Rustvello defaults to "equal")
 )
 def fetch_price(sku: str) -> int: ...
 ```
@@ -100,8 +101,13 @@ Differences that matter:
 app.conf.task_routes = {"shop.send_receipt": {"queue": "emails"}}
 
 # Rustvello: declare the queues, then route per task
-app = App(app_id="shop", backend="sqlite", db_path="shop.db",
-          config=AppConfig(app_id="shop", broker_queues=["default", "emails"]))
+app = App(
+    app_id="shop",
+    backend="sqlite",
+    db_path="shop.db",
+    config=AppConfig(app_id="shop", broker_queues=["default", "emails"]),
+)
+
 
 @app.task(queue="emails", priority=5)
 def send_receipt(amount: int, order_id: str) -> str: ...
@@ -124,12 +130,15 @@ polling loop.
 ```python
 # Celery
 app.conf.beat_schedule = {
-    "nightly-report": {"task": "shop.nightly_report", "schedule": crontab(minute=0, hour=7)},
+    "nightly-report": {
+        "task": "shop.nightly_report",
+        "schedule": crontab(minute=0, hour=7),
+    },
 }
 
 # Rustvello (cron with a leading seconds field)
 app.trigger(nightly_report).on_cron("0 0 7 * * *").register()
-app.trigger(cleanup).on_interval(300).register()   # every 300 s
+app.trigger(cleanup).on_interval(300).register()  # every 300 s
 ```
 
 Every runner may evaluate triggers; the atomic service lets one runner at a
@@ -143,15 +152,17 @@ ordinary code inside an `@app.workflow`, which may block on child invocations:
 
 ```python
 # Celery
-chain(chord(group(fetch_price.s(s) for s in skus), total.s()),
-      send_receipt.s(order_id)).apply_async()
+chain(
+    chord(group(fetch_price.s(s) for s in skus), total.s()), send_receipt.s(order_id)
+).apply_async()
+
 
 # Rustvello
 @app.workflow
 def checkout(order_id: str, skus: list[str]) -> str:
     prices = app.wait_results([fetch_price(sku) for sku in skus], timeout=60)  # group
-    amount = sum(prices)                                                       # chord callback
-    return send_receipt(amount, order_id).result(timeout=30)                   # chain
+    amount = sum(prices)  # chord callback
+    return send_receipt(amount, order_id).result(timeout=30)  # chain
 ```
 
 A workflow occupies one worker slot while it waits, so give the runner more

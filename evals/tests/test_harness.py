@@ -47,7 +47,7 @@ def test_every_task_has_mock_answers() -> None:
     root = Path(__file__).resolve().parents[1] / "mock_responses"
     for task in load_tasks():
         for variant in ("reference", "naive"):
-            assert (root / variant / f"{task["id"]}.md").is_file(), (variant, task["id"])
+            assert (root / variant / f"{task['id']}.md").is_file(), (variant, task["id"])
 
 
 def test_reference_answers_pass_every_task(surface: dict) -> None:

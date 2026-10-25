@@ -246,7 +246,9 @@ Tests are parametrized using pytest fixtures that configure the app with differe
 backend and mode combinations:
 
 ```python
-@pytest.fixture(params=["pure_python", "rust_mixed_mem", "rust_mixed_sqlite", "rust_native_mem"])
+@pytest.fixture(
+    params=["pure_python", "rust_mixed_mem", "rust_mixed_sqlite", "rust_native_mem"]
+)
 def app(request):
     if request.param == "pure_python":
         return PynencBuilder().memory().build()

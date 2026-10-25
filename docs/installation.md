@@ -106,9 +106,12 @@ app = PynencBuilder().app_id("my-app").rustvello(backend="mem").build()
 app = PynencBuilder().app_id("my-app").rustvello(backend="sqlite").build()
 
 # Redis (distributed)
-app = PynencBuilder().app_id("my-app").rustvello(
-    backend="redis", redis_url="redis://localhost:6379"
-).build()
+app = (
+    PynencBuilder()
+    .app_id("my-app")
+    .rustvello(backend="redis", redis_url="redis://localhost:6379")
+    .build()
+)
 ```
 
 ### Backend Selection Matrix

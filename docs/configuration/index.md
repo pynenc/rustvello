@@ -262,12 +262,12 @@ The same resolution is available to the standalone Python `App`:
 ```python
 from rustvello import App, AppConfig
 
-config = AppConfig.from_env()                 # env + ./pyproject.toml [tool.rustvello.app]
-config = AppConfig.from_file("rustvello.toml") # + a TOML file
-config.runner_queues = ["hpa"]                 # settable, like broker_queues, logging_level, ...
+config = AppConfig.from_env()  # env + ./pyproject.toml [tool.rustvello.app]
+config = AppConfig.from_file("rustvello.toml")  # + a TOML file
+config.runner_queues = ["hpa"]  # settable, like broker_queues, logging_level, ...
 
 app = App(app_id="calculation", config=config)
-app = App(app_id="calculation")               # same as config=AppConfig.from_env(app_id=...)
+app = App(app_id="calculation")  # same as config=AppConfig.from_env(app_id=...)
 ```
 
 ## TOML Config File
