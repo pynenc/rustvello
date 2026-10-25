@@ -41,7 +41,7 @@ mod tests {
 
     #[test]
     fn upsert_and_get_result() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let sb = PyMemStateBackend::new();
             sb.upsert_invocation(py, UUID1, "mod", "func", sample_args(), None, None)
                 .unwrap();
@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn store_and_get_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let sb = PyMemStateBackend::new();
             sb.upsert_invocation(py, UUID1, "mod", "func", sample_args(), None, None)
                 .unwrap();
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn store_error_without_traceback() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let sb = PyMemStateBackend::new();
             sb.upsert_invocation(py, UUID1, "mod", "func", sample_args(), None, None)
                 .unwrap();
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn purge_clears_data() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let sb = PyMemStateBackend::new();
             sb.upsert_invocation(py, UUID1, "mod", "func", sample_args(), None, None)
                 .unwrap();
@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn multiple_invocations() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let sb = PyMemStateBackend::new();
             sb.upsert_invocation(py, UUID1, "mod", "func", sample_args(), None, None)
                 .unwrap();

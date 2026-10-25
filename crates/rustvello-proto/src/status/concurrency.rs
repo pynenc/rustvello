@@ -6,8 +6,10 @@ use std::fmt;
 /// Determines how concurrent invocations of the same task are handled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[derive(Default)]
 pub enum ConcurrencyControlType {
     /// No concurrency restrictions
+    #[default]
     Unlimited,
     /// Only one invocation per (task_id, key_args) at a time
     Task,
@@ -15,12 +17,6 @@ pub enum ConcurrencyControlType {
     Argument,
     /// No concurrent invocations allowed at all
     None,
-}
-
-impl Default for ConcurrencyControlType {
-    fn default() -> Self {
-        Self::Unlimited
-    }
 }
 
 impl fmt::Display for ConcurrencyControlType {

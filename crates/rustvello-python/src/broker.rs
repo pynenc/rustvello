@@ -34,7 +34,7 @@ mod tests {
 
     #[test]
     fn new_broker_is_empty() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let broker = PyMemBroker::new();
             assert_eq!(broker.count_invocations(py).unwrap(), 0);
         });
@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn route_and_retrieve_single() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let broker = PyMemBroker::new();
             broker.route_invocation(py, UUID1).unwrap();
             assert_eq!(broker.count_invocations(py).unwrap(), 1);
@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn fifo_ordering() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let broker = PyMemBroker::new();
             broker.route_invocation(py, UUID1).unwrap();
             broker.route_invocation(py, UUID2).unwrap();
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn route_batch() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let broker = PyMemBroker::new();
             broker
                 .route_invocations(py, vec![UUID1.into(), UUID2.into()])
@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn retrieve_from_empty() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let broker = PyMemBroker::new();
             assert_eq!(broker.retrieve_invocation(py).unwrap(), None);
         });
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn purge_clears_queue() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let broker = PyMemBroker::new();
             broker.route_invocation(py, UUID1).unwrap();
             broker.route_invocation(py, UUID2).unwrap();

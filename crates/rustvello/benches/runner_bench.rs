@@ -40,7 +40,7 @@ fn task_for(workload: Workload) -> (TaskConfig, TaskFn) {
                 std::hint::black_box(value);
             }
             Workload::Mixed => {
-                if call_count.fetch_add(1, Ordering::Relaxed) % 2 == 0 {
+                if call_count.fetch_add(1, Ordering::Relaxed).is_multiple_of(2) {
                     std::thread::sleep(Duration::from_millis(1));
                 } else {
                     let mut value = 0u64;

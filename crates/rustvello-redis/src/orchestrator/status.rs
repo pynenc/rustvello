@@ -222,15 +222,15 @@ impl OrchestratorStatus for RedisOrchestrator {
     async fn purge(&self) -> RustvelloResult<()> {
         let mut conn = self.pool.conn().await?;
         let patterns = [
-            format!("{}*", &self.status_prefix),
-            format!("{}*", &self.task_inv_prefix),
-            format!("{}*", &self.call_inv_prefix),
-            format!("{}*", &self.waiters_prefix),
-            format!("{}*", &self.cc_prefix),
-            format!("{}*", &self.cc_rev_prefix),
-            format!("{}*", &self.heartbeat_prefix),
-            format!("{}*", &self.retries_prefix),
-            format!("{}*", &self.auto_purge_prefix),
+            format!("{}*", self.status_prefix),
+            format!("{}*", self.task_inv_prefix),
+            format!("{}*", self.call_inv_prefix),
+            format!("{}*", self.waiters_prefix),
+            format!("{}*", self.cc_prefix),
+            format!("{}*", self.cc_rev_prefix),
+            format!("{}*", self.heartbeat_prefix),
+            format!("{}*", self.retries_prefix),
+            format!("{}*", self.auto_purge_prefix),
         ];
         for pattern in &patterns {
             let keys = crate::connection::scan_keys(&mut conn, pattern).await?;
@@ -259,9 +259,8 @@ impl OrchestratorStatus for RedisOrchestrator {
         let threshold =
             Utc::now() - chrono::Duration::seconds(i64::try_from(max_age_secs).unwrap_or(i64::MAX));
         let mut conn = self.pool.conn().await?;
-        let keys =
-            crate::connection::scan_keys(&mut conn, &format!("{}*", &self.auto_purge_prefix))
-                .await?;
+        let keys = crate::connection::scan_keys(&mut conn, &format!("{}*", self.auto_purge_prefix))
+            .await?;
         let mut expired = Vec::new();
         for key in keys {
             let value: Option<String> = conn.get(&key).await.map_err(redis_err)?;

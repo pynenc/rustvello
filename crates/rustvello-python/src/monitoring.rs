@@ -158,7 +158,7 @@ pub fn start_monitor(
         .map_err(|error| {
             pyo3::exceptions::PyOSError::new_err(format!("cannot bind {bind}: {error}"))
         })?;
-    let address = listener.local_addr().map_or(bind, |address| address);
+    let address = listener.local_addr().unwrap_or(bind);
     let options = MonitorOptions {
         read_only,
         // Already checked above, so a transient error cannot kill the task silently.
@@ -201,9 +201,8 @@ pub fn backend_health(
         &[],
         config,
     )?;
-    let report = py.allow_threads(|| {
-        shared_runtime().map(|runtime| runtime.block_on(health_report(&instance)))
-    })?;
+    let report =
+        py.detach(|| shared_runtime().map(|runtime| runtime.block_on(health_report(&instance))))?;
     serde_json::to_string(&report).map_err(|error| {
         pyo3::exceptions::PyRuntimeError::new_err(format!("serialize health report: {error}"))
     })

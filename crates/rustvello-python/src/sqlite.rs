@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn sqlite_broker_roundtrip() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let db = make_db();
             let broker = PySqliteBroker::new(&db);
             assert_eq!(broker.count_invocations(py).unwrap(), 0);
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn sqlite_state_backend_result() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let db = make_db();
             let sb = PySqliteStateBackend::new(&db);
             sb.upsert_invocation(py, UUID1, "mod", "func", BTreeMap::new(), None, None)
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn sqlite_client_data_store_inline() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let db = make_db();
             let store = PySqliteClientDataStore::new(&db, 1024, 0, 128);
             let stored = store.store_if_large(py, "small").unwrap();

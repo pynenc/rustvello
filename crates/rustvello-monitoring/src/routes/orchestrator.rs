@@ -64,8 +64,7 @@ async fn overview(State(state): State<AppState>) -> AppResult<impl IntoResponse>
         .orchestrator
         .get_active_runner_ids(config.runner_dead_after_seconds)
         .await
-        .map(|ids| ids.len())
-        .unwrap_or(0);
+        .map_or(0, |ids| ids.len());
     let backend_name = app.orchestrator.backend_name();
     let usage_stats = app.orchestrator.usage_stats().await;
     Ok(HtmlTemplate(OrchestratorOverviewTemplate {

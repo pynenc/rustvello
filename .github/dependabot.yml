@@ -1,69 +1,53 @@
-# Version updates wait 15 days after a release (cooldown) and skip patch
-# releases; security updates are not delayed. The root Cargo.lock and uv.lock
-# cover py-rustvello too, so each ecosystem has one entry at "/".
+# One Dependabot pull request a month for every ecosystem (Rust crates,
+# Python packages, GitHub Actions), so one CI run checks all updates together.
 #
-# One pull request per ecosystem (minor and major updates grouped), and no
-# automatic rebase when main moves: a merge to main used to rebase every open
-# Dependabot PR and start about 8 workflows for each. Comment
-# "@dependabot rebase" on a PR to refresh it.
+# - cooldown: a version is proposed only 15 days after its release;
+#   security updates are not delayed.
+# - patch releases are skipped; minor and major ones are grouped.
+# - no automatic rebase when main moves (comment "@dependabot rebase").
+#
+# The root Cargo.lock and uv.lock cover py-rustvello too, so each ecosystem
+# has one entry at "/".
 version: 2
-updates:
-  # GitHub Actions
-  - package-ecosystem: github-actions
-    directory: "/"
+
+multi-ecosystem-groups:
+  all-dependencies:
     schedule:
       interval: monthly
-    rebase-strategy: disabled
-    open-pull-requests-limit: 2
-    cooldown:
-      default-days: 15
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-patch"]
-    groups:
-      github-actions:
-        patterns: ["*"]
+    labels: ["dependencies", "skip-changelog"]
     commit-message:
-      prefix: ci
-    labels: ["skip-changelog"]
+      prefix: build(deps)
 
-  # Rust crates, including py-rustvello
+updates:
   - package-ecosystem: cargo
     directory: "/"
-    schedule:
-      interval: monthly
+    multi-ecosystem-group: all-dependencies
+    patterns: ["*"]
     rebase-strategy: disabled
-    open-pull-requests-limit: 2
     cooldown:
       default-days: 15
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]
-    commit-message:
-      prefix: build(rust)
-      prefix-development: chore(rust)
-    labels: ["skip-changelog"]
-    groups:
-      rust-dependencies:
-        patterns: ["*"]
-        update-types: ["minor", "major"]
 
-  # Python (uv workspace: py-rustvello and the dev tooling)
   - package-ecosystem: uv
     directory: "/"
-    schedule:
-      interval: monthly
+    multi-ecosystem-group: all-dependencies
+    patterns: ["*"]
     rebase-strategy: disabled
-    open-pull-requests-limit: 2
     cooldown:
       default-days: 15
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]
-    commit-message:
-      prefix: chore(python)
-    labels: ["skip-changelog"]
-    groups:
-      python-dependencies:
-        patterns: ["*"]
-        update-types: ["minor", "major"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    multi-ecosystem-group: all-dependencies
+    patterns: ["*"]
+    rebase-strategy: disabled
+    cooldown:
+      default-days: 15
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]

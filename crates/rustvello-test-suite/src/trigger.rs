@@ -103,7 +103,7 @@ pub async fn test_get_triggers_for_condition(store: &dyn TriggerStore) {
     let trigger = TriggerDefinitionDTO {
         trigger_id: TriggerDefinitionDTO::compute_trigger_id(
             &task_id,
-            &[cond_id.clone()],
+            std::slice::from_ref(&cond_id),
             TriggerLogic::Or,
         ),
         task_id,

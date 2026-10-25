@@ -171,7 +171,7 @@ impl OrchestratorRecovery for MemOrchestrator {
     async fn get_atomic_service_timeline(&self) -> RustvelloResult<Vec<AtomicServiceExecution>> {
         let state = self.state.lock().await;
         let mut timeline = state.atomic_timeline.clone();
-        timeline.sort_by(|a, b| b.start.cmp(&a.start)); // newest first
+        timeline.sort_by_key(|a| std::cmp::Reverse(a.start)); // newest first
         Ok(timeline)
     }
 }

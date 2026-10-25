@@ -42,10 +42,10 @@ jobs:
       tag: ${{ steps.check-version.outputs.tag }}
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -88,7 +88,7 @@ jobs:
       pep440_version: ${{ steps.set-version.outputs.pep440_version }}
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set PR version
         id: set-version
@@ -107,11 +107,11 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # PyO3 0.22 supports Python up to 3.13; ubuntu-latest (26.04) ships 3.14.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -137,10 +137,10 @@ jobs:
     if: always() && (needs.check-version.result == 'success' || needs.pr-version.result == 'success')
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -168,12 +168,13 @@ jobs:
           cd "$RUNNER_TEMP" && python -c 'import rustvello'
 
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sdist-rustvello
           path: dist/*.tar.gz
 
   # ── Build wheels (multi-platform) ──
+  # abi3 (stable ABI): one wheel per platform for every CPython from 3.12 up.
   build-wheels:
     name: Build wheels (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -200,16 +201,12 @@ jobs:
             manylinux: "off"
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Read supported Python versions
-        id: python-versions
-        run: echo "versions=$(python scripts/python_compatibility.py)" >> "$GITHUB_OUTPUT"
 
       - name: Patch version for non-release builds
         if: >-
@@ -226,7 +223,6 @@ jobs:
           args: >
             --profile dist-release
             --manifest-path py-rustvello/Cargo.toml
-            --interpreter ${{ steps.python-versions.outputs.versions }}
             --out dist
 
       - name: Test wheel
@@ -240,7 +236,7 @@ jobs:
           cd "$RUNNER_TEMP" && python -c 'import rustvello'
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.os }}-${{ matrix.target }}
           path: dist/*.whl
@@ -271,14 +267,14 @@ jobs:
       # Only the build artifacts: the release gate uploads others (the guarantee
       # matrix), which the publisher rejects as unknown distributions.
       - name: Download the sdist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: sdist-*
           path: dist
           merge-multiple: true
 
       - name: Download the wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheel-*
           path: dist
@@ -305,15 +301,46 @@ jobs:
           echo "Version: \`${{ needs.check-version.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
 
   # ── Publish to TestPyPI (PRs, non-release main pushes, or manual) ──
+  # A pull request build reaches TestPyPI only once Main CI passed on the same
+  # commit. A newer push cancels this run (concurrency), so superseded pushes
+  # upload nothing.
+  pr-tests-passed:
+    name: Wait for Main CI before publishing a PR build
+    needs: [pr-version, build-wheels]
+    if: always() && needs.pr-version.result == 'success' && needs.build-wheels.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for Main CI on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          for _ in $(seq 1 170); do
+            state=$(gh run list -R "$REPO" --workflow "Main CI" --commit "$SHA" \
+              --json status,conclusion -q '.[0] | "\(.status) \(.conclusion)"')
+            case "$state" in
+              "completed success") echo "Main CI passed on $SHA"; exit 0 ;;
+              completed*) echo "::error::Main CI ended with '$state'; this build is not published"; exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "::error::Main CI did not finish in time; this build is not published"
+          exit 1
+
   publish-to-testpypi:
     name: Publish to TestPyPI
-    needs: [check-version, pr-version, create-sdist, build-wheels]
+    needs:
+      [check-version, pr-version, create-sdist, build-wheels, pr-tests-passed]
     if: >-
       always() &&
       needs.create-sdist.result == 'success' &&
       needs.build-wheels.result == 'success' &&
       (
-        needs.pr-version.result == 'success' ||
+        (needs.pr-version.result == 'success' && needs.pr-tests-passed.result == 'success') ||
         (needs.check-version.result == 'success' && needs.check-version.outputs.is_release != 'true') ||
         (github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi')
       )
@@ -326,14 +353,14 @@ jobs:
       # Only the build artifacts: the release gate uploads others (the guarantee
       # matrix), which the publisher rejects as unknown distributions.
       - name: Download the sdist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: sdist-*
           path: dist
           merge-multiple: true
 
       - name: Download the wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheel-*
           path: dist
@@ -379,7 +406,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Comment PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const version = '${{ needs.pr-version.outputs.pep440_version }}';

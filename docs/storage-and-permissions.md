@@ -45,9 +45,12 @@ the application (producers, workers, monitor, cron images) must then pass the
 same `mongo_db`.
 
 ```python
-app = App(app_id="shop", backend="mongo3",
-          mongo_url="mongodb://tasks:secret@mongo:27017/?authSource=admin",
-          mongo_db="rustvello")        # data in rustvello_shop
+app = App(
+    app_id="shop",
+    backend="mongo3",
+    mongo_url="mongodb://tasks:secret@mongo:27017/?authSource=admin",
+    mongo_db="rustvello",
+)  # data in rustvello_shop
 ```
 
 Grant, as a database administrator:

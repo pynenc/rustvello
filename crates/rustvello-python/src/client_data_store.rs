@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn small_data_inline() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             // Default min_size_to_cache is 1024, so small data stays inline
             let store = PyMemClientDataStore::new(1024, 0, 128);
             let input = "small";
@@ -54,7 +54,7 @@ mod tests {
 
     #[test]
     fn resolve_inline_data() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let store = PyMemClientDataStore::new(1024, 0, 128);
             // Non-reference data should resolve to itself
             let resolved = store.resolve(py, "hello").unwrap();
@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn large_data_externalized_and_resolved() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             // Set min_size_to_cache to 10 so even short strings get externalized
             let store = PyMemClientDataStore::new(10, 0, 128);
             let large = "a]".repeat(20); // 40 chars, above threshold
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn purge_clears_store() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let store = PyMemClientDataStore::new(10, 0, 128);
             let large = "b".repeat(100);
             store.store_if_large(py, &large).unwrap();

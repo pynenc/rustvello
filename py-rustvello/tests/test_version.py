@@ -49,9 +49,9 @@ def test_python_metadata_declares_the_supported_range() -> None:
     metadata = project_metadata()
     requires_python = metadata["requires-python"]
 
-    assert requires_python == ">=3.9,<4.0"
+    assert requires_python == ">=3.12,<4.0"
     assert {
         classifier.rsplit(" :: ", maxsplit=1)[-1]
         for classifier in metadata["classifiers"]
         if classifier.startswith("Programming Language :: Python :: 3.")
-    } >= {"3.9", "3.10", "3.11", "3.12", "3.13"}
+    } >= {"3.12", "3.13", "3.14"}

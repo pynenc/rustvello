@@ -82,7 +82,7 @@ rustvello-proto → rustvello-core → rustvello-mem / rustvello-sqlite / ...
 ### Prerequisites
 
 - **Rust 1.85+** (`rustup` recommended)
-- **Python 3.9+**
+- **Python 3.12+**
 - **[uv](https://docs.astral.sh/uv/)** — Python package manager
 - **[maturin](https://www.maturin.rs/)** — for building PyO3 wheels
 - **Node.js** — for commitlint (installed via pre-commit)

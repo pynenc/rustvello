@@ -21,7 +21,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let cid = py.allow_threads(|| rt.block_on(store.register_condition(&condition)))
+                let cid = py.detach(|| rt.block_on(store.register_condition(&condition)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(cid.to_string())
             }
@@ -34,7 +34,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let cond = py.allow_threads(|| rt.block_on(store.get_condition(&cid)))
+                let cond = py.detach(|| rt.block_on(store.get_condition(&cid)))
                     .map_err(crate::error::to_py_err)?;
                 match cond {
                     Some(c) => {
@@ -56,7 +56,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(store.register_trigger(&trigger)))
+                py.detach(|| rt.block_on(store.register_trigger(&trigger)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -69,7 +69,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let trigger = py.allow_threads(|| rt.block_on(store.get_trigger(&tid)))
+                let trigger = py.detach(|| rt.block_on(store.get_trigger(&tid)))
                     .map_err(crate::error::to_py_err)?;
                 match trigger {
                     Some(t) => {
@@ -93,7 +93,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let triggers = py.allow_threads(|| rt.block_on(store.get_triggers_for_condition(&cid)))
+                let triggers = py.detach(|| rt.block_on(store.get_triggers_for_condition(&cid)))
                     .map_err(crate::error::to_py_err)?;
                 triggers
                     .iter()
@@ -120,7 +120,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let conditions = py.allow_threads(|| rt.block_on(store.get_conditions_for_task(&task_id)))
+                let conditions = py.detach(|| rt.block_on(store.get_conditions_for_task(&task_id)))
                     .map_err(crate::error::to_py_err)?;
                 conditions
                     .iter()
@@ -139,7 +139,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let conditions = py.allow_threads(|| rt.block_on(store.get_all_conditions()))
+                let conditions = py.detach(|| rt.block_on(store.get_all_conditions()))
                     .map_err(crate::error::to_py_err)?;
                 conditions
                     .iter()
@@ -167,7 +167,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(store.remove_triggers_for_task(&task_id)))
+                py.detach(|| rt.block_on(store.remove_triggers_for_task(&task_id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -177,7 +177,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(store.purge()))
+                py.detach(|| rt.block_on(store.purge()))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -194,7 +194,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(store.record_valid_condition(&vc)))
+                py.detach(|| rt.block_on(store.record_valid_condition(&vc)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -204,7 +204,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let vcs = py.allow_threads(|| rt.block_on(store.get_valid_conditions()))
+                let vcs = py.detach(|| rt.block_on(store.get_valid_conditions()))
                     .map_err(crate::error::to_py_err)?;
                 vcs.iter()
                     .map(|vc| {
@@ -224,7 +224,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(store.clear_valid_conditions(&valid_condition_ids)))
+                py.detach(|| rt.block_on(store.clear_valid_conditions(&valid_condition_ids)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -239,7 +239,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let ts = py.allow_threads(|| rt.block_on(store.get_last_cron_execution(&cid)))
+                let ts = py.detach(|| rt.block_on(store.get_last_cron_execution(&cid)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(ts.map(|dt| {
                     dt.timestamp() as f64
@@ -282,7 +282,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(store.store_cron_execution(&cid, exec_time, expected)))
+                py.detach(|| rt.block_on(store.store_cron_execution(&cid, exec_time, expected)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -298,7 +298,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(store.claim_trigger_run(&run_id)))
+                py.detach(|| rt.block_on(store.claim_trigger_run(&run_id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -327,7 +327,7 @@ macro_rules! impl_py_trigger_store {
                     arguments: std::collections::BTreeMap::new(),
                 };
                 let rt = crate::runtime::shared_runtime()?;
-                let valid = py.allow_threads(|| rt.block_on(self.manager.report_status_change(&ctx)))
+                let valid = py.detach(|| rt.block_on(self.manager.report_status_change(&ctx)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(valid.iter().map(|vc| vc.valid_condition_id.clone()).collect())
             }
@@ -354,7 +354,7 @@ macro_rules! impl_py_trigger_store {
                     arguments: std::collections::BTreeMap::new(),
                 };
                 let rt = crate::runtime::shared_runtime()?;
-                let valid = py.allow_threads(|| rt.block_on(self.manager.report_result(&ctx)))
+                let valid = py.detach(|| rt.block_on(self.manager.report_result(&ctx)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(valid.iter().map(|vc| vc.valid_condition_id.clone()).collect())
             }
@@ -383,7 +383,7 @@ macro_rules! impl_py_trigger_store {
                     arguments: std::collections::BTreeMap::new(),
                 };
                 let rt = crate::runtime::shared_runtime()?;
-                let valid = py.allow_threads(|| rt.block_on(self.manager.report_failure(&ctx)))
+                let valid = py.detach(|| rt.block_on(self.manager.report_failure(&ctx)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(valid.iter().map(|vc| vc.valid_condition_id.clone()).collect())
             }
@@ -399,14 +399,14 @@ macro_rules! impl_py_trigger_store {
                         pyo3::exceptions::PyValueError::new_err(e.to_string())
                     })?;
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(self.manager.emit_event(event_code, payload)))
+                py.detach(|| rt.block_on(self.manager.emit_event(event_code, payload)))
                     .map_err(crate::error::to_py_err)
             }
 
             /// Evaluate all cron conditions. Returns list of valid condition IDs.
             fn evaluate_cron_conditions(&self, py: pyo3::Python<'_>) -> pyo3::PyResult<Vec<String>> {
                 let rt = crate::runtime::shared_runtime()?;
-                let valid = py.allow_threads(|| rt.block_on(self.manager.evaluate_cron_conditions()))
+                let valid = py.detach(|| rt.block_on(self.manager.evaluate_cron_conditions()))
                     .map_err(crate::error::to_py_err)?;
                 Ok(valid.iter().map(|vc| vc.valid_condition_id.clone()).collect())
             }
@@ -414,7 +414,7 @@ macro_rules! impl_py_trigger_store {
             /// Evaluate all pending triggers. Returns list of (trigger_json, args_json).
             fn evaluate_triggers(&self, py: pyo3::Python<'_>) -> pyo3::PyResult<Vec<(String, String)>> {
                 let rt = crate::runtime::shared_runtime()?;
-                let to_invoke = py.allow_threads(|| rt.block_on(self.manager.evaluate_triggers()))
+                let to_invoke = py.detach(|| rt.block_on(self.manager.evaluate_triggers()))
                     .map_err(crate::error::to_py_err)?;
                 to_invoke
                     .iter()
@@ -439,7 +439,7 @@ macro_rules! impl_py_trigger_store {
             #[pyo3(signature = (limit=100))]
             fn pending_trigger_runs(&self, py: pyo3::Python<'_>, limit: usize) -> pyo3::PyResult<Vec<String>> {
                 let rt = crate::runtime::shared_runtime()?;
-                let runs = py.allow_threads(|| rt.block_on(self.manager.pending_trigger_runs(limit)))
+                let runs = py.detach(|| rt.block_on(self.manager.pending_trigger_runs(limit)))
                     .map_err(crate::error::to_py_err)?;
                 runs.iter()
                     .map(|run| {
@@ -459,7 +459,7 @@ macro_rules! impl_py_trigger_store {
                 let run_id = rustvello_proto::trigger::TriggerRunId::from(trigger_run_id.to_owned());
                 let invocation = rustvello_proto::identifiers::InvocationId::from_string(invocation_id);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(self.manager.complete_trigger_run(&run_id, &invocation)))
+                py.detach(|| rt.block_on(self.manager.complete_trigger_run(&run_id, &invocation)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -495,7 +495,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let cid = py.allow_threads(|| rt.block_on(store.register_condition(&condition)))
+                let cid = py.detach(|| rt.block_on(store.register_condition(&condition)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(cid.to_string())
             }
@@ -521,7 +521,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let cid = py.allow_threads(|| rt.block_on(store.register_condition(&condition)))
+                let cid = py.detach(|| rt.block_on(store.register_condition(&condition)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(cid.to_string())
             }
@@ -544,7 +544,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let cid = py.allow_threads(|| rt.block_on(store.register_condition(&condition)))
+                let cid = py.detach(|| rt.block_on(store.register_condition(&condition)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(cid.to_string())
             }
@@ -576,7 +576,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let cid = py.allow_threads(|| rt.block_on(store.register_condition(&condition)))
+                let cid = py.detach(|| rt.block_on(store.register_condition(&condition)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(cid.to_string())
             }
@@ -610,7 +610,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                let cid = py.allow_threads(|| rt.block_on(store.register_condition(&condition)))
+                let cid = py.detach(|| rt.block_on(store.register_condition(&condition)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(cid.to_string())
             }
@@ -671,7 +671,7 @@ macro_rules! impl_py_trigger_store {
                 let store = std::sync::Arc::clone(&self.store)
                     as std::sync::Arc<dyn TriggerStore>;
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(store.register_trigger(&trigger)))
+                py.detach(|| rt.block_on(store.register_trigger(&trigger)))
                     .map_err(crate::error::to_py_err)
             }
         }

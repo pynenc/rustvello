@@ -77,7 +77,7 @@ For finer-grained control, depend on individual crates directly:
 
 ## Python (`rustvello` wheel)
 
-The `rustvello` Python package ships pre-compiled wheels for Python 3.9 through 3.13 and exposes
+The `rustvello` Python package ships one pre-compiled wheel per platform for CPython 3.12 and newer (stable ABI) and exposes
 the Rust backends to Python. It can be used standalone or as a backend for
 [pynenc](https://docs.pynenc.org).
 
@@ -106,9 +106,12 @@ app = PynencBuilder().app_id("my-app").rustvello(backend="mem").build()
 app = PynencBuilder().app_id("my-app").rustvello(backend="sqlite").build()
 
 # Redis (distributed)
-app = PynencBuilder().app_id("my-app").rustvello(
-    backend="redis", redis_url="redis://localhost:6379"
-).build()
+app = (
+    PynencBuilder()
+    .app_id("my-app")
+    .rustvello(backend="redis", redis_url="redis://localhost:6379")
+    .build()
+)
 ```
 
 ### Backend Selection Matrix

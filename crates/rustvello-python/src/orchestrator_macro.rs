@@ -19,7 +19,7 @@ macro_rules! impl_py_orchestrator {
                 let id = crate::utils::parse_invocation_id(invocation_id)?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let record = py.allow_threads(|| rt.block_on(orch.get_invocation_status(&id)))
+                let record = py.detach(|| rt.block_on(orch.get_invocation_status(&id)))
                     .map_err(crate::error::to_py_err)?;
                 Ok((
                     record.status.to_string(),
@@ -43,7 +43,7 @@ macro_rules! impl_py_orchestrator {
                     .map(rustvello_proto::identifiers::RunnerId::from_string);
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let record = py.allow_threads(|| rt.block_on(orch.set_invocation_status(&id, new_status, rid.as_ref())))
+                let record = py.detach(|| rt.block_on(orch.set_invocation_status(&id, new_status, rid.as_ref())))
                     .map_err(crate::error::to_py_err)?;
                 Ok((
                     record.status.to_string(),
@@ -65,7 +65,7 @@ macro_rules! impl_py_orchestrator {
                 let waited_on_id = crate::utils::parse_invocation_id(waited_on)?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(orch.set_waiting_for(&waiter_id, &waited_on_id)))
+                py.detach(|| rt.block_on(orch.set_waiting_for(&waiter_id, &waited_on_id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -77,7 +77,7 @@ macro_rules! impl_py_orchestrator {
                 let id = crate::utils::parse_invocation_id(completed)?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let ids = py.allow_threads(|| rt.block_on(orch.release_waiters(&id)))
+                let ids = py.detach(|| rt.block_on(orch.release_waiters(&id)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(ids.into_iter().map(|id| id.as_str().to_string()).collect())
             }
@@ -90,7 +90,7 @@ macro_rules! impl_py_orchestrator {
                 let id = crate::utils::parse_invocation_id(waited_on)?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let ids = py.allow_threads(|| rt.block_on(orch.get_waiters(&id)))
+                let ids = py.detach(|| rt.block_on(orch.get_waiters(&id)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(ids.into_iter().map(|id| id.as_str().to_string()).collect())
             }
@@ -115,7 +115,7 @@ macro_rules! impl_py_orchestrator {
                 let call = rustvello_proto::call::CallDTO::new(task_id, args);
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let inv_id = py.allow_threads(|| rt.block_on(orch.register_invocation(&call)))
+                let inv_id = py.detach(|| rt.block_on(orch.register_invocation(&call)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(inv_id.as_str().to_string())
             }
@@ -144,7 +144,7 @@ macro_rules! impl_py_orchestrator {
                     .map(rustvello_proto::identifiers::RunnerId::from_string);
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let record = py.allow_threads(|| rt.block_on(orch.register_invocation_with_id(
+                let record = py.detach(|| rt.block_on(orch.register_invocation_with_id(
                         &inv_id, &call, rid.as_ref(),
                     )))
                     .map_err(crate::error::to_py_err)?;
@@ -166,7 +166,7 @@ macro_rules! impl_py_orchestrator {
                 let id = crate::utils::parse_invocation_id(invocation_id)?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(orch.increment_invocation_retries(&id)))
+                py.detach(|| rt.block_on(orch.increment_invocation_retries(&id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -178,7 +178,7 @@ macro_rules! impl_py_orchestrator {
                 let id = crate::utils::parse_invocation_id(invocation_id)?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(orch.get_invocation_retries(&id)))
+                py.detach(|| rt.block_on(orch.get_invocation_retries(&id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -192,7 +192,7 @@ macro_rules! impl_py_orchestrator {
                 let id = crate::utils::parse_invocation_id(invocation_id)?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(orch.remove_invocation(&id)))
+                py.detach(|| rt.block_on(orch.remove_invocation(&id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -200,7 +200,7 @@ macro_rules! impl_py_orchestrator {
                 use rustvello_core::orchestrator::OrchestratorStatus;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(orch.purge()))
+                py.detach(|| rt.block_on(orch.purge()))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -232,7 +232,7 @@ macro_rules! impl_py_orchestrator {
                 });
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(orch.check_running_concurrency(
+                py.detach(|| rt.block_on(orch.check_running_concurrency(
                         &task_id, &config, args.as_ref(),
                     )))
                     .map_err(crate::error::to_py_err)
@@ -261,7 +261,7 @@ macro_rules! impl_py_orchestrator {
                 });
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(orch.index_for_concurrency_control(
+                py.detach(|| rt.block_on(orch.index_for_concurrency_control(
                         &inv_id, &task_id, args.as_ref(),
                     )))
                     .map_err(crate::error::to_py_err)
@@ -275,7 +275,7 @@ macro_rules! impl_py_orchestrator {
                 let inv_id = crate::utils::parse_invocation_id(invocation_id)?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(orch.remove_from_concurrency_index(&inv_id)))
+                py.detach(|| rt.block_on(orch.remove_from_concurrency_index(&inv_id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -289,7 +289,7 @@ macro_rules! impl_py_orchestrator {
                 let id = crate::utils::parse_invocation_id(invocation_id)?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(orch.schedule_auto_purge(&id)))
+                py.detach(|| rt.block_on(orch.schedule_auto_purge(&id)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -300,7 +300,7 @@ macro_rules! impl_py_orchestrator {
                 use rustvello_core::orchestrator::OrchestratorStatus;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let ids = py.allow_threads(|| rt.block_on(orch.run_auto_purge(max_age_secs)))
+                let ids = py.detach(|| rt.block_on(orch.run_auto_purge(max_age_secs)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(ids.into_iter().map(|id| id.as_str().to_string()).collect())
             }
@@ -331,7 +331,7 @@ macro_rules! impl_py_orchestrator {
                 };
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let ids = py.allow_threads(|| rt.block_on(orch.get_invocations_by_status(s, task_id.as_ref())))
+                let ids = py.detach(|| rt.block_on(orch.get_invocations_by_status(s, task_id.as_ref())))
                     .map_err(crate::error::to_py_err)?;
                 Ok(ids.into_iter().map(|id| id.as_str().to_string()).collect())
             }
@@ -348,7 +348,7 @@ macro_rules! impl_py_orchestrator {
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let ids = py.allow_threads(|| rt.block_on(orch.get_invocations_by_task(&task_id)))
+                let ids = py.detach(|| rt.block_on(orch.get_invocations_by_task(&task_id)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(ids.into_iter().map(|id| id.as_str().to_string()).collect())
             }
@@ -363,7 +363,7 @@ macro_rules! impl_py_orchestrator {
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let ids = py.allow_threads(|| rt.block_on(orch.get_invocations_by_call(&cid)))
+                let ids = py.detach(|| rt.block_on(orch.get_invocations_by_call(&cid)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(ids.into_iter().map(|id| id.as_str().to_string()).collect())
             }
@@ -399,7 +399,7 @@ macro_rules! impl_py_orchestrator {
                         .transpose()?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(orch.count_invocations(
+                py.detach(|| rt.block_on(orch.count_invocations(
                         task_id.as_ref(),
                         parsed_statuses.as_deref(),
                     )))
@@ -439,7 +439,7 @@ macro_rules! impl_py_orchestrator {
                         .transpose()?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let ids = py.allow_threads(|| rt.block_on(orch.get_invocation_ids_paginated(
+                let ids = py.detach(|| rt.block_on(orch.get_invocation_ids_paginated(
                         task_id.as_ref(),
                         parsed_statuses.as_deref(),
                         limit,
@@ -466,7 +466,7 @@ macro_rules! impl_py_orchestrator {
                         .collect::<pyo3::PyResult<_>>()?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let filtered = py.allow_threads(|| rt.block_on(orch.filter_by_status(&ids, &parsed_statuses)))
+                let filtered = py.detach(|| rt.block_on(orch.filter_by_status(&ids, &parsed_statuses)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(filtered.into_iter().map(|id| id.as_str().to_string()).collect())
             }
@@ -479,7 +479,7 @@ macro_rules! impl_py_orchestrator {
                 use rustvello_core::orchestrator::OrchestratorQuery;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let ids = py.allow_threads(|| rt.block_on(orch.get_blocking_invocations(max_num)))
+                let ids = py.detach(|| rt.block_on(orch.get_blocking_invocations(max_num)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(ids.into_iter().map(|id| id.as_str().to_string()).collect())
             }
@@ -511,7 +511,7 @@ macro_rules! impl_py_orchestrator {
                 });
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let ids = py.allow_threads(|| rt.block_on(orch.get_existing_invocations(
+                let ids = py.detach(|| rt.block_on(orch.get_existing_invocations(
                         &task_id,
                         args.as_ref(),
                         &parsed_statuses,
@@ -532,7 +532,7 @@ macro_rules! impl_py_orchestrator {
                 let rid = rustvello_proto::identifiers::RunnerId::from_string(runner_id);
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(orch.register_heartbeat(&rid, can_run_atomic_service)))
+                py.detach(|| rt.block_on(orch.register_heartbeat(&rid, can_run_atomic_service)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -543,7 +543,7 @@ macro_rules! impl_py_orchestrator {
                 use rustvello_core::orchestrator::OrchestratorRecovery;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let ids = py.allow_threads(|| rt.block_on(orch.get_stale_pending_invocations(max_pending_seconds)))
+                let ids = py.detach(|| rt.block_on(orch.get_stale_pending_invocations(max_pending_seconds)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(ids.into_iter().map(|id| id.as_str().to_string()).collect())
             }
@@ -555,7 +555,7 @@ macro_rules! impl_py_orchestrator {
                 use rustvello_core::orchestrator::OrchestratorRecovery;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let ids = py.allow_threads(|| rt.block_on(orch.get_stale_running_invocations(runner_dead_after_seconds)))
+                let ids = py.detach(|| rt.block_on(orch.get_stale_running_invocations(runner_dead_after_seconds)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(ids.into_iter().map(|id| id.as_str().to_string()).collect())
             }
@@ -567,7 +567,7 @@ macro_rules! impl_py_orchestrator {
                 use rustvello_core::orchestrator::OrchestratorRecovery;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let ids = py.allow_threads(|| rt.block_on(orch.get_active_runner_ids(timeout_seconds)))
+                let ids = py.detach(|| rt.block_on(orch.get_active_runner_ids(timeout_seconds)))
                     .map_err(crate::error::to_py_err)?;
                 Ok(ids.into_iter().map(|id| id.as_str().to_string()).collect())
             }
@@ -582,7 +582,7 @@ macro_rules! impl_py_orchestrator {
                 use rustvello_core::orchestrator::OrchestratorRecovery;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let runners = py.allow_threads(|| rt.block_on(orch.get_active_runners(
+                let runners = py.detach(|| rt.block_on(orch.get_active_runners(
                         timeout_seconds,
                         can_run_atomic_service,
                     )))
@@ -590,7 +590,7 @@ macro_rules! impl_py_orchestrator {
                 runners
                     .into_iter()
                     .map(|r| {
-                        let dict = pyo3::types::PyDict::new_bound(py);
+                        let dict = pyo3::types::PyDict::new(py);
                         dict.set_item("runner_id", &*r.runner_id.as_str())?;
                         dict.set_item("creation_time", r.creation_time.to_rfc3339())?;
                         dict.set_item("last_heartbeat", r.last_heartbeat.to_rfc3339())?;
@@ -636,7 +636,7 @@ macro_rules! impl_py_orchestrator {
                     })?;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(orch.record_atomic_service_execution(&rid, start, end)))
+                py.detach(|| rt.block_on(orch.record_atomic_service_execution(&rid, start, end)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -647,12 +647,12 @@ macro_rules! impl_py_orchestrator {
                 use rustvello_core::orchestrator::OrchestratorRecovery;
                 let orch = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                let timeline = py.allow_threads(|| rt.block_on(orch.get_atomic_service_timeline()))
+                let timeline = py.detach(|| rt.block_on(orch.get_atomic_service_timeline()))
                     .map_err(crate::error::to_py_err)?;
                 timeline
                     .into_iter()
                     .map(|exec| {
-                        let dict = pyo3::types::PyDict::new_bound(py);
+                        let dict = pyo3::types::PyDict::new(py);
                         dict.set_item("runner_id", exec.runner_id)?;
                         dict.set_item("start_time", exec.start.timestamp_millis() as f64 / 1000.0)?;
                         dict.set_item("end_time", exec.end.timestamp_millis() as f64 / 1000.0)?;

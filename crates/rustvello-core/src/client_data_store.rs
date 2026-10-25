@@ -57,8 +57,16 @@ pub fn is_reference(value: &str) -> bool {
 
 /// Generate a content-hash reference key from serialized data.
 pub fn generate_reference_key(data: &str) -> String {
+    use std::fmt::Write;
+
     let hash = Sha256::digest(data.as_bytes());
-    format!("{REFERENCE_PREFIX}{hash:x}")
+    let mut key = String::with_capacity(REFERENCE_PREFIX.len() + hash.len() * 2);
+    key.push_str(REFERENCE_PREFIX);
+    for byte in hash.iter() {
+        // Writing to a String cannot fail.
+        let _ = write!(key, "{byte:02x}");
+    }
+    key
 }
 
 // ---------------------------------------------------------------------------

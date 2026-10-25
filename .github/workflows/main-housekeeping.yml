@@ -1,0 +1,37 @@
+# Repository housekeeping after a push to main: labels match
+# .github/labels.yml, and the draft of the next release notes is updated.
+name: Main housekeeping
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  housekeeping:
+    name: Labels and release draft
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Sync repository labels
+        uses: crazy-max/ghaction-github-labeler@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          yaml-file: .github/labels.yml
+          exclude: |
+            help*
+            *issue
+
+      - name: Update the release draft
+        uses: release-drafter/release-drafter@v7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

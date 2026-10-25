@@ -59,12 +59,12 @@ mod tests {
 
     #[test]
     fn workflow_root_requires_running_context() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let Err(err) = workflow_root() else {
                 panic!("workflow_root should fail outside an invocation context");
             };
-            assert!(err.value_bound(py).to_string().contains("workflow"));
+            assert!(err.value(py).to_string().contains("workflow"));
         });
     }
 }

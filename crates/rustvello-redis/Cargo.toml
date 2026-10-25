@@ -18,6 +18,8 @@ rustvello-proto = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 redis = { workspace = true }
+# The redis crate builds its TLS config from rustls' process default provider.
+rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

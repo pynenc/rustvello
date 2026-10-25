@@ -4,6 +4,35 @@ For detailed information on each version, please visit the [GitHub Releases page
 
 ## Unreleased
 
+## 0.9.1 - 2026-10-26
+
+- Wheels use Python's stable ABI (`abi3`): one wheel per platform for every
+  CPython from 3.12 up, including 3.14, instead of one per Python version. A
+  release shrinks from 21 wheels (about 370 MB) to 5.
+- Minimum Python is 3.12 (3.9 and 3.10 are end of life).
+- Fix: a Redis TLS connection (`rediss://`) panicked with "Could not
+  automatically determine the process-level CryptoProvider" in builds that
+  link two rustls crypto backends, such as the Python wheel. rustvello now
+  installs aws-lc-rs as the default before the redis crate builds its TLS
+  configuration (kept if the application set one).
+- PyO3 0.29, and the storage drivers rusqlite 0.40, redis 1.7, lapin 4,
+  mongodb 3.9 (MongoDB 3.6 stays on its 2.8 driver), plus toml 1, askama
+  0.16, syn 3, reqwest 0.13, tower-http 0.7 and other crates, each at a
+  version at least 15 days old. No behaviour or API change: the backend
+  suites ran against real Redis, PostgreSQL, MongoDB, MongoDB 3.6 and
+  RabbitMQ.
+- Rust toolchain and `rust-version` 1.99; the resolver keeps dependencies
+  compatible with it.
+- Dependencies upgraded, each to a version at least 15 days old: `rand` 0.10,
+  `croner` 4, `lru` 0.18, OpenTelemetry 0.33, and the Python development
+  tools (pytest 9, mypy 2, ruff 0.17, maturin 1.15).
+- CI: fewer workflow runs per pull request (PR metadata in one workflow,
+  label sync and release notes only on `main`), Rust tests once per system,
+  macOS tested on the oldest and newest Python in pull requests, superseded
+  runs cancelled. A pull request build is uploaded to TestPyPI only after
+  its tests pass. Dependabot opens one monthly pull request for all
+  ecosystems.
+
 ## 0.9.0 - 2026-10-25
 
 Operations feedback from a Celery migration on Kubernetes (MongoDB 3.6, RabbitMQ).

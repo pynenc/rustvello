@@ -15,7 +15,7 @@ the calls shown here exist in the version below.
 
 ## Requirements
 
-- `rustvello` **0.9.x** (`pip install "rustvello>=0.9,<0.10"`), CPython 3.9+.
+- `rustvello` **0.9.x** (`pip install "rustvello>=0.9,<0.10"`), CPython 3.12+.
   Check with `python -c "import rustvello; print(rustvello.__version__)"`.
 - SQLite needs nothing else. Other backends need their server (PostgreSQL,
   Redis, MongoDB, RabbitMQ).
@@ -98,7 +98,7 @@ runs tasks inline in the caller.
 
 ```python
 invocation = add.submit_with_key("request-42", x=1, y=2)  # id = InvocationId.from_key(task key, key)
-again = add.submit_with_key("request-42", x=1, y=2)       # same key, same arguments: same invocation
+again = add.submit_with_key("request-42", x=1, y=2)  # same key, same arguments: same invocation
 assert str(again.id) == str(invocation.id)  # compare ids as strings
 ```
 
@@ -155,9 +155,9 @@ how failures surface to the producer.
 `examples/cron_trigger.py`:
 
 ```python
-app.trigger(write_report).on_cron("*/5 * * * *").register()          # every 5 minutes
+app.trigger(write_report).on_cron("*/5 * * * *").register()  # every 5 minutes
 app.trigger(write_report).on_cron("0 0 3 * * *").with_args(kind="daily").register()  # 03:00:00
-app.trigger(write_report).on_interval(300).register()                # every 300 s
+app.trigger(write_report).on_interval(300).register()  # every 300 s
 ```
 
 - 5 fields = standard minute cron; 6 fields = seconds first.
@@ -173,7 +173,7 @@ app.trigger(write_report).on_interval(300).register()                # every 300
 `examples/cancel.py`:
 
 ```python
-invocation.cancel()   # True if this call cancelled it, False if already final
+invocation.cancel()  # True if this call cancelled it, False if already final
 app.cancel(invocation)
 ```
 

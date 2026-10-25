@@ -57,17 +57,13 @@ impl std::error::Error for ConfigParseError {}
 /// Log output format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[derive(Default)]
 pub enum LogFormat {
     /// Human-readable text with optional ANSI colors.
+    #[default]
     Text,
     /// Structured JSON (one object per line).
     Json,
-}
-
-impl Default for LogFormat {
-    fn default() -> Self {
-        Self::Text
-    }
 }
 
 impl std::str::FromStr for LogFormat {
@@ -84,12 +80,14 @@ impl std::str::FromStr for LogFormat {
 /// Controls how task arguments are displayed in logs and monitoring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[derive(Default)]
 pub enum ArgumentPrintMode {
     /// Show complete argument values.
     Full,
     /// Show only argument names (keys).
     Keys,
     /// Show truncated argument values (up to `truncate_arguments_length`).
+    #[default]
     Truncated,
     /// Hide all argument values.
     Hidden,
@@ -98,16 +96,12 @@ pub enum ArgumentPrintMode {
 /// Strategy used by runners when consuming multiple logical queues.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[derive(Default)]
 pub enum QueueSelectionStrategy {
+    #[default]
     RoundRobin,
     Ordered,
     Random,
-}
-
-impl Default for QueueSelectionStrategy {
-    fn default() -> Self {
-        Self::RoundRobin
-    }
 }
 
 impl std::str::FromStr for QueueSelectionStrategy {
@@ -122,12 +116,6 @@ impl std::str::FromStr for QueueSelectionStrategy {
                 "invalid QueueSelectionStrategy: {value}"
             ))),
         }
-    }
-}
-
-impl Default for ArgumentPrintMode {
-    fn default() -> Self {
-        Self::Truncated
     }
 }
 

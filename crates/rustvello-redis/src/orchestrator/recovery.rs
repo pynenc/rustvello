@@ -120,9 +120,9 @@ impl OrchestratorRecovery for RedisOrchestrator {
         let mut stale = Vec::new();
         for ((inv_id, _), hb_val) in runner_pairs.into_iter().zip(hb_values) {
             let is_stale = match hb_val {
-                Some(ts) => chrono::DateTime::parse_from_rfc3339(&ts)
-                    .map(|dt| dt < threshold)
-                    .unwrap_or(true),
+                Some(ts) => {
+                    chrono::DateTime::parse_from_rfc3339(&ts).map_or(true, |dt| dt < threshold)
+                }
                 None => true,
             };
             if is_stale {
@@ -136,7 +136,7 @@ impl OrchestratorRecovery for RedisOrchestrator {
         let threshold = Utc::now()
             - chrono::Duration::seconds(i64::try_from(timeout_seconds).unwrap_or(i64::MAX));
         let mut conn = self.pool.conn().await?;
-        let keys = scan_keys(&mut conn, &format!("{}*", &self.heartbeat_prefix)).await?;
+        let keys = scan_keys(&mut conn, &format!("{}*", self.heartbeat_prefix)).await?;
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -148,9 +148,8 @@ impl OrchestratorRecovery for RedisOrchestrator {
         let mut result = Vec::new();
         for (key, val) in keys.into_iter().zip(values) {
             if let Some(ts) = val {
-                let is_active = chrono::DateTime::parse_from_rfc3339(&ts)
-                    .map(|dt| dt >= threshold)
-                    .unwrap_or(false);
+                let is_active =
+                    chrono::DateTime::parse_from_rfc3339(&ts).is_ok_and(|dt| dt >= threshold);
                 if is_active {
                     let runner_id_str = &key[self.heartbeat_prefix.len()..];
                     result.push(RunnerId::from_string(runner_id_str.to_string()));
@@ -168,7 +167,7 @@ impl OrchestratorRecovery for RedisOrchestrator {
         let threshold = Utc::now()
             - chrono::Duration::seconds(i64::try_from(timeout_seconds).unwrap_or(i64::MAX));
         let mut conn = self.pool.conn().await?;
-        let keys = scan_keys(&mut conn, &format!("{}*", &self.heartbeat_prefix)).await?;
+        let keys = scan_keys(&mut conn, &format!("{}*", self.heartbeat_prefix)).await?;
         if keys.is_empty() {
             return Ok(Vec::new());
         }

@@ -107,7 +107,7 @@ def test_naive_answers_fail_and_wrong_apis_are_counted(surface: dict) -> None:
 def test_api_checker(code: str, expected: list[str], surface: dict) -> None:
     errors = api_surface.check_code(code, surface).errors
     assert len(errors) == len(expected), errors
-    for error, word in zip(errors, expected):
+    for error, word in zip(errors, expected, strict=True):
         assert word in error
 
 

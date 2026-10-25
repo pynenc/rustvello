@@ -49,10 +49,10 @@ create_exception!(rustvello, InternalError, RustvelloError);
 
 /// Convert a [`CoreError`] to the matching typed Python exception.
 ///
-/// Uses [`Python::with_gil`] internally so callers can pass this as
+/// Uses [`Python::attach`] internally so callers can pass this as
 /// `.map_err(to_py_err)` without threading a `Python<'_>` token.
 pub fn to_py_err(e: CoreError) -> PyErr {
-    Python::with_gil(|py| to_py_err_impl(py, e))
+    Python::attach(|py| to_py_err_impl(py, e))
 }
 
 fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
@@ -60,14 +60,14 @@ fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
         // ── Retry ───────────────────────────────────────────────
         CoreError::Retry { reason } => {
             let err = RetryError::new_err(format!("retry requested: {reason}"));
-            let _ = err.value_bound(py).setattr("reason", &*reason);
+            let _ = err.value(py).setattr("reason", &*reason);
             err
         }
         CoreError::ConcurrencyRetry { task_id, reason } => {
             let err =
                 ConcurrencyRetryError::new_err(format!("concurrency retry: {task_id} — {reason}"));
             {
-                let val = err.value_bound(py);
+                let val = err.value(py);
                 let _ = val.setattr("task_id", task_id.to_string());
                 let _ = val.setattr("reason", &*reason);
             }
@@ -80,18 +80,18 @@ fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
         // ── Task ────────────────────────────────────────────────
         CoreError::TaskNotFound { task_id } => {
             let err = TaskNotFoundError::new_err(format!("task not found: {task_id}"));
-            let _ = err.value_bound(py).setattr("task_id", task_id.to_string());
+            let _ = err.value(py).setattr("task_id", task_id.to_string());
             err
         }
         CoreError::TaskNotRegistered { task_id } => {
             let err = TaskNotRegisteredError::new_err(format!("task not registered: {task_id}"));
-            let _ = err.value_bound(py).setattr("task_id", task_id.to_string());
+            let _ = err.value(py).setattr("task_id", task_id.to_string());
             err
         }
         CoreError::CycleDetected { task_id, message } => {
             let err = CycleDetectedError::new_err(format!("cycle detected: {task_id} — {message}"));
             {
-                let val = err.value_bound(py);
+                let val = err.value(py);
                 let _ = val.setattr("task_id", task_id.to_string());
                 let _ = val.setattr("message", &*message);
             }
@@ -102,7 +102,7 @@ fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
                 "runner not executable: {task_id} — {message}"
             ));
             {
-                let val = err.value_bound(py);
+                let val = err.value(py);
                 let _ = val.setattr("task_id", task_id.to_string());
                 let _ = val.setattr("message", &*message);
             }
@@ -110,7 +110,7 @@ fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
         }
         CoreError::TaskClassNotFound { task_id } => {
             let err = TaskClassNotFoundError::new_err(format!("task class not found: {task_id}"));
-            let _ = err.value_bound(py).setattr("task_id", task_id.to_string());
+            let _ = err.value(py).setattr("task_id", task_id.to_string());
             err
         }
 
@@ -119,7 +119,7 @@ fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
             let err =
                 InvocationNotFoundError::new_err(format!("invocation not found: {invocation_id}"));
             let _ = err
-                .value_bound(py)
+                .value(py)
                 .setattr("invocation_id", invocation_id.to_string());
             err
         }
@@ -129,7 +129,7 @@ fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
                 "invocation {invocation_id} was cancelled"
             ));
             let _ = err
-                .value_bound(py)
+                .value(py)
                 .setattr("invocation_id", invocation_id.to_string());
             err
         }
@@ -145,7 +145,7 @@ fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
                 "invalid status transition: {from_status} → {to_status}"
             ));
             {
-                let val = err.value_bound(py);
+                let val = err.value(py);
                 let _ = val.setattr("invocation_id", invocation_id.to_string());
                 let _ = val.setattr("from_status", from_status.to_string());
                 let _ = val.setattr("to_status", to_status.to_string());
@@ -172,7 +172,7 @@ fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
                  owner={current_owner}, requester={attempted_owner}"
             ));
             {
-                let val = err.value_bound(py);
+                let val = err.value(py);
                 let _ = val.setattr("invocation_id", invocation_id.to_string());
                 let _ = val.setattr("from_status", from_status.to_string());
                 let _ = val.setattr("to_status", to_status.to_string());
@@ -192,7 +192,7 @@ fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
                 "status race condition on {invocation_id}"
             ));
             {
-                let val = err.value_bound(py);
+                let val = err.value(py);
                 let _ = val.setattr("invocation_id", invocation_id.to_string());
                 let _ = val.setattr("previous_status", previous_status.to_string());
                 let _ = val.setattr("expected_status", expected_status.to_string());
@@ -209,7 +209,7 @@ fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
         } => {
             let err = RunnerError::new_err(format!("{error_type}: {message}"));
             {
-                let val = err.value_bound(py);
+                let val = err.value(py);
                 let _ = val.setattr("error_type", &*error_type);
                 let _ = val.setattr("message", &*message);
                 let _ = val.setattr("traceback", traceback.as_deref());
@@ -238,87 +238,72 @@ fn to_py_err_impl(py: Python<'_>, e: CoreError) -> PyErr {
 /// Register all exception classes in the given Python module.
 pub fn register_exceptions(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Base
-    m.add("RustvelloError", py.get_type_bound::<RustvelloError>())?;
+    m.add("RustvelloError", py.get_type::<RustvelloError>())?;
 
     // Retry
-    m.add("RetryError", py.get_type_bound::<RetryError>())?;
+    m.add("RetryError", py.get_type::<RetryError>())?;
     m.add(
         "ConcurrencyRetryError",
-        py.get_type_bound::<ConcurrencyRetryError>(),
+        py.get_type::<ConcurrencyRetryError>(),
     )?;
 
     // Serialization
-    m.add(
-        "SerializationError",
-        py.get_type_bound::<SerializationError>(),
-    )?;
+    m.add("SerializationError", py.get_type::<SerializationError>())?;
 
     // Task
-    m.add("TaskError", py.get_type_bound::<TaskError>())?;
-    m.add(
-        "TaskNotFoundError",
-        py.get_type_bound::<TaskNotFoundError>(),
-    )?;
+    m.add("TaskError", py.get_type::<TaskError>())?;
+    m.add("TaskNotFoundError", py.get_type::<TaskNotFoundError>())?;
     m.add(
         "TaskNotRegisteredError",
-        py.get_type_bound::<TaskNotRegisteredError>(),
+        py.get_type::<TaskNotRegisteredError>(),
     )?;
-    m.add(
-        "CycleDetectedError",
-        py.get_type_bound::<CycleDetectedError>(),
-    )?;
+    m.add("CycleDetectedError", py.get_type::<CycleDetectedError>())?;
     m.add(
         "RunnerNotExecutableError",
-        py.get_type_bound::<RunnerNotExecutableError>(),
+        py.get_type::<RunnerNotExecutableError>(),
     )?;
     m.add(
         "TaskClassNotFoundError",
-        py.get_type_bound::<TaskClassNotFoundError>(),
+        py.get_type::<TaskClassNotFoundError>(),
     )?;
 
     // Invocation
-    m.add("InvocationError", py.get_type_bound::<InvocationError>())?;
+    m.add("InvocationError", py.get_type::<InvocationError>())?;
     m.add(
         "InvocationNotFoundError",
-        py.get_type_bound::<InvocationNotFoundError>(),
+        py.get_type::<InvocationNotFoundError>(),
     )?;
     m.add(
         "InvocationCancelledError",
-        py.get_type_bound::<InvocationCancelledError>(),
+        py.get_type::<InvocationCancelledError>(),
     )?;
 
     // Status
     m.add(
         "InvocationStatusError",
-        py.get_type_bound::<InvocationStatusError>(),
+        py.get_type::<InvocationStatusError>(),
     )?;
     m.add(
         "StatusTransitionError",
-        py.get_type_bound::<StatusTransitionError>(),
+        py.get_type::<StatusTransitionError>(),
     )?;
     m.add(
         "StatusOwnershipError",
-        py.get_type_bound::<StatusOwnershipError>(),
+        py.get_type::<StatusOwnershipError>(),
     )?;
     m.add(
         "StatusRaceConditionError",
-        py.get_type_bound::<StatusRaceConditionError>(),
+        py.get_type::<StatusRaceConditionError>(),
     )?;
 
     // Infrastructure
-    m.add(
-        "StateBackendError",
-        py.get_type_bound::<StateBackendError>(),
-    )?;
-    m.add("BrokerError", py.get_type_bound::<BrokerError>())?;
-    m.add("RunnerError", py.get_type_bound::<RunnerError>())?;
-    m.add(
-        "ConfigurationError",
-        py.get_type_bound::<ConfigurationError>(),
-    )?;
+    m.add("StateBackendError", py.get_type::<StateBackendError>())?;
+    m.add("BrokerError", py.get_type::<BrokerError>())?;
+    m.add("RunnerError", py.get_type::<RunnerError>())?;
+    m.add("ConfigurationError", py.get_type::<ConfigurationError>())?;
 
     // Internal
-    m.add("InternalError", py.get_type_bound::<InternalError>())?;
+    m.add("InternalError", py.get_type::<InternalError>())?;
 
     Ok(())
 }
@@ -334,7 +319,7 @@ mod tests {
 
     #[test]
     fn retry_maps_to_retry_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::Retry {
                 reason: "transient".into(),
             });
@@ -345,7 +330,7 @@ mod tests {
 
     #[test]
     fn concurrency_retry_maps_to_concurrency_retry_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::ConcurrencyRetry {
                 task_id: "mod.task".parse().unwrap(),
                 reason: "locked".into(),
@@ -358,7 +343,7 @@ mod tests {
 
     #[test]
     fn serialization_maps_to_serialization_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::Serialization {
                 message: "bad json".into(),
             });
@@ -369,7 +354,7 @@ mod tests {
 
     #[test]
     fn task_not_found_maps_to_task_not_found_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::TaskNotFound {
                 task_id: "mod.func".parse().unwrap(),
             });
@@ -381,7 +366,7 @@ mod tests {
 
     #[test]
     fn task_not_registered_maps_to_task_not_registered_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::TaskNotRegistered {
                 task_id: "mod.my_task".parse().unwrap(),
             });
@@ -392,7 +377,7 @@ mod tests {
 
     #[test]
     fn invocation_not_found_maps_to_invocation_not_found_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::InvocationNotFound {
                 invocation_id: InvocationId::from_string("abc-123"),
             });
@@ -404,7 +389,7 @@ mod tests {
 
     #[test]
     fn status_transition_maps_to_status_transition_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::InvalidStatusTransition {
                 invocation_id: InvocationId::from_string("inv-1"),
                 from_status: InvocationStatus::Registered,
@@ -420,7 +405,7 @@ mod tests {
 
     #[test]
     fn ownership_violation_maps_to_status_ownership_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::OwnershipViolation {
                 invocation_id: InvocationId::from_string("inv-2"),
                 from_status: InvocationStatus::Pending,
@@ -436,7 +421,7 @@ mod tests {
 
     #[test]
     fn race_condition_maps_to_status_race_condition_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::StatusRaceCondition {
                 invocation_id: InvocationId::from_string("inv-3"),
                 previous_status: InvocationStatus::Registered,
@@ -450,7 +435,7 @@ mod tests {
 
     #[test]
     fn state_backend_maps_to_state_backend_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             use rustvello_core::error::InfraErrorKind;
             let err = to_py_err(CoreError::Infrastructure {
                 kind: InfraErrorKind::Query,
@@ -464,7 +449,7 @@ mod tests {
 
     #[test]
     fn broker_maps_to_broker_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             use rustvello_core::error::InfraErrorKind;
             let err = to_py_err(CoreError::Infrastructure {
                 kind: InfraErrorKind::Connection,
@@ -479,7 +464,7 @@ mod tests {
 
     #[test]
     fn runner_maps_to_runner_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             use rustvello_core::error::InfraErrorKind;
             let err = to_py_err(CoreError::Infrastructure {
                 kind: InfraErrorKind::Other,
@@ -493,7 +478,7 @@ mod tests {
 
     #[test]
     fn configuration_maps_to_configuration_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::Configuration {
                 message: "missing field".into(),
             });
@@ -504,7 +489,7 @@ mod tests {
 
     #[test]
     fn internal_maps_to_internal_error() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::Internal {
                 message: "lock contention".into(),
             });
@@ -517,14 +502,14 @@ mod tests {
 
     #[test]
     fn status_transition_carries_structured_attrs() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::InvalidStatusTransition {
                 invocation_id: InvocationId::from_string("inv-1"),
                 from_status: InvocationStatus::Registered,
                 to_status: InvocationStatus::Running,
                 allowed_statuses: vec![InvocationStatus::Pending],
             });
-            let val = err.value_bound(py);
+            let val = err.value(py);
             let inv_id: String = val.getattr("invocation_id").unwrap().extract().unwrap();
             assert_eq!(inv_id, "inv-1");
             let from: String = val.getattr("from_status").unwrap().extract().unwrap();
@@ -539,7 +524,7 @@ mod tests {
 
     #[test]
     fn ownership_violation_carries_structured_attrs() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::OwnershipViolation {
                 invocation_id: InvocationId::from_string("inv-2"),
                 from_status: InvocationStatus::Pending,
@@ -548,7 +533,7 @@ mod tests {
                 attempted_owner: "runner-b".into(),
                 reason: "already owned".into(),
             });
-            let val = err.value_bound(py);
+            let val = err.value(py);
             let owner: String = val.getattr("current_owner").unwrap().extract().unwrap();
             assert_eq!(owner, "runner-a");
             let requester: String = val.getattr("attempted_owner").unwrap().extract().unwrap();
@@ -560,14 +545,14 @@ mod tests {
 
     #[test]
     fn race_condition_carries_structured_attrs() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::StatusRaceCondition {
                 invocation_id: InvocationId::from_string("inv-3"),
                 previous_status: InvocationStatus::Registered,
                 expected_status: InvocationStatus::Pending,
                 actual_status: InvocationStatus::Running,
             });
-            let val = err.value_bound(py);
+            let val = err.value(py);
             let prev: String = val.getattr("previous_status").unwrap().extract().unwrap();
             assert!(prev.contains("REGISTERED"));
             let actual: String = val.getattr("actual_status").unwrap().extract().unwrap();
@@ -577,12 +562,12 @@ mod tests {
 
     #[test]
     fn concurrency_retry_carries_structured_attrs() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::ConcurrencyRetry {
                 task_id: "mod.task".parse().unwrap(),
                 reason: "locked".into(),
             });
-            let val = err.value_bound(py);
+            let val = err.value(py);
             let tid: String = val.getattr("task_id").unwrap().extract().unwrap();
             // TaskId is language-qualified, like every task key Python sees
             assert_eq!(tid, "rust::mod.task");
@@ -593,11 +578,11 @@ mod tests {
 
     #[test]
     fn invocation_not_found_carries_invocation_id() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::InvocationNotFound {
                 invocation_id: InvocationId::from_string("abc-123"),
             });
-            let val = err.value_bound(py);
+            let val = err.value(py);
             let inv_id: String = val.getattr("invocation_id").unwrap().extract().unwrap();
             assert_eq!(inv_id, "abc-123");
         });
@@ -605,11 +590,11 @@ mod tests {
 
     #[test]
     fn task_not_found_carries_task_id() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let err = to_py_err(CoreError::TaskNotFound {
                 task_id: "mod.func".parse().unwrap(),
             });
-            let val = err.value_bound(py);
+            let val = err.value(py);
             let tid: String = val.getattr("task_id").unwrap().extract().unwrap();
             assert_eq!(tid, "rust::mod.func");
         });

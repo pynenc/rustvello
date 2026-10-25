@@ -89,9 +89,7 @@ impl RayonRunner {
         state_backend: Arc<dyn StateBackend>,
         task_registry: Arc<TaskRegistry>,
     ) -> RustvelloResult<Self> {
-        let num_threads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1);
+        let num_threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         Ok(Self {
             runner_id: RunnerId::new(),
             control_plane: RunnerControlPlane::new(

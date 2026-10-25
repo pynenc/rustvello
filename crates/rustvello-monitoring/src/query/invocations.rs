@@ -31,8 +31,7 @@ pub async fn load_invocation_rows(
                 orchestrator
                     .get_invocation_status(&invocation_id)
                     .await
-                    .map(|record| record.status)
-                    .unwrap_or(InvocationStatus::Registered)
+                    .map_or(InvocationStatus::Registered, |record| record.status)
             };
             let full_id = invocation_id.to_string();
             let mut scope = base_scope.with_invocation(full_id.clone());

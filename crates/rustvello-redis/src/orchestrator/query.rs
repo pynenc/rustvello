@@ -47,7 +47,7 @@ impl OrchestratorQuery for RedisOrchestrator {
             None => {
                 // Full scan — get all status keys
                 let mut conn = self.pool.conn().await?;
-                let keys = scan_keys(&mut conn, &format!("{}*", &self.status_prefix)).await?;
+                let keys = scan_keys(&mut conn, &format!("{}*", self.status_prefix)).await?;
                 keys.into_iter()
                     .map(|k| InvocationId::from_string(k[self.status_prefix.len()..].to_string()))
                     .collect()
@@ -89,7 +89,7 @@ impl OrchestratorQuery for RedisOrchestrator {
             Some(tid) => self.get_invocations_by_task(tid).await?,
             None => {
                 let mut conn = self.pool.conn().await?;
-                let keys = scan_keys(&mut conn, &format!("{}*", &self.status_prefix)).await?;
+                let keys = scan_keys(&mut conn, &format!("{}*", self.status_prefix)).await?;
                 keys.into_iter()
                     .map(|k| InvocationId::from_string(k[self.status_prefix.len()..].to_string()))
                     .collect()
@@ -130,7 +130,7 @@ impl OrchestratorQuery for RedisOrchestrator {
             Some(tid) => self.get_invocations_by_task(tid).await?,
             None => {
                 let mut conn = self.pool.conn().await?;
-                let keys = scan_keys(&mut conn, &format!("{}*", &self.status_prefix)).await?;
+                let keys = scan_keys(&mut conn, &format!("{}*", self.status_prefix)).await?;
                 keys.into_iter()
                     .map(|k| InvocationId::from_string(k[self.status_prefix.len()..].to_string()))
                     .collect()
@@ -167,7 +167,7 @@ impl OrchestratorQuery for RedisOrchestrator {
         // Scan waiter keys, find waited-on invocations in a runnable status
         // that are NOT themselves waiting on another invocation.
         let mut conn = self.pool.conn().await?;
-        let keys = scan_keys(&mut conn, &format!("{}*", &self.waiters_prefix)).await?;
+        let keys = scan_keys(&mut conn, &format!("{}*", self.waiters_prefix)).await?;
 
         // Collect all IDs that are themselves waiters (appear as members in any waiter set)
         let mut self_waiting: std::collections::HashSet<String> = std::collections::HashSet::new();

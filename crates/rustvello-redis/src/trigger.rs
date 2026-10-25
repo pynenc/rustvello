@@ -105,14 +105,14 @@ impl TriggerStore for RedisTriggerStore {
         let json = serde_json::to_string(condition).map_err(|e| RustvelloError::Serialization {
             message: e.to_string(),
         })?;
-        conn.set::<_, _, ()>(format!("{}{}", &self.cond_prefix, cond_id.as_str()), &json)
+        conn.set::<_, _, ()>(format!("{}{}", self.cond_prefix, cond_id.as_str()), &json)
             .await
             .map_err(redis_err)?;
 
         // Index by task if the condition references one
         for task_id in condition.source_task_ids() {
             conn.sadd::<_, _, ()>(
-                format!("{}{}", &self.cond_task_prefix, task_id),
+                format!("{}{}", self.cond_task_prefix, task_id),
                 cond_id.as_str().to_owned(),
             )
             .await
@@ -127,7 +127,7 @@ impl TriggerStore for RedisTriggerStore {
         }
         if let TriggerCondition::Event(ev) = condition {
             conn.sadd::<_, _, ()>(
-                format!("{}{}", &self.event_index_prefix, ev.event_code),
+                format!("{}{}", self.event_index_prefix, ev.event_code),
                 cond_id.as_str().to_owned(),
             )
             .await
@@ -140,7 +140,7 @@ impl TriggerStore for RedisTriggerStore {
     async fn get_condition(&self, id: &ConditionId) -> RustvelloResult<Option<TriggerCondition>> {
         let mut conn = self.pool.conn().await?;
         let val: Option<String> = conn
-            .get(format!("{}{}", &self.cond_prefix, id.as_str()))
+            .get(format!("{}{}", self.cond_prefix, id.as_str()))
             .await
             .map_err(redis_err)?;
         match val {
@@ -161,7 +161,7 @@ impl TriggerStore for RedisTriggerStore {
     ) -> RustvelloResult<Vec<(ConditionId, TriggerCondition)>> {
         let mut conn = self.pool.conn().await?;
         let members: Vec<String> = conn
-            .smembers(format!("{}{}", &self.cond_task_prefix, task_id))
+            .smembers(format!("{}{}", self.cond_task_prefix, task_id))
             .await
             .map_err(redis_err)?;
 
@@ -183,7 +183,7 @@ impl TriggerStore for RedisTriggerStore {
         let mut conn = self.pool.conn().await?;
         // Use per-event-code secondary index instead of full keyspace SCAN
         let members: Vec<String> = conn
-            .smembers(format!("{}{}", &self.event_index_prefix, event_code))
+            .smembers(format!("{}{}", self.event_index_prefix, event_code))
             .await
             .map_err(redis_err)?;
 
@@ -196,7 +196,7 @@ impl TriggerStore for RedisTriggerStore {
             message: e.to_string(),
         })?;
         conn.set::<_, _, ()>(
-            format!("{}{}", &self.trigger_prefix, trigger.trigger_id.as_str()),
+            format!("{}{}", self.trigger_prefix, trigger.trigger_id.as_str()),
             &json,
         )
         .await
@@ -205,7 +205,7 @@ impl TriggerStore for RedisTriggerStore {
         // Index by condition
         for cid in &trigger.condition_ids {
             conn.sadd::<_, _, ()>(
-                format!("{}{}", &self.cond_trigger_prefix, cid.as_str()),
+                format!("{}{}", self.cond_trigger_prefix, cid.as_str()),
                 trigger.trigger_id.as_str().to_owned(),
             )
             .await
@@ -214,7 +214,7 @@ impl TriggerStore for RedisTriggerStore {
 
         // Index by task
         conn.sadd::<_, _, ()>(
-            format!("{}{}", &self.trigger_task_prefix, trigger.task_id),
+            format!("{}{}", self.trigger_task_prefix, trigger.task_id),
             trigger.trigger_id.as_str().to_owned(),
         )
         .await
@@ -229,7 +229,7 @@ impl TriggerStore for RedisTriggerStore {
     ) -> RustvelloResult<Option<TriggerDefinitionDTO>> {
         let mut conn = self.pool.conn().await?;
         let val: Option<String> = conn
-            .get(format!("{}{}", &self.trigger_prefix, id.as_str()))
+            .get(format!("{}{}", self.trigger_prefix, id.as_str()))
             .await
             .map_err(redis_err)?;
         match val {
@@ -250,7 +250,7 @@ impl TriggerStore for RedisTriggerStore {
     ) -> RustvelloResult<Vec<TriggerDefinitionDTO>> {
         let mut conn = self.pool.conn().await?;
         let members: Vec<String> = conn
-            .smembers(format!("{}{}", &self.cond_trigger_prefix, cond_id.as_str()))
+            .smembers(format!("{}{}", self.cond_trigger_prefix, cond_id.as_str()))
             .await
             .map_err(redis_err)?;
 
@@ -260,7 +260,7 @@ impl TriggerStore for RedisTriggerStore {
 
         let keys: Vec<String> = members
             .iter()
-            .map(|tid| format!("{}{}", &self.trigger_prefix, tid))
+            .map(|tid| format!("{}{}", self.trigger_prefix, tid))
             .collect();
         let values: Vec<Option<String>> = redis::cmd("MGET")
             .arg(&keys)
@@ -282,7 +282,7 @@ impl TriggerStore for RedisTriggerStore {
     async fn remove_triggers_for_task(&self, task_id: &TaskId) -> RustvelloResult<u32> {
         let mut conn = self.pool.conn().await?;
         let members: Vec<String> = conn
-            .smembers(format!("{}{}", &self.trigger_task_prefix, task_id))
+            .smembers(format!("{}{}", self.trigger_task_prefix, task_id))
             .await
             .map_err(redis_err)?;
 
@@ -291,14 +291,14 @@ impl TriggerStore for RedisTriggerStore {
             // Read trigger data to find its condition_ids so we can clean up
             // the reverse index (&self.cond_trigger_prefix:{cond_id} sets)
             let val: Option<String> = conn
-                .get(format!("{}{}", &self.trigger_prefix, tid_str))
+                .get(format!("{}{}", self.trigger_prefix, tid_str))
                 .await
                 .map_err(redis_err)?;
             if let Some(json) = val {
                 if let Ok(trigger) = serde_json::from_str::<TriggerDefinitionDTO>(&json) {
                     for cid in &trigger.condition_ids {
                         conn.srem::<_, _, ()>(
-                            format!("{}{}", &self.cond_trigger_prefix, cid.as_str()),
+                            format!("{}{}", self.cond_trigger_prefix, cid.as_str()),
                             tid_str.as_str(),
                         )
                         .await
@@ -306,11 +306,11 @@ impl TriggerStore for RedisTriggerStore {
                     }
                 }
             }
-            conn.del::<_, ()>(format!("{}{}", &self.trigger_prefix, tid_str))
+            conn.del::<_, ()>(format!("{}{}", self.trigger_prefix, tid_str))
                 .await
                 .map_err(redis_err)?;
         }
-        conn.del::<_, ()>(format!("{}{}", &self.trigger_task_prefix, task_id))
+        conn.del::<_, ()>(format!("{}{}", self.trigger_task_prefix, task_id))
             .await
             .map_err(redis_err)?;
         Ok(count)
@@ -321,13 +321,13 @@ impl TriggerStore for RedisTriggerStore {
         let json = serde_json::to_string(vc).map_err(|e| RustvelloError::Serialization {
             message: e.to_string(),
         })?;
-        let key = format!("{}{}", &self.valid_cond_prefix, vc.valid_condition_id);
+        let key = format!("{}{}", self.valid_cond_prefix, vc.valid_condition_id);
         conn.set::<_, _, ()>(&key, &json).await.map_err(redis_err)
     }
 
     async fn get_valid_conditions(&self) -> RustvelloResult<Vec<ValidCondition>> {
         let mut conn = self.pool.conn().await?;
-        let keys = scan_keys(&mut conn, &format!("{}*", &self.valid_cond_prefix)).await?;
+        let keys = scan_keys(&mut conn, &format!("{}*", self.valid_cond_prefix)).await?;
 
         if keys.is_empty() {
             return Ok(Vec::new());
@@ -357,7 +357,7 @@ impl TriggerStore for RedisTriggerStore {
         let mut conn = self.pool.conn().await?;
         let keys: Vec<String> = ids
             .iter()
-            .map(|id| format!("{}{}", &self.valid_cond_prefix, id))
+            .map(|id| format!("{}{}", self.valid_cond_prefix, id))
             .collect();
         conn.del::<_, ()>(keys).await.map_err(redis_err)
     }
@@ -368,7 +368,7 @@ impl TriggerStore for RedisTriggerStore {
     ) -> RustvelloResult<Option<DateTime<Utc>>> {
         let mut conn = self.pool.conn().await?;
         let val: Option<String> = conn
-            .get(format!("{}{}", &self.cron_exec_prefix, cond_id.as_str()))
+            .get(format!("{}{}", self.cron_exec_prefix, cond_id.as_str()))
             .await
             .map_err(redis_err)?;
         match val {
@@ -390,7 +390,7 @@ impl TriggerStore for RedisTriggerStore {
         time: DateTime<Utc>,
         expected_last: Option<DateTime<Utc>>,
     ) -> RustvelloResult<bool> {
-        let key = format!("{}{}", &self.cron_exec_prefix, cond_id.as_str());
+        let key = format!("{}{}", self.cron_exec_prefix, cond_id.as_str());
         let mut conn = self.pool.conn().await?;
 
         // Atomic compare-and-swap via Lua script
@@ -434,7 +434,7 @@ impl TriggerStore for RedisTriggerStore {
     }
 
     async fn claim_trigger_run(&self, run_id: &TriggerRunId) -> RustvelloResult<bool> {
-        let key = format!("{}{}", &self.run_prefix, run_id.as_str());
+        let key = format!("{}{}", self.run_prefix, run_id.as_str());
         let mut conn = self.pool.conn().await?;
         // SETNX — returns true if the key was set (i.e. we claimed it)
         let set: bool = conn.set_nx(&key, "1").await.map_err(redis_err)?;
@@ -451,7 +451,7 @@ impl TriggerStore for RedisTriggerStore {
             message: e.to_string(),
         })?;
         conn.set::<_, _, ()>(
-            format!("{}{}", &self.event_record_prefix, event.event_id),
+            format!("{}{}", self.event_record_prefix, event.event_id),
             json,
         )
         .await
@@ -461,7 +461,7 @@ impl TriggerStore for RedisTriggerStore {
     async fn get_event(&self, event_id: &str) -> RustvelloResult<Option<EventRecord>> {
         let mut conn = self.pool.conn().await?;
         let json: Option<String> = conn
-            .get(format!("{}{}", &self.event_record_prefix, event_id))
+            .get(format!("{}{}", self.event_record_prefix, event_id))
             .await
             .map_err(redis_err)?;
         json.map(|value| {
@@ -474,7 +474,7 @@ impl TriggerStore for RedisTriggerStore {
 
     async fn get_events(&self, query: &EventQuery) -> RustvelloResult<Vec<EventRecord>> {
         let mut conn = self.pool.conn().await?;
-        let keys = scan_keys(&mut conn, &format!("{}*", &self.event_record_prefix)).await?;
+        let keys = scan_keys(&mut conn, &format!("{}*", self.event_record_prefix)).await?;
         let values: Vec<Option<String>> = if keys.is_empty() {
             Vec::new()
         } else {
@@ -505,7 +505,7 @@ impl TriggerStore for RedisTriggerStore {
             }
             events.push(event);
         }
-        events.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+        events.sort_by_key(|left| std::cmp::Reverse(left.timestamp));
         if let Some(limit) = query.limit {
             events.truncate(limit);
         }
@@ -521,7 +521,7 @@ impl TriggerStore for RedisTriggerStore {
         pipe.atomic().set(
             format!(
                 "{}{}",
-                &self.trigger_run_record_prefix,
+                self.trigger_run_record_prefix,
                 run.trigger_run_id.as_str()
             ),
             json,
@@ -554,7 +554,7 @@ impl TriggerStore for RedisTriggerStore {
         let mut runs = Vec::with_capacity(ids.len());
         for id in ids {
             let json: Option<String> = conn
-                .get(format!("{}{}", &self.trigger_run_record_prefix, id))
+                .get(format!("{}{}", self.trigger_run_record_prefix, id))
                 .await
                 .map_err(redis_err)?;
             let run = json
@@ -585,7 +585,7 @@ impl TriggerStore for RedisTriggerStore {
         let json: Option<String> = conn
             .get(format!(
                 "{}{}",
-                &self.trigger_run_record_prefix,
+                self.trigger_run_record_prefix,
                 run_id.as_str()
             ))
             .await
@@ -603,7 +603,7 @@ impl TriggerStore for RedisTriggerStore {
         query: &TriggerRunQuery,
     ) -> RustvelloResult<Vec<TriggerRunRecord>> {
         let mut conn = self.pool.conn().await?;
-        let keys = scan_keys(&mut conn, &format!("{}*", &self.trigger_run_record_prefix)).await?;
+        let keys = scan_keys(&mut conn, &format!("{}*", self.trigger_run_record_prefix)).await?;
         let values: Vec<Option<String>> = if keys.is_empty() {
             Vec::new()
         } else {
@@ -642,7 +642,7 @@ impl TriggerStore for RedisTriggerStore {
             }
             runs.push(run);
         }
-        runs.sort_by(|left, right| right.claimed_at.cmp(&left.claimed_at));
+        runs.sort_by_key(|left| std::cmp::Reverse(left.claimed_at));
         if let Some(limit) = query.limit {
             runs.truncate(limit);
         }
@@ -679,7 +679,7 @@ impl TriggerStore for RedisTriggerStore {
 
     async fn get_all_conditions(&self) -> RustvelloResult<Vec<(ConditionId, TriggerCondition)>> {
         let mut conn = self.pool.conn().await?;
-        let keys = scan_keys(&mut conn, &format!("{}*", &self.cond_prefix)).await?;
+        let keys = scan_keys(&mut conn, &format!("{}*", self.cond_prefix)).await?;
         let ids: Vec<String> = keys
             .iter()
             .filter_map(|k| k.strip_prefix(&self.cond_prefix).map(String::from))

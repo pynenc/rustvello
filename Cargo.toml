@@ -21,9 +21,9 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.99"
 homepage = "https://rustvello.readthedocs.io"
 keywords = ["task-queue", "distributed", "workflow", "background-jobs", "celery"]
 categories = ["asynchronous", "concurrency"]
@@ -33,53 +33,56 @@ license = "MIT"
 readme = "README.md"
 
 [workspace.dependencies]
-rustvello = { version = "0.9.0", path = "crates/rustvello" }
-rustvello-core = { version = "0.9.0", path = "crates/rustvello-core" }
-rustvello-proto = { version = "0.9.0", path = "crates/rustvello-proto" }
-rustvello-mem = { version = "0.9.0", path = "crates/rustvello-mem" }
-rustvello-sqlite = { version = "0.9.0", path = "crates/rustvello-sqlite" }
-rustvello-python = { version = "0.9.0", path = "crates/rustvello-python" }
-rustvello-macros = { version = "0.9.0", path = "crates/rustvello-macros" }
-rustvello-redis = { version = "0.9.0", path = "crates/rustvello-redis" }
-rustvello-mongo = { version = "0.9.0", path = "crates/rustvello-mongo" }
-rustvello-mongo3 = { version = "0.9.0", path = "crates/rustvello-mongo3" }
-rustvello-rabbitmq = { version = "0.9.0", path = "crates/rustvello-rabbitmq" }
-rustvello-postgres = { version = "0.9.0", path = "crates/rustvello-postgres" }
-rustvello-monitoring = { version = "0.9.0", path = "crates/rustvello-monitoring" }
-rustvello-otel = { version = "0.9.0", path = "crates/rustvello-otel" }
-rustvello-test-suite = { version = "0.9.0", path = "crates/rustvello-test-suite" }
+rustvello = { version = "0.9.1", path = "crates/rustvello" }
+rustvello-core = { version = "0.9.1", path = "crates/rustvello-core" }
+rustvello-proto = { version = "0.9.1", path = "crates/rustvello-proto" }
+rustvello-mem = { version = "0.9.1", path = "crates/rustvello-mem" }
+rustvello-sqlite = { version = "0.9.1", path = "crates/rustvello-sqlite" }
+rustvello-python = { version = "0.9.1", path = "crates/rustvello-python" }
+rustvello-macros = { version = "0.9.1", path = "crates/rustvello-macros" }
+rustvello-redis = { version = "0.9.1", path = "crates/rustvello-redis" }
+rustvello-mongo = { version = "0.9.1", path = "crates/rustvello-mongo" }
+rustvello-mongo3 = { version = "0.9.1", path = "crates/rustvello-mongo3" }
+rustvello-rabbitmq = { version = "0.9.1", path = "crates/rustvello-rabbitmq" }
+rustvello-postgres = { version = "0.9.1", path = "crates/rustvello-postgres" }
+rustvello-monitoring = { version = "0.9.1", path = "crates/rustvello-monitoring" }
+rustvello-otel = { version = "0.9.1", path = "crates/rustvello-otel" }
+rustvello-test-suite = { version = "0.9.1", path = "crates/rustvello-test-suite" }
 cistell-core   = { version = "0.1.2", features = ["toml", "tracing"] }
 cistell-macros = "0.1.2"
 
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion = { version = "0.8.2", features = ["async_tokio"] }
 env_logger = "0.11"
 hostname = "0.4"
 inventory = "0.3"
 log = "0.4"
-lru = "0.12"
-proptest = "1"
-pyo3 = { version = "0.22", features = ["multiple-pymethods"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+lru = "0.18"
+proptest = "1.11.0"
+pyo3 = { version = "0.29.3", features = ["multiple-pymethods"] }
+# fallible_uint keeps the u64/usize ToSql/FromSql impls (checked i64 conversion) that rusqlite had before 0.38
+rusqlite = { version = "0.40.2", features = ["bundled", "fallible_uint"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11.0"
 thiserror = "2"
-toml = "0.7"
-tokio = { version = "1", features = ["full"] }
+toml = "1.1.8"
+tokio = { version = "1.53.2", features = ["full"] }
 tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-uuid = { version = "1", features = ["v4", "v5", "serde"] }
-croner = "3"
-lapin = "2"
+uuid = { version = "1.28.0", features = ["v4", "v5", "serde"] }
+croner = "=4.0.1"
+# ring and native certs, as lapin 2 had: lapin 4 defaults to aws-lc-rs, and two rustls
+# providers in one build make ClientConfig::builder() (used by redis TLS) panic
+lapin = { version = "4.12.1", default-features = false, features = ["tokio", "rustls--ring", "rustls-native-certs"] }
 futures-util = "0.3"
-mongodb = "3"
-redis = { version = "0.27", features = ["tokio-rustls-comp"] }
-opentelemetry = { version = "=0.32.0", features = ["logs", "metrics", "trace"] }
-opentelemetry-otlp = { version = "=0.32.0", default-features = false, features = ["http-proto", "logs", "metrics", "reqwest-blocking-client", "trace"] }
-opentelemetry_sdk = { version = "=0.32.1", features = ["logs", "metrics", "trace"] }
+mongodb = "3.9.1"
+redis = { version = "1.7.1", features = ["tokio-rustls-comp"] }
+opentelemetry = { version = "=0.33.1", features = ["logs", "metrics", "trace"] }
+opentelemetry-otlp = { version = "=0.33.1", default-features = false, features = ["http-proto", "logs", "metrics", "reqwest-blocking-client", "trace"] }
+opentelemetry_sdk = { version = "=0.33.1", features = ["logs", "metrics", "trace"] }
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-chrono-0_4"] }
 deadpool-postgres = "0.14"
 # rustls keeps the wheel free of a system OpenSSL (manylinux/cross builds have none);
@@ -88,18 +91,21 @@ tokio-postgres-rustls = { version = "0.14", default-features = false, features =
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "logging", "aws-lc-rs"] }
 rustls-native-certs = "0.8"
 rustls-pemfile = "2"
-rayon = "1.10"
-rand = "0.8"
+rayon = "1.12.0"
+rand = "0.10"
 glob = "0.3"
-testcontainers = "0.23"
+testcontainers = "0.27.3"
 trybuild = "1"
-testcontainers-modules = { version = "0.11", features = ["redis", "mongo", "postgres", "rabbitmq"] }
-tempfile = "3"
+testcontainers-modules = { version = "0.15.0", features = ["redis", "mongo", "postgres", "rabbitmq"] }
+tempfile = "3.27.0"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
 
 [workspace.lints.clippy]
+# RustvelloError is large; boxing it would change every public signature for
+# a cost only paid on the error path.
+result_large_err = "allow"
 module_name_repetitions = "allow"
 wildcard_imports = "warn"
 clone_on_ref_ptr = "warn"

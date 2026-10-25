@@ -119,7 +119,7 @@ impl WorkerShadeGenerator {
     /// Even indices get lighter, odd indices get darker.
     pub fn shade(&self, index: usize) -> Color {
         let offset = ((index / 2) + 1) as f64 * 15.0;
-        let sign = if index % 2 == 0 { 1.0 } else { -1.0 };
+        let sign = if index.is_multiple_of(2) { 1.0 } else { -1.0 };
         Color::new(
             clamp_u8(self.base.r as f64 + sign * offset),
             clamp_u8(self.base.g as f64 + sign * offset),

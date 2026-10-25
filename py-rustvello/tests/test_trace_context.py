@@ -177,7 +177,7 @@ def test_real_nested_python_submission_uses_execution_as_parent(tmp_path: Path) 
     assert identity["attempt"] == 1
     assert identity["execution_trace_context"]["traceparent"] == executions[1][0]
     assert identity["previous_attempt_trace_context"]["traceparent"] == executions[0][0]
-    for nested, execution in zip(children, executions):
+    for nested, execution in zip(children, executions, strict=True):
         stored = json.loads(backend.get_invocation(str(nested.id)))
         assert stored["parent_invocation_id"] == str(invocation.id)
         assert stored["trace_context"]["traceparent"] == execution[0]

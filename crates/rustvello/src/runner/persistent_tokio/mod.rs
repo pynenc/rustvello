@@ -155,9 +155,7 @@ impl PersistentTokioRunner {
     }
 
     fn from_control_plane(control_plane: RunnerControlPlane) -> Self {
-        let num_workers = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1);
+        let num_workers = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         Self {
             runner_id: RunnerId::new(),
             control_plane,

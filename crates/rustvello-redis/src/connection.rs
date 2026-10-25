@@ -115,6 +115,7 @@ impl RedisPool {
                 message: "Redis TLS requires a secure rediss:// URI".into(),
             });
         }
+        install_tls_crypto_provider();
         let client = Client::build_with_tls(
             uri,
             TlsCertificates {
@@ -209,8 +210,12 @@ impl RedisPool {
             *guard = None;
         }
         let config = AsyncConnectionConfig::new()
-            .set_connection_timeout(Duration::from_millis(self.options.connection_timeout_ms))
-            .set_response_timeout(Duration::from_millis(self.options.operation_timeout_ms));
+            .set_connection_timeout(Some(Duration::from_millis(
+                self.options.connection_timeout_ms,
+            )))
+            .set_response_timeout(Some(Duration::from_millis(
+                self.options.operation_timeout_ms,
+            )));
         let c = self
             .client
             .get_multiplexed_async_connection_with_config(&config)
@@ -242,8 +247,12 @@ impl Reconnectable for RedisPool {
         // Drop old connection
         *guard = None;
         let config = AsyncConnectionConfig::new()
-            .set_connection_timeout(Duration::from_millis(self.options.connection_timeout_ms))
-            .set_response_timeout(Duration::from_millis(self.options.operation_timeout_ms));
+            .set_connection_timeout(Some(Duration::from_millis(
+                self.options.connection_timeout_ms,
+            )))
+            .set_response_timeout(Some(Duration::from_millis(
+                self.options.operation_timeout_ms,
+            )));
         let c = self
             .client
             .get_multiplexed_async_connection_with_config(&config)
@@ -281,6 +290,15 @@ pub(crate) async fn scan_keys(
     Ok(keys)
 }
 
+/// Make aws-lc-rs rustls' process default before the redis crate builds a TLS
+/// config. When a build links two rustls crypto backends (for example with
+/// lapin or other TLS clients), rustls has no default and
+/// `ClientConfig::builder()` panics. Installing is idempotent: when a default
+/// is already set, that one is kept.
+fn install_tls_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,7 +326,7 @@ mod tests {
 
     #[test]
     fn redis_err_maps_to_storage() {
-        let redis_error = redis::RedisError::from((redis::ErrorKind::IoError, "test IO error"));
+        let redis_error = redis::RedisError::from(std::io::Error::other("test IO error"));
         let mapped = redis_err(redis_error);
         assert!(
             matches!(mapped, RustvelloError::Infrastructure { .. }),

@@ -1112,7 +1112,7 @@ fn render_svg_with_y_axis_and_plot_bounds(request: SvgRenderRequest<'_>) -> Stri
         data.end.to_rfc3339(),
         xml_escape(&task_desc),
     );
-    let tick_step = ((scale_max + 3) / 4).max(1);
+    let tick_step = scale_max.div_ceil(4).max(1);
     let mut tick_values = (0..=scale_max).step_by(tick_step).collect::<Vec<_>>();
     if tick_values.last().copied() != Some(scale_max) {
         tick_values.push(scale_max);

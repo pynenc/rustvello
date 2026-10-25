@@ -193,9 +193,11 @@ from rustvello import App
 
 app = App(backend="sqlite", db_path="./tasks.db")
 
+
 @app.task(max_retries=2, cache_results=True)
 def add(x: int, y: int) -> int:
     return x + y
+
 
 # Submit a task and wait for a worker to run it
 inv = add(1, 2)
@@ -220,6 +222,7 @@ serializable.
 ```python
 from rustvello import workflow_root
 
+
 @app.workflow
 def process_order(order_id: str) -> dict[str, str]:
     root = workflow_root()
@@ -233,19 +236,26 @@ def process_order(order_id: str) -> dict[str, str]:
 ### Backend selection
 
 ```python
-app = App(backend="memory")   # default — in-process, no persistence
+app = App(backend="memory")  # default — in-process, no persistence
 app = App(backend="sqlite", db_path="./tasks.db")
 app = App(backend="redis", redis_url="redis://localhost:6379")
 app = App(backend="postgres", postgres_url="postgresql://localhost/mydb")
 app = App(backend="mongo", mongo_url="mongodb://localhost:27017", mongo_db="tasks")
-app = App(backend="mongo3", mongo_url="mongodb://localhost:27017", mongo_db="tasks")  # legacy driver v2
+app = App(
+    backend="mongo3", mongo_url="mongodb://localhost:27017", mongo_db="tasks"
+)  # legacy driver v2
 
 # Mongo from connection parts, RabbitMQ as the broker on top of it
 app = App(
     backend="mongo3",
-    mongo_host="mongo", mongo_port=27017, mongo_username="u", mongo_password="p",
-    mongo_auth_source="admin", mongo_db="tasks",
-    broker="rabbitmq", rabbitmq_url="amqp://guest:guest@rabbitmq/",
+    mongo_host="mongo",
+    mongo_port=27017,
+    mongo_username="u",
+    mongo_password="p",
+    mongo_auth_source="admin",
+    mongo_db="tasks",
+    broker="rabbitmq",
+    rabbitmq_url="amqp://guest:guest@rabbitmq/",
 )
 ```
 
@@ -283,11 +293,11 @@ pass `App(..., import_path=...)` when the app object is not discoverable through
 ### Operating the app
 
 ```python
-app.queue_depth("hpa")        # queued invocations in one queue (autoscaler metric)
-app.queue_depths()            # per declared broker queue
-app.purge()                   # drop queued work, control records and state
+app.queue_depth("hpa")  # queued invocations in one queue (autoscaler metric)
+app.queue_depths()  # per declared broker queue
+app.purge()  # drop queued work, control records and state
 app.get_task("myproject.tasks.add")
-app.current_invocation()      # inside a task: id, task key, retries, arguments
+app.current_invocation()  # inside a task: id, task key, retries, arguments
 app.wait_results([add(1, 2), add(3, 4)], timeout=30)  # [3, 7]
 server = app.start_monitor(host="0.0.0.0", port=8000)  # dashboard; server.stop()
 ```
@@ -305,8 +315,9 @@ def fetch(url: str) -> str: ...
 @app.task
 def cleanup() -> None: ...
 
-app.trigger(cleanup).on_cron("*/5 * * * *").register()        # 5 fields: minute cron
-app.trigger(cleanup).on_cron("0 30 3 * * *").register()       # 6 fields: seconds first
+
+app.trigger(cleanup).on_cron("*/5 * * * *").register()  # 5 fields: minute cron
+app.trigger(cleanup).on_cron("0 30 3 * * *").register()  # 6 fields: seconds first
 app.trigger(cleanup).on_interval(300).register()
 ```
 
@@ -345,9 +356,11 @@ from pynenc import Pynenc
 
 app = Pynenc()
 
+
 @app.task
 def add(x: int, y: int) -> int:
     return x + y
+
 
 result = add(1, 2).result  # 3
 ```

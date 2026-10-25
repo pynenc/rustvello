@@ -1,15 +1,14 @@
 name: validate-codecov-config
 
+# Only when the file changes: the configuration is validated before merge.
 on:
   pull_request:
     paths: [codecov.yaml]
-  push:
-    branches: [main]
 
 jobs:
   validate-codecov-config:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate codecov configuration
         run: curl -sSL --fail-with-body --data-binary @codecov.yaml https://codecov.io/validate

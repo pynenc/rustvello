@@ -130,7 +130,7 @@ impl Drop for RunnerPythonCall {
 #[pyfunction]
 pub fn wait_runner_python_calls(py: Python<'_>, timeout_seconds: f64) -> bool {
     let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds.max(0.0));
-    py.allow_threads(|| loop {
+    py.detach(|| loop {
         if RUNNER_PYTHON_CALLS.load(Ordering::SeqCst) == 0 {
             return true;
         }
@@ -149,15 +149,15 @@ pub fn wait_runner_python_calls(py: Python<'_>, timeout_seconds: f64) -> bool {
 /// unraisable. Returns `False`, registering nothing, outside a runner attempt
 /// (dev mode, worker processes that the runner kills instead).
 #[pyfunction]
-pub fn on_attempt_abandoned(callback: PyObject) -> bool {
+pub fn on_attempt_abandoned(callback: Py<PyAny>) -> bool {
     let Some(signal) = current_attempt_signal() else {
         return false;
     };
     signal.on_abandon(move || {
         let _calling = RunnerPythonCall::enter();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             if let Err(error) = callback.call0(py) {
-                error.write_unraisable_bound(py, None);
+                error.write_unraisable(py, None);
             }
         });
     });
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn valid_uuid_accepted() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let result = parse_invocation_id("550e8400-e29b-41d4-a716-446655440000");
             assert!(result.is_ok());
             assert_eq!(
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn empty_string_rejected() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let result = parse_invocation_id("");
             let err = result.unwrap_err();
             assert!(err.is_instance_of::<PyValueError>(py));
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn non_uuid_string_accepted() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let result = parse_invocation_id("not-a-uuid");
             assert!(result.is_ok());
             assert_eq!(result.unwrap().as_str(), "not-a-uuid");
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn arbitrary_string_accepted() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let result = parse_invocation_id("my-task-id-123");
             assert!(result.is_ok());
             assert_eq!(result.unwrap().as_str(), "my-task-id-123");

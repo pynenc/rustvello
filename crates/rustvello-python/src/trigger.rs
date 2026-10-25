@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn new_trigger_store_is_empty() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let store = PyMemTriggerStore::new();
             let triggers = store.evaluate_triggers(py).unwrap();
             assert!(triggers.is_empty());
@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn register_and_get_condition() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let store = PyMemTriggerStore::new();
             let condition_json = r#"{"Event":{"event_code":"order_placed"}}"#;
             let cid = store.register_condition(py, condition_json).unwrap();
@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn get_nonexistent_condition_returns_none() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let store = PyMemTriggerStore::new();
             let result = store.get_condition(py, "nonexistent-id").unwrap();
             assert!(result.is_none());
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn purge_clears_all() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let store = PyMemTriggerStore::new();
             let condition_json = r#"{"Event":{"event_code":"test"}}"#;
             let cid = store.register_condition(py, condition_json).unwrap();
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn get_conditions_for_unknown_task_is_empty() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let store = PyMemTriggerStore::new();
             let conditions = store.get_conditions_for_task(py, "mod", "func").unwrap();
             assert!(conditions.is_empty());

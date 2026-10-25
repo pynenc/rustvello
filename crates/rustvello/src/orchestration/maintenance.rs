@@ -162,7 +162,7 @@ impl Orchestrator {
             .state_backend
             .get_history(invocation_id)
             .await
-            .map(|history| {
+            .map_or(0, |history| {
                 history
                     .iter()
                     .filter(|entry| {
@@ -173,7 +173,6 @@ impl Orchestrator {
                     })
                     .count()
             })
-            .unwrap_or(0)
     }
 
     pub(crate) async fn recover_one(

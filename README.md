@@ -267,9 +267,11 @@ from pynenc import Pynenc
 
 app = Pynenc()
 
+
 @app.task
 def add(x: int, y: int) -> int:
     return x + y
+
 
 result = add(1, 2).result  # 3
 ```

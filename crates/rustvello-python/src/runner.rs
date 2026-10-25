@@ -122,7 +122,7 @@ impl PyTaskRunner {
     /// from spawn_blocking threads.
     fn run_one(&self, py: Python<'_>) -> PyResult<bool> {
         let runner = Arc::clone(&self.runner);
-        py.allow_threads(|| {
+        py.detach(|| {
             let _call = self.begin_call()?;
             crate::runtime::shared_runtime()?
                 .block_on(runner.run_one())
@@ -134,7 +134,7 @@ impl PyTaskRunner {
     /// Releases the GIL so other Python threads can run.
     fn run(&self, py: Python<'_>) -> PyResult<()> {
         let runner = Arc::clone(&self.runner);
-        py.allow_threads(|| {
+        py.detach(|| {
             let _call = self.begin_call()?;
             crate::runtime::shared_runtime()?
                 .block_on(runner.run())
@@ -150,14 +150,14 @@ impl PyTaskRunner {
             calls.active == 0
         };
         let runner = Arc::clone(&self.runner);
-        py.allow_threads(move || {
+        py.detach(move || {
             crate::runtime::shared_runtime()?
                 .block_on(runner.shutdown())
                 .map_err(to_py_err)
         })?;
         if idle {
             if let Some(emitter) = &self.telemetry {
-                py.allow_threads(|| crate::telemetry::shutdown(emitter, 5_000))?;
+                py.detach(|| crate::telemetry::shutdown(emitter, 5_000))?;
             }
         }
         Ok(())
@@ -182,7 +182,7 @@ impl PyTaskRunner {
         let emitter = self.telemetry.as_ref().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err("OTLP telemetry is not enabled")
         })?;
-        py.allow_threads(|| crate::telemetry::flush(emitter, timeout_ms))
+        py.detach(|| crate::telemetry::flush(emitter, timeout_ms))
     }
 }
 
@@ -356,7 +356,7 @@ impl PyTaskRunnerBuilder {
         py: Python<'_>,
         module: &str,
         name: &str,
-        func: PyObject,
+        func: Py<PyAny>,
         concurrency_control: &str,
         running_concurrency: Option<u32>,
         key_arguments: Vec<String>,
@@ -387,7 +387,7 @@ impl PyTaskRunnerBuilder {
         let task_fn: TaskFn = Arc::new(move |args_json: String| {
             // Counted until the GIL is released: see `RunnerPythonCall`.
             let _calling = crate::utils::RunnerPythonCall::enter();
-            Python::with_gil(|py| match py_func.call1(py, (args_json,)) {
+            Python::attach(|py| match py_func.call1(py, (args_json,)) {
                 Ok(result) => {
                     result
                         .extract::<String>(py)
@@ -397,12 +397,12 @@ impl PyTaskRunnerBuilder {
                 }
                 Err(py_err) => {
                     let error_type = py_err
-                        .get_type_bound(py)
+                        .get_type(py)
                         .name()
                         .map_or_else(|_| "UnknownError".to_string(), |n| n.to_string());
                     let message = py_err.to_string();
                     let traceback = py_err
-                        .traceback_bound(py)
+                        .traceback(py)
                         .map(|tb| tb.format().unwrap_or_default());
                     Err(RustvelloError::TaskExecution {
                         error_type,
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn builder_new_default_app_id() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let builder = PyTaskRunnerBuilder::new("rustvello");
             assert_eq!(builder.app_id, "rustvello");
         });
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn builder_custom_app_id() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let builder = PyTaskRunnerBuilder::new("my-app");
             assert_eq!(builder.app_id, "my-app");
         });
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn builder_memory_then_build() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let builder = pyo3::Py::new(py, PyTaskRunnerBuilder::new("test")).unwrap();
             builder.borrow_mut(py).broker = Some(Arc::new(rustvello_mem::broker::MemBroker::new()));
             builder.borrow_mut(py).orchestrator =
@@ -564,7 +564,7 @@ mod tests {
 
     #[test]
     fn builder_without_backends_fails() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let mut builder = PyTaskRunnerBuilder::new("test");
             let result = builder.build();
             assert!(result.is_err());

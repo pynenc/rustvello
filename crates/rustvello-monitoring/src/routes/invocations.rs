@@ -613,8 +613,7 @@ async fn list(
                 app.orchestrator
                     .get_invocation_status(&inv_id)
                     .await
-                    .map(|r| r.status)
-                    .unwrap_or(InvocationStatus::Registered)
+                    .map_or(InvocationStatus::Registered, |r| r.status)
             };
 
             let selected_statuses: Vec<&str> = query
@@ -873,8 +872,7 @@ async fn detail(
         app.orchestrator
             .get_invocation_status(&inv_id_typed)
             .await
-            .map(|r| r.status)
-            .unwrap_or(InvocationStatus::Registered)
+            .map_or(InvocationStatus::Registered, |r| r.status)
     };
     let badge = status_colors::badge_class(&status);
 
