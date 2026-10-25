@@ -47,6 +47,12 @@ Operations feedback from a Celery migration on Kubernetes (MongoDB 3.6, RabbitMQ
   setting the invocation to `Running`, which left it `Running` until stale
   recovery. It now fails the invocation with a stored `TaskNotRegistered`
   error that says to import the module in the worker image.
+- Worker processes (`App.run(num_processes=...)`) announce the tasks they
+  registered; a worker whose `import_path` loads fewer tasks than the runner
+  knows is refused at start-up with the module and the missing tasks named,
+  instead of failing every invocation in the child. `App.run` and the Celery
+  guide say that the `import_path` module must import every task module
+  (Celery's `include`).
 - Backends report their implementation (`SQLite`, `PostgreSQL`, `Redis`,
   `MongoDB`, `MongoDB 3.6`, `RabbitMQ`) on the dashboard, in `/health` and in
   `/api/config`, instead of "Unknown".

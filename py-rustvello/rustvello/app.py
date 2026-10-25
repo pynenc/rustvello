@@ -919,7 +919,11 @@ class App:
                 ``runner_queues`` from the configuration).
             import_path: ``"module:attribute"`` of this app for the worker
                 processes; defaults to the constructor's ``import_path`` or to
-                auto-discovery through ``sys.modules``.
+                auto-discovery through ``sys.modules``. A worker process imports
+                **only** this module, so it must import every module that
+                registers tasks (Celery's ``include``). A worker that registers
+                fewer tasks than this runner is refused at start-up, with the
+                missing tasks named.
             worker_env: Extra environment variables for the worker processes.
         """
         if queues is not None:

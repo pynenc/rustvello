@@ -32,6 +32,8 @@ impl PersistentTokioRunner {
         self.control_plane
             .startup_check(&self.runner_id, &runner_ctx)
             .await?;
+        // Worker processes start now, so a wrong import_path stops the runner here.
+        self.executor.start().await?;
 
         // Create the main runner context for hierarchy
         let main_ctx = RunnerContext::new_with_runtime(

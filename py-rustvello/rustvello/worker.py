@@ -91,8 +91,20 @@ def execute_request(app: App, request: dict[str, Any]) -> dict[str, Any]:
 
 
 def serve(app: App, requests: IO[str], responses: IO[str]) -> None:
-    """Answer requests line by line until stdin closes."""
-    responses.write(json.dumps({"ready": True, "pid": os.getpid(), "protocol": PROTOCOL_VERSION}) + "\n")
+    """Answer requests line by line until stdin closes.
+
+    The ready line lists the tasks this process registered, so the runner can
+    refuse to start when the worker's ``import_path`` loads fewer tasks than
+    the runner knows (a module that forgot to import the task modules).
+    """
+    ready = {
+        "ready": True,
+        "pid": os.getpid(),
+        "protocol": PROTOCOL_VERSION,
+        "app": app._import_path,
+        "tasks": sorted(app.tasks),
+    }
+    responses.write(json.dumps(ready) + "\n")
     responses.flush()
     for line in requests:
         line = line.strip()

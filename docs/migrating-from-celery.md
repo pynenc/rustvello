@@ -15,15 +15,16 @@ task model, not every Celery feature (see "What does not map" below).
 
 ## Infrastructure
 
-| Celery                                                        | Rustvello                                                                                                             |
-| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Broker (RabbitMQ, Redis) + result backend (Redis, a database) | One database: SQLite on one host, PostgreSQL across hosts. Queue, state and results share it.                         |
-| `celery -A proj worker -Q a,b -c 4`                           | `python -m rustvello.worker proj:app --queues a b --workers 4` (threads) or `--processes 4`                           |
-| `celery -A proj beat` (one scheduler process)                 | Nothing extra: runners evaluate cron triggers, and one firing publishes once across all runners                       |
-| Liveness probe (`celery inspect ping`)                        | `python -m rustvello.doctor proj:app` (exit 0: backends answer and a runner is alive) or `GET /health` on the monitor |
-| Flower                                                        | `python -m rustvello.monitor proj:app --read-only`, JSON under `/api/*` ([Monitoring](monitoring/index.md))           |
-| `task_acks_late=True`, `task_reject_on_worker_lost=True`      | The default behaviour: an invocation whose worker dies is recovered and re-run                                        |
-| Redis `visibility_timeout`                                    | `runner_dead_after_seconds` (heartbeat based; default 300 s)                                                          |
+| Celery                                                        | Rustvello                                                                                                                                                      |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Broker (RabbitMQ, Redis) + result backend (Redis, a database) | One database: SQLite on one host, PostgreSQL across hosts. Queue, state and results share it.                                                                  |
+| `celery -A proj worker -Q a,b -c 4`                           | `python -m rustvello.worker proj:app --queues a b --workers 4` (threads) or `--processes 4`                                                                    |
+| `include=["proj.tasks", ...]` (modules every worker imports)  | The `import_path` module (`proj:app`) must import every task module itself; a worker process that registers fewer tasks than the runner is refused at start-up |
+| `celery -A proj beat` (one scheduler process)                 | Nothing extra: runners evaluate cron triggers, and one firing publishes once across all runners                                                                |
+| Liveness probe (`celery inspect ping`)                        | `python -m rustvello.doctor proj:app` (exit 0: backends answer and a runner is alive) or `GET /health` on the monitor                                          |
+| Flower                                                        | `python -m rustvello.monitor proj:app --read-only`, JSON under `/api/*` ([Monitoring](monitoring/index.md))                                                    |
+| `task_acks_late=True`, `task_reject_on_worker_lost=True`      | The default behaviour: an invocation whose worker dies is recovered and re-run                                                                                 |
+| Redis `visibility_timeout`                                    | `runner_dead_after_seconds` (heartbeat based; default 300 s)                                                                                                   |
 
 ```python
 # Celery
