@@ -591,7 +591,7 @@ fn expand_task(attrs: TaskAttrs, func: ItemFn) -> syn::Result<proc_macro2::Token
 
 /// Reject unsupported function forms (unsafe, generic).
 fn validate_function(func: &ItemFn) -> syn::Result<()> {
-    if func.sig.unsafety.is_some() {
+    if matches!(func.sig.safety, syn::Safety::Unsafe(_)) {
         return Err(syn::Error::new_spanned(
             &func.sig,
             "#[rustvello::task] does not support unsafe functions",

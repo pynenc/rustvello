@@ -40,7 +40,7 @@ impl TriggerDefinitionDTO {
         }
         hasher.update(b"|");
         hasher.update(logic.to_string().as_bytes());
-        TriggerDefinitionId(format!("{:x}", hasher.finalize()))
+        TriggerDefinitionId(crate::hex::lower_hex(&hasher.finalize()))
     }
 }
 

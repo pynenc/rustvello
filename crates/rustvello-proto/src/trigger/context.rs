@@ -108,6 +108,6 @@ impl ConditionContext {
                 hasher.update(c.invocation_id.as_str().as_bytes());
             }
         }
-        format!("{:x}", hasher.finalize())
+        crate::hex::lower_hex(&hasher.finalize())
     }
 }
