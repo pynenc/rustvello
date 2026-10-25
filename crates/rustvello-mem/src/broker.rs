@@ -66,6 +66,10 @@ impl Default for MemBroker {
 
 #[async_trait]
 impl Broker for MemBroker {
+    fn backend_name(&self) -> &'static str {
+        "In-Memory"
+    }
+
     #[instrument(skip(self), fields(%invocation_id, queue = queue_name, priority))]
     async fn route_invocation_with_options(
         &self,

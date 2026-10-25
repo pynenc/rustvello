@@ -26,6 +26,10 @@ impl MongoClientDataStore {
 
 #[async_trait]
 impl ClientDataStore for MongoClientDataStore {
+    fn backend_name(&self) -> &'static str {
+        "MongoDB"
+    }
+
     async fn store(&self, key: &str, value: &str) -> RustvelloResult<()> {
         let db = self.pool.db().await?;
         let col = db.collection::<mongodb::bson::Document>(COLLECTION);

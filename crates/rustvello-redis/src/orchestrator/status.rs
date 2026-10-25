@@ -14,6 +14,10 @@ use crate::connection::redis_err;
 
 #[async_trait]
 impl OrchestratorStatus for RedisOrchestrator {
+    fn backend_name(&self) -> &'static str {
+        "Redis"
+    }
+
     fn guarantee_profile(&self) -> Option<&'static str> {
         Some("redis")
     }

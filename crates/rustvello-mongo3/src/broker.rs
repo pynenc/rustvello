@@ -38,6 +38,10 @@ impl Mongo3Broker {
 
 #[async_trait]
 impl Broker for Mongo3Broker {
+    fn backend_name(&self) -> &'static str {
+        "MongoDB 3.6"
+    }
+
     async fn route_invocation_with_options(
         &self,
         invocation_id: &InvocationId,

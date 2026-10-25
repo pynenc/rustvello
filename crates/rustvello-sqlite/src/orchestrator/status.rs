@@ -15,6 +15,10 @@ use super::SqliteOrchestrator;
 
 #[async_trait]
 impl OrchestratorStatus for SqliteOrchestrator {
+    fn backend_name(&self) -> &'static str {
+        "SQLite"
+    }
+
     fn guarantee_profile(&self) -> Option<&'static str> {
         Some("sqlite")
     }

@@ -27,19 +27,11 @@ impl PersistentTokioRunner {
             self.control_plane.runner_language,
             self.control_plane.executor_kind,
         );
-        if let Err(e) = self
-            .control_plane
-            .state_backend
-            .store_runner_context(&runner_ctx)
-            .await
-        {
-            tracing::warn!("Failed to store runner context: {}", e);
-        }
-
-        // Send initial heartbeat
-        if let Err(e) = self.heartbeat().await {
-            tracing::warn!("Initial heartbeat failed: {}", e);
-        }
+        // Fail at once when a backend refuses this runner's reads or writes;
+        // this also stores the runner context and the first heartbeat.
+        self.control_plane
+            .startup_check(&self.runner_id, &runner_ctx)
+            .await?;
 
         // Create the main runner context for hierarchy
         let main_ctx = RunnerContext::new_with_runtime(
@@ -281,16 +273,13 @@ impl PersistentTokioRunner {
             };
         }
 
+        let heartbeat_failures = super::super::failure_log::FailureLog::new("runner heartbeat");
         while !self.is_shutdown() {
             if last_heartbeat.elapsed() >= heartbeat_interval {
-                if let Err(e) = self.heartbeat().await {
-                    tracing::warn!("Heartbeat failed: {}", e);
-                }
+                heartbeat_failures.record(&self.heartbeat().await);
                 let worker_ids = self.active_worker_ids();
                 for wid in &worker_ids {
-                    if let Err(e) = self.control_plane.heartbeat(wid, false).await {
-                        tracing::warn!("worker:{} heartbeat failed: {}", wid, e);
-                    }
+                    heartbeat_failures.record(&self.control_plane.heartbeat(wid, false).await);
                 }
                 last_heartbeat = Instant::now();
             }

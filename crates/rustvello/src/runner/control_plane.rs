@@ -127,6 +127,82 @@ impl RunnerControlPlane {
         self.task_catalog.registry()
     }
 
+    /// Check at start-up that every backend accepts this runner's reads and
+    /// writes, then store the runner context and the first heartbeat.
+    ///
+    /// A backend that refuses the runner's credentials (for example MongoDB
+    /// "not authorized on <db>") makes the runner exit with the backend name,
+    /// the refused action and the backend's own error, instead of starting
+    /// and silently failing every heartbeat.
+    pub(crate) async fn startup_check(
+        &self,
+        runner_id: &RunnerId,
+        runner_ctx: &rustvello_core::state_backend::StoredRunnerContext,
+    ) -> RustvelloResult<()> {
+        let refused = |component: &str, name: &str, action: &str, error: &dyn std::fmt::Display| {
+            rustvello_core::error::RustvelloError::Configuration {
+                message: format!(
+                    "{component} ({name}) refused {action} for app '{}': {error}. The runner needs \
+                     read and write access to this app's storage; see the \
+                     storage-and-permissions documentation page",
+                    self.app_id
+                ),
+            }
+        };
+        let state_backend = self.state_backend.backend_name();
+        self.state_backend
+            .store_runner_context(runner_ctx)
+            .await
+            .map_err(|e| {
+                refused(
+                    "state backend",
+                    state_backend,
+                    "the runner context write",
+                    &e,
+                )
+            })?;
+        let stored = self
+            .state_backend
+            .get_runner_context(runner_id.as_ref())
+            .await
+            .map_err(|e| {
+                refused(
+                    "state backend",
+                    state_backend,
+                    "the runner context read",
+                    &e,
+                )
+            })?;
+        if stored.is_none() {
+            tracing::warn!(
+                "state backend ({state_backend}) did not return the runner context just written for runner {runner_id}"
+            );
+        }
+        let orchestrator = self.orchestrator.backend_name();
+        self.orchestrator
+            .register_heartbeat(runner_id, true)
+            .await
+            .map_err(|e| refused("orchestrator", orchestrator, "the heartbeat write", &e))?;
+        self.orchestrator
+            .get_active_runner_ids(self.config.runner_dead_after_seconds)
+            .await
+            .map_err(|e| refused("orchestrator", orchestrator, "the active runners read", &e))?;
+        let broker = self.broker.backend_name();
+        let queues = if self.config.runner_queues.is_empty() {
+            self.config.broker_queues.clone()
+        } else {
+            self.config.runner_queues.clone()
+        };
+        self.broker
+            .count_invocations_in_queues(&queues, None)
+            .await
+            .map_err(|e| refused("broker", broker, "the queue depth read", &e))?;
+        tracing::info!(
+            "backend check passed: broker={broker}, orchestrator={orchestrator}, state_backend={state_backend}"
+        );
+        Ok(())
+    }
+
     pub(crate) async fn heartbeat(
         &self,
         runner_id: &RunnerId,

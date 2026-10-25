@@ -199,6 +199,48 @@ impl PyRustvello {
         })
     }
 
+    /// Register a task known by name only, so this process can submit it
+    /// without its code (`App.send_task`). Any language, including Python.
+    ///
+    /// The proxy carries the routing (queue, priority) used at submission; a
+    /// worker of this process that dequeues it fails loudly instead of running
+    /// it, so a process that executes the task must import its module.
+    #[pyo3(signature = (language, module, name, config=None, replace=false))]
+    fn register_task_proxy(
+        &self,
+        py: Python<'_>,
+        language: &str,
+        module: &str,
+        name: &str,
+        config: Option<PyTaskConfig>,
+        replace: bool,
+    ) -> PyResult<()> {
+        let task_id = parse_task_id(language, module, name)?;
+        let task_config = config.map(|c| c.inner).unwrap_or_default();
+        py.allow_threads(|| {
+            shared_runtime()?.block_on(async {
+                let mut app = self.inner.lock().await;
+                if replace {
+                    app.unregister_task(&task_id);
+                }
+                app.register_foreign_task(task_id, task_config)
+                    .map_err(to_py_err)
+            })
+        })
+    }
+
+    /// Whether a task (any language) is registered in this process, as a
+    /// function or as a proxy.
+    fn has_task(&self, py: Python<'_>, language: &str, module: &str, name: &str) -> PyResult<bool> {
+        let task_id = parse_task_id(language, module, name)?;
+        py.allow_threads(|| {
+            shared_runtime()?.block_on(async {
+                let app = self.inner.lock().await;
+                Ok(app.task_registry().get_dyn(&task_id).is_some())
+            })
+        })
+    }
+
     /// Submit a task for asynchronous execution.
     #[pyo3(signature = (module, name, kwargs=None, traceparent=None, tracestate=None))]
     fn submit(

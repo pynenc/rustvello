@@ -47,6 +47,11 @@ pub trait Broker: Send + Sync {
         None
     }
 
+    /// Human-readable name of this broker implementation.
+    fn backend_name(&self) -> &'static str {
+        "Unknown"
+    }
+
     /// Queue an invocation with independent task, logical queue, and priority routing.
     async fn route_invocation_with_options(
         &self,

@@ -116,6 +116,10 @@ pub(crate) fn not_before_ms(delay: Duration) -> i64 {
 
 #[async_trait]
 impl Broker for SqliteBroker {
+    fn backend_name(&self) -> &'static str {
+        "SQLite"
+    }
+
     fn publication_domain(&self) -> Option<rustvello_core::publication::PublicationDomain> {
         Some(Arc::clone(&self.db.domain))
     }

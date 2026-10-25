@@ -42,6 +42,10 @@ impl MongoStateBackend {
 
 #[async_trait]
 impl StateBackendCore for MongoStateBackend {
+    fn backend_name(&self) -> &'static str {
+        "MongoDB"
+    }
+
     async fn upsert_invocation(
         &self,
         invocation: &InvocationDTO,

@@ -43,6 +43,7 @@ struct IndexTemplate {
     scheduler_enabled: bool,
     blocking_control: bool,
     auto_purge_hours: f64,
+    read_only: bool,
     atomic_svc_interval: f64,
     runner_dead_after_minutes: f64,
     max_pending_seconds: u64,
@@ -95,13 +96,13 @@ async fn index(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
     let components = vec![
         ComponentCard {
             label: "Broker",
-            type_name: "Message queue".to_owned(),
+            type_name: app.broker.backend_name().to_owned(),
             icon: "queue",
             href: "/broker",
         },
         ComponentCard {
             label: "Orchestrator",
-            type_name: "Task coordination".to_owned(),
+            type_name: app.orchestrator.backend_name().to_owned(),
             icon: "settings",
             href: "/orchestrator",
         },
@@ -113,13 +114,13 @@ async fn index(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
         },
         ComponentCard {
             label: "State Backend",
-            type_name: "Persistent state".to_owned(),
+            type_name: app.state_backend.backend_name().to_owned(),
             icon: "storage",
             href: "/state-backend",
         },
         ComponentCard {
             label: "Data Store",
-            type_name: "Client cache".to_owned(),
+            type_name: app.client_data_store.backend_name().to_owned(),
             icon: "cached",
             href: "/client-data-store",
         },
@@ -152,6 +153,7 @@ async fn index(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
         scheduler_enabled: config.enable_scheduler,
         blocking_control: config.blocking_control,
         auto_purge_hours: config.auto_final_invocation_purge_hours,
+        read_only: state.read_only(),
         atomic_svc_interval: config.atomic_service_interval_minutes,
         runner_dead_after_minutes: config.runner_dead_after_seconds as f64 / 60.0,
         max_pending_seconds: config.max_pending_seconds,

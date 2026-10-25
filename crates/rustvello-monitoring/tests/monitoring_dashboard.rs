@@ -25,7 +25,7 @@ use std::sync::Arc;
 use common::{
     create_hierarchical_test_app, create_test_app, register_hierarchical_tasks,
     seed_grandparents_only, seed_hierarchical_invocations, seed_invocations, should_keep_alive,
-    start_test_server, TestServer,
+    start_test_server, start_test_server_with, TestServer,
 };
 use rustvello::prelude::{ForeignTaskProxy, RayonRunner};
 use rustvello_core::context::{InvocationContext, RunnerContext, INVOCATION_CTX, RUNNER_CTX};
@@ -1782,6 +1782,167 @@ async fn test_monitoring_capabilities_api() {
 }
 
 /// If `KEEP_ALIVE` is enabled, block until Ctrl-C; otherwise shut down.
+#[tokio::test]
+async fn test_health_reports_every_component() {
+    let setup = create_test_app("test-health");
+    let server = start_test_server(setup).await;
+    let client = server.client();
+
+    let resp = client
+        .get(format!("{}/health", server.url))
+        .send()
+        .await
+        .expect("health request");
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("health json");
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["app_id"], "test-health");
+    for component in [
+        "broker",
+        "orchestrator",
+        "state_backend",
+        "client_data_store",
+        "trigger_store",
+    ] {
+        assert_eq!(body["components"][component]["status"], "ok", "{component}");
+    }
+    assert_eq!(
+        body["components"]["state_backend"]["implementation"],
+        "In-Memory"
+    );
+    assert_eq!(body["runners"]["active"], 0);
+    let problems = body["problems"].as_array().expect("problems");
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.as_str().unwrap_or("").contains("no active runners")),
+        "{problems:?}"
+    );
+
+    let resp = client
+        .get(format!("{}/api/health", server.url))
+        .send()
+        .await
+        .expect("api health request");
+    assert_eq!(resp.status(), 200);
+
+    handle_keep_alive(server).await;
+}
+
+#[tokio::test]
+async fn test_json_api_routes() {
+    let setup = create_test_app("test-json-api");
+    let server = start_test_server(setup).await;
+    let client = server.client();
+
+    let caps: serde_json::Value = client
+        .get(format!("{}/api/capabilities", server.url))
+        .send()
+        .await
+        .expect("capabilities")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(caps["schema_version"], 2);
+    assert_eq!(caps["read_only"], false);
+    assert_eq!(caps["json"]["runners"], "/api/runners");
+
+    let runners: serde_json::Value = client
+        .get(format!("{}/api/runners", server.url))
+        .send()
+        .await
+        .expect("runners")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(runners["count"], 0);
+    assert!(runners["runners"].as_array().expect("list").is_empty());
+
+    let queues: serde_json::Value = client
+        .get(format!("{}/api/queues", server.url))
+        .send()
+        .await
+        .expect("queues")
+        .json()
+        .await
+        .expect("json");
+    assert!(queues["queues"].is_object());
+
+    let config: serde_json::Value = client
+        .get(format!("{}/api/config", server.url))
+        .send()
+        .await
+        .expect("config")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(config["implementations"]["state_backend"], "In-Memory");
+    assert_eq!(config["implementations"]["broker"], "In-Memory");
+    assert_eq!(config["config"]["app_id"], "test-json-api");
+
+    let resp = client
+        .get(format!(
+            "{}/api/invocations?status=Failed&limit=5",
+            server.url
+        ))
+        .send()
+        .await
+        .expect("invocations");
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(body["limit"], 5);
+    assert!(body["invocations"].is_array());
+
+    let resp = client
+        .get(format!("{}/api/invocations?status=Bogus", server.url))
+        .send()
+        .await
+        .expect("bad status");
+    assert_eq!(resp.status(), 400);
+
+    handle_keep_alive(server).await;
+}
+
+#[tokio::test]
+async fn test_read_only_monitor_refuses_writes_and_hides_purge() {
+    let setup = create_test_app("test-read-only");
+    let server = start_test_server_with(setup, true).await;
+    let client = server.client();
+
+    let resp = client
+        .post(format!("{}/broker/purge", server.url))
+        .header("origin", server.url.clone())
+        .send()
+        .await
+        .expect("purge request");
+    assert_eq!(resp.status(), 403);
+    let body = resp.text().await.expect("body");
+    assert!(body.contains("read-only"), "{body}");
+
+    let body = client
+        .get(format!("{}/", server.url))
+        .send()
+        .await
+        .expect("dashboard")
+        .text()
+        .await
+        .expect("html");
+    assert!(body.contains("Read-only monitor"), "read-only card shown");
+    assert!(!body.contains("Purge Broker"), "purge buttons hidden");
+
+    let caps: serde_json::Value = client
+        .get(format!("{}/api/capabilities", server.url))
+        .send()
+        .await
+        .expect("capabilities")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(caps["read_only"], true);
+
+    handle_keep_alive(server).await;
+}
+
 async fn handle_keep_alive(server: TestServer) {
     if should_keep_alive(KEEP_ALIVE) {
         server.keep_alive_until_ctrlc().await;

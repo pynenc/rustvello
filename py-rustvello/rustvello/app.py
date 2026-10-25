@@ -72,6 +72,7 @@ from rustvello.rustvello import (
     InvocationCancelledError,
     InvocationId,
     InvocationStatus,
+    MonitorServer,
     RustTaskRunnerBuilder,
     Rustvello,
     TaskConfig,
@@ -537,8 +538,17 @@ class App:
         db_path: SQLite database file path (for ``backend="sqlite"``).
         redis_url: Redis connection URL (for ``backend="redis"``).
         postgres_url: PostgreSQL connection string (for ``backend="postgres"``).
-        mongo_url: MongoDB connection URI (for ``backend="mongo"``).
-        mongo_db: MongoDB database name (for ``backend="mongo"``).
+        mongo_url: MongoDB connection URI (``backend="mongo"`` or ``"mongo3"``).
+        mongo_db: MongoDB database name *prefix* (``backend="mongo"`` or
+            ``"mongo3"``): the data lives in ``<mongo_db>_<app_id>``, so the
+            default ``"rustvello"`` and ``app_id="shop"`` use ``rustvello_shop``.
+            The credentials need ``readWrite`` on that database. Pass
+            ``mongo_db_verbatim=True`` to use ``mongo_db`` exactly, for a
+            database provisioned ahead of time (see the storage and permissions
+            documentation page).
+        mongo_db_verbatim: Use ``mongo_db`` as the database name with no
+            ``_<app_id>`` suffix. Every process of the app must then pass the
+            same name.
         otlp_endpoint: OTLP/HTTP endpoint for lifecycle telemetry.
         otlp_bearer_token: Bearer token paired with ``otlp_endpoint``.
 
@@ -573,6 +583,7 @@ class App:
         postgres_url: str = "postgresql://localhost/rustvello",
         mongo_url: str | None = None,
         mongo_db: str = "rustvello",
+        mongo_db_verbatim: bool = False,
         mongo_host: str | None = None,
         mongo_port: int | None = None,
         mongo_username: str | None = None,
@@ -635,6 +646,7 @@ class App:
             postgres_url=postgres_url,
             mongo_url=mongo_url,
             mongo_db=mongo_db,
+            mongo_db_verbatim=mongo_db_verbatim,
             broker=self._broker_name,
             rabbitmq_url=rabbitmq_url,
             rabbitmq_prefix=rabbitmq_prefix or app_id,
@@ -1154,12 +1166,71 @@ class App:
         return {queue: self.queue_depth(queue) for queue in self._config.broker_queues}
 
     def get_task(self, key: str) -> "TaskHandle":
-        """Look up a task by ``module.name`` or ``python::module.name``."""
+        """Look up a task by ``module.name`` or ``python::module.name``.
+
+        Only tasks registered in this process are found: import the module that
+        defines the task first. A process that only triggers tasks can use
+        :meth:`send_task` instead, which needs no import.
+        """
         full = key if "::" in key else f"python::{key}"
         try:
             return self._tasks[full]
         except KeyError:
-            raise KeyError(f"unknown task {key!r}; registered: {sorted(self._tasks)}") from None
+            raise KeyError(
+                f"unknown task {key!r}; registered: {sorted(self._tasks)}. Import the module that defines it "
+                f"before get_task(), or submit by name with app.send_task({key!r}, kwargs)"
+            ) from None
+
+    def send_task(
+        self,
+        name: str,
+        kwargs: dict[str, Any] | None = None,
+        *,
+        queue: str | None = None,
+        priority: float | None = None,
+        language: TaskLanguage | str = TaskLanguage.Python,
+    ) -> Invocation:
+        """Submit a task by name without importing its code (Celery's ``send_task``).
+
+        ``name`` is ``module.name`` or ``language::module.name``. When the task is
+        registered in this process its handle and routing are used. Otherwise a
+        proxy is registered under that name with the given ``queue`` and
+        ``priority`` (defaults: ``"default"`` and ``0.0``), the invocation is
+        queued, and a worker that imported the module runs it. Nothing checks
+        that the name or the arguments exist: a typo stays ``Pending`` until a
+        worker fails it. A worker that dequeues a task it has not imported fails
+        it with a stored ``TaskNotRegistered`` error, so a process that runs
+        workers must import the real task module.
+
+        Routing comes from the caller because the shared backend stores no
+        task configuration; pass the same ``queue`` the worker consumes.
+        Not available in synchronous dev mode (there is no code to run).
+        """
+        language_value = TaskLanguage(language).value
+        if "::" in name:
+            language_value, _, name = name.partition("::")
+            language_value = TaskLanguage(language_value).value
+        module, _, task_name = name.rpartition(".")
+        if not module or not task_name:
+            raise ValueError(f"task name {name!r} must look like 'package.module.task'")
+        full = f"{language_value}::{module}.{task_name}"
+        handle = self._tasks.get(full) if language_value == "python" else None
+        if handle is not None:
+            if queue is not None or priority is not None:
+                warnings.warn(
+                    f"send_task({name!r}): task is registered here; its own routing is used",
+                    stacklevel=2,
+                )
+            return handle.submit(**(kwargs or {}))
+        if self._dev_mode_force_sync:
+            raise ValueError(f"send_task({name!r}) cannot run a task by name in synchronous dev mode")
+        if not self._engine.has_task(language_value, module, task_name):
+            config = TaskConfig(queue=queue or "default", priority=priority if priority is not None else 0.0)
+            self._engine.register_task_proxy(language_value, module, task_name, config)
+        serialized = {key: json.dumps(value) for key, value in (kwargs or {}).items()}
+        traceparent, tracestate = _current_trace_carrier()
+        inv_id = self._engine.submit_task(language_value, module, task_name, serialized, traceparent, tracestate, None)
+        return Invocation(self, inv_id)
 
     def current_invocation(self) -> CurrentInvocation | None:
         """Identity, retry count and arguments of the task attempt running in this thread."""
@@ -1217,12 +1288,37 @@ class App:
         self._config.dev_mode_force_sync = bool(enabled)
         self._engine.set_dev_mode_force_sync(bool(enabled))
 
-    def start_monitor(self, host: str = "127.0.0.1", port: int = 8000, log_level: str = "info") -> Any:
-        """Serve the monitoring dashboard for this app's backends; returns a stoppable server handle."""
+    def start_monitor(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        log_level: str = "info",
+        *,
+        read_only: bool = False,
+        check_backends: bool = True,
+        block: bool = False,
+    ) -> MonitorServer:
+        """Serve the monitoring dashboard for this app's backends.
+
+        Returns a :class:`MonitorServer` (``address``, ``url``, ``is_running()``,
+        ``stop()``). The dashboard's CSS, JavaScript and logo are embedded in the
+        extension, so no source checkout is needed.
+
+        Args:
+            read_only: Refuse purge, rerun and cancel and hide their buttons, so
+                the monitor can be exposed to more people. Also enabled by
+                ``RUSTVELLO_MONITORING_READ_ONLY=1``.
+            check_backends: Probe every backend before serving and raise
+                ``RuntimeError`` naming the backend and its error when one
+                refuses the credentials, instead of serving an empty dashboard.
+            block: Serve until SIGTERM or SIGINT (Ctrl-C), then stop and return.
+                Use it as the body of a monitor process; the handlers installed
+                are restored on return.
+        """
         from rustvello.rustvello import start_monitor
 
         assert self._backend_objects is not None
-        return start_monitor(
+        server = start_monitor(
             self._app_id,
             self._backend_objects["broker"],
             self._backend_objects["orchestrator"],
@@ -1234,7 +1330,36 @@ class App:
             port=port,
             log_level=log_level,
             config=self._config,
+            read_only=read_only,
+            check_backends=check_backends,
         )
+        if block:
+            _serve_until_signal(server)
+        return server
+
+    def health(self) -> dict[str, Any]:
+        """Probe every backend once; the same report as the monitor's ``/health``.
+
+        Keys: ``status`` (``"ok"`` when every backend answered, else ``"error"``),
+        ``components`` (per backend: ``status``, ``implementation``, ``error``),
+        ``runners.active``, ``queues`` (depth per declared queue) and ``problems``
+        (component errors, then warnings such as "no active runners"). Used by
+        ``python -m rustvello.doctor`` as a readiness check.
+        """
+        from rustvello.rustvello import backend_health
+
+        assert self._backend_objects is not None
+        report = backend_health(
+            self._app_id,
+            self._backend_objects["broker"],
+            self._backend_objects["orchestrator"],
+            self._backend_objects["state_backend"],
+            self._backend_objects["client_data_store"],
+            trigger=self._backend_objects.get("trigger"),
+            config=self._config,
+        )
+        data: dict[str, Any] = json.loads(report)
+        return data
 
     # --- Triggers --------------------------------------------------------
 
@@ -1258,6 +1383,28 @@ class App:
     def backend(self) -> str:
         """The backend name (``"memory"``, ``"sqlite"``, etc.)."""
         return self._backend_name
+
+
+def _serve_until_signal(server: MonitorServer) -> None:
+    """Block until SIGTERM or SIGINT, then stop ``server``; previous handlers are restored."""
+    import signal
+
+    stop = threading.Event()
+    previous = {}
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        try:
+            previous[signum] = signal.signal(signum, lambda *_: stop.set())
+        except ValueError:  # not the main thread: only Ctrl-C style KeyboardInterrupt stops us
+            pass
+    try:
+        while server.is_running() and not stop.wait(0.5):
+            pass
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.stop()
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 # ── Helper types ────────────────────────────────────────────────────────

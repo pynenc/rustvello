@@ -15,13 +15,15 @@ task model, not every Celery feature (see "What does not map" below).
 
 ## Infrastructure
 
-| Celery                                                        | Rustvello                                                                                       |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Broker (RabbitMQ, Redis) + result backend (Redis, a database) | One database: SQLite on one host, PostgreSQL across hosts. Queue, state and results share it.   |
-| `celery -A proj worker -Q a,b -c 4`                           | `python -m rustvello.worker proj:app --queues a b --workers 4` (threads) or `--processes 4`     |
-| `celery -A proj beat` (one scheduler process)                 | Nothing extra: runners evaluate cron triggers, and one firing publishes once across all runners |
-| `task_acks_late=True`, `task_reject_on_worker_lost=True`      | The default behaviour: an invocation whose worker dies is recovered and re-run                  |
-| Redis `visibility_timeout`                                    | `runner_dead_after_seconds` (heartbeat based; default 300 s)                                    |
+| Celery                                                        | Rustvello                                                                                                             |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Broker (RabbitMQ, Redis) + result backend (Redis, a database) | One database: SQLite on one host, PostgreSQL across hosts. Queue, state and results share it.                         |
+| `celery -A proj worker -Q a,b -c 4`                           | `python -m rustvello.worker proj:app --queues a b --workers 4` (threads) or `--processes 4`                           |
+| `celery -A proj beat` (one scheduler process)                 | Nothing extra: runners evaluate cron triggers, and one firing publishes once across all runners                       |
+| Liveness probe (`celery inspect ping`)                        | `python -m rustvello.doctor proj:app` (exit 0: backends answer and a runner is alive) or `GET /health` on the monitor |
+| Flower                                                        | `python -m rustvello.monitor proj:app --read-only`, JSON under `/api/*` ([Monitoring](monitoring/index.md))           |
+| `task_acks_late=True`, `task_reject_on_worker_lost=True`      | The default behaviour: an invocation whose worker dies is recovered and re-run                                        |
+| Redis `visibility_timeout`                                    | `runner_dead_after_seconds` (heartbeat based; default 300 s)                                                          |
 
 ```python
 # Celery
@@ -34,16 +36,19 @@ app = App(app_id="shop", backend="postgres", postgres_url="postgresql://...")
 
 ## Tasks and calls
 
-| Celery                                                 | Rustvello                                                                |
-| ------------------------------------------------------ | ------------------------------------------------------------------------ |
-| `@app.task`                                            | `@app.task`                                                              |
-| `add.delay(1, 2)` / `add.apply_async((1, 2))`          | `add(1, 2)` returns an `Invocation`                                      |
-| `result.get(timeout=10)`                               | `invocation.result(timeout=10)`                                          |
-| `result.state`, `result.ready()`                       | `invocation.status`, `invocation.status.is_terminal()`                   |
-| `result.revoke()`                                      | `invocation.cancel()`                                                    |
-| `bind=True`, `self.request.id`, `self.request.retries` | `app.current_invocation().invocation_id`, `.num_retries`                 |
-| `add.s(1, 2)` then `.delay()` later                    | Call the handle when you want to submit; there are no signatures         |
-| `task_always_eager=True` in tests                      | `App(dev_mode_force_sync=True)` or `RUSTVELLO__DEV_MODE_FORCE_SYNC=true` |
+| Celery                                                             | Rustvello                                                                                                                                                                        |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@app.task`                                                        | `@app.task`                                                                                                                                                                      |
+| `add.delay(1, 2)` / `add.apply_async((1, 2))`                      | `add(1, 2)` returns an `Invocation`                                                                                                                                              |
+| `result.get(timeout=10)`                                           | `invocation.result(timeout=10)`                                                                                                                                                  |
+| `result.state`, `result.ready()`                                   | `invocation.status`, `invocation.status.is_terminal()`                                                                                                                           |
+| `result.revoke()`                                                  | `invocation.cancel()`                                                                                                                                                            |
+| `bind=True`, `self.request.id`, `self.request.retries`             | `app.current_invocation().invocation_id`, `.num_retries`                                                                                                                         |
+| `add.s(1, 2)` then `.delay()` later                                | Call the handle when you want to submit; there are no signatures                                                                                                                 |
+| `task_always_eager=True` in tests                                  | `App(dev_mode_force_sync=True)` or `RUSTVELLO__DEV_MODE_FORCE_SYNC=true`                                                                                                         |
+| `app.send_task("shop.send_receipt", kwargs={...}, queue="emails")` | `app.send_task("shop.send_receipt", {...}, queue="emails")`: submit by name from a process that never imports the task (a cron or CLI image); pass the queue the worker consumes |
+| `Task.run()` (call the function) vs `Task.apply()`                 | Call the plain function (`send_receipt.__wrapped__(...)`) vs `App(dev_mode_force_sync=True)` for an inline invocation                                                            |
+| `worker_prefetch_multiplier`                                       | Not needed: a worker claims one invocation per free slot, nothing is prefetched                                                                                                  |
 
 Arguments and results are JSON, like Celery's default `json` serializer.
 Pickle is not supported.
@@ -78,6 +83,14 @@ Differences that matter:
 - Celery's `time_limit` maps to `timeout` (seconds). A synchronous Python body
   cannot be killed on timeout unless the worker uses `--processes`; see
   [Execution deadlines](retries-timeouts-cancellation.md#execution-deadlines).
+- `soft_time_limit` (the `SoftTimeLimitExceeded` exception inside the body)
+  has no equivalent: there is one deadline, `timeout`, after which the attempt
+  fails (and retries when `retry_on_timeout=True`).
+- `acks_late` is not a setting to port. Rustvello's contract is "no invocation
+  lost, no accidental repetition": an invocation whose worker dies is recovered
+  and run again, and a retry is published exactly once ([guarantee
+  matrix](guarantees.md)). Execution stays at least once, so keep side effects
+  idempotent ([Idempotency](idempotency.md)).
 
 ## Routing and queues
 
@@ -171,3 +184,5 @@ is harmless ([Idempotency](idempotency.md)).
 6. Rewrite canvas compositions as workflows.
 7. Make side effects idempotent, as with `acks_late` ([Idempotency](idempotency.md)).
 8. Run workers with `python -m rustvello.worker module:app`.
+9. Grant the backend rights from [Storage layout and permissions](storage-and-permissions.md)
+   and point the liveness probe at `python -m rustvello.doctor module:app`.

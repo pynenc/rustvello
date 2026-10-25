@@ -12,6 +12,7 @@ use crate::AppInstance;
 pub struct AppState {
     inner: Arc<RwLock<AppStateInner>>,
     workflow_histories: Arc<std::sync::Mutex<WorkflowHistoryCache>>,
+    read_only: bool,
 }
 
 type WorkflowHistoryCache =
@@ -47,7 +48,21 @@ impl AppState {
                 apps,
                 active_app_id: selected.to_owned(),
             })),
+            read_only: false,
         })
+    }
+
+    /// Refuse every request that changes data (purge, rerun, cancel) and hide
+    /// the matching buttons.
+    #[must_use]
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// Whether this monitor refuses writes.
+    pub fn read_only(&self) -> bool {
+        self.read_only
     }
 
     pub(crate) fn workflow_history(
@@ -134,6 +149,7 @@ mod tests {
                 active_app_id: String::new(),
             })),
             workflow_histories: Arc::default(),
+            read_only: false,
         };
         let snapshot = Arc::new(WorkflowHistorySnapshot {
             entries: Vec::new(),

@@ -3,7 +3,7 @@ name: rustvello
 description: Build, run and debug Rustvello task queues from Python (and Rust). Covers setting up an app on SQLite, sync and async tasks with retries, backoff, timeouts and cancellation, running workers, submitting and waiting, idempotent (keyed) submission, cron triggers, choosing a backend from the guarantee matrix, and investigating a failed invocation through /api/capabilities and investigation reports. Use when code imports rustvello or the rustvello crate, or when asked to add, run or debug background tasks in a project that uses it.
 license: MIT
 metadata:
-  rustvello-version: "0.8"
+  rustvello-version: "0.9"
 ---
 
 # Rustvello
@@ -15,7 +15,7 @@ the calls shown here exist in the version below.
 
 ## Requirements
 
-- `rustvello` **0.8.x** (`pip install "rustvello>=0.8,<0.9"`), CPython 3.9+.
+- `rustvello` **0.9.x** (`pip install "rustvello>=0.9,<0.10"`), CPython 3.9+.
   Check with `python -c "import rustvello; print(rustvello.__version__)"`.
 - SQLite needs nothing else. Other backends need their server (PostgreSQL,
   Redis, MongoDB, RabbitMQ).

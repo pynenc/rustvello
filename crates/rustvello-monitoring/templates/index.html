@@ -313,6 +313,21 @@ endblock %} {% block content %}
         </div>
       </div>
     </div>
+    {% if read_only %}
+    <div class="card border-secondary">
+      <div class="card-header text-muted">
+        <span class="material-icons align-middle me-1" style="font-size: 18px"
+          >lock</span
+        >
+        Read-only monitor
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-0">
+          Purge, rerun and cancel are disabled on this monitor.
+        </p>
+      </div>
+    </div>
+    {% else %}
     <div class="card border-danger">
       <div class="card-header text-danger">
         <span class="material-icons align-middle me-1" style="font-size: 18px"
@@ -371,6 +386,7 @@ endblock %} {% block content %}
         </div>
       </div>
     </div>
+    {% endif %}
   </div>
 </div>
 

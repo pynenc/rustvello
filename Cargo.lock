@@ -2383,6 +2383,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3632,7 +3651,7 @@ dependencies = [
 
 [[package]]
 name = "py-rustvello"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "pyo3",
  "rustvello-python",
@@ -4353,7 +4372,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4389,7 +4408,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -4405,7 +4424,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4427,7 +4446,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-macros"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4436,7 +4455,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-mem"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4451,7 +4470,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-mongo"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4470,7 +4489,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-mongo3"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4488,13 +4507,15 @@ dependencies = [
 
 [[package]]
 name = "rustvello-monitoring"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "askama",
  "async-trait",
  "axum",
  "chrono",
  "futures-util",
+ "include_dir",
+ "mime_guess",
  "regex",
  "reqwest 0.12.28",
  "rustvello",
@@ -4514,7 +4535,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-otel"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "opentelemetry",
@@ -4531,7 +4552,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-postgres"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4554,7 +4575,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-proto"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "cistell-core",
@@ -4568,7 +4589,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-python"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "cistell-core",
@@ -4593,7 +4614,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-rabbitmq"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "lapin",
@@ -4610,7 +4631,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-redis"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4628,7 +4649,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-sqlite"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4645,7 +4666,7 @@ dependencies = [
 
 [[package]]
 name = "rustvello-test-suite"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "chrono",

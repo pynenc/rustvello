@@ -34,6 +34,15 @@ Template:
 | `logger`    | Rust target or Python logger name                                |
 | `message`   | Human-readable log message                                       |
 
+### Joining logs with the monitor
+
+The `context` field carries the stable invocation id
+(`cc6c0e34-5678-9abc-def0-123456789abc` above) on every line written while an
+invocation runs, in both runtimes. The same id is the key of
+`/invocations/{id}/investigation` and of `rustvello investigate`, so a log
+query and the monitor can be joined on it. In JSON logs it is the
+`invocation_id` field.
+
 ### System Tags
 
 - `[R]`: emitted by Rust runtime code

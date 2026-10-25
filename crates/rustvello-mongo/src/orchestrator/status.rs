@@ -13,6 +13,10 @@ use crate::connection::mongo_err;
 
 #[async_trait]
 impl OrchestratorStatus for MongoOrchestrator {
+    fn backend_name(&self) -> &'static str {
+        "MongoDB"
+    }
+
     fn guarantee_profile(&self) -> Option<&'static str> {
         Some("mongodb")
     }

@@ -176,6 +176,34 @@ Configuration comes from `RUSTVELLO__*` environment variables and the optional
 TOML / `pyproject.toml` sources (see Configuration), so a Kubernetes manifest
 can set `RUSTVELLO__RUNNER_QUEUES=hpa` per deployment instead of passing flags.
 
+## Python doctor (readiness probe)
+
+```bash
+python -m rustvello.doctor package.module:app [--json] [--allow-no-runners]
+```
+
+Imports the app, reads every backend once and prints the report of
+`App.health()` (the monitor's `/health`): the status and implementation of
+each component, active runners, queue depths and problems. Exit codes:
+
+| Code | Meaning                                                                           |
+| ---- | --------------------------------------------------------------------------------- |
+| `0`  | Every backend answered and at least one runner is alive                           |
+| `1`  | A backend refused a read: wrong credentials, missing permission, unreachable      |
+| `2`  | Backends answer but no runner sent a heartbeat recently (`--allow-no-runners`: 0) |
+
+Use it as the Kubernetes liveness or readiness probe of a worker image, and
+as the first command when the monitor shows no runners.
+
+## Python monitor launcher
+
+```bash
+python -m rustvello.monitor package.module:app [--host H] [--port P] [--read-only] [--no-check]
+```
+
+Serves the dashboard until SIGTERM or Ctrl-C ([Monitoring](../monitoring/index.md)).
+Exits `1` when a backend refuses the monitor's credentials, unless `--no-check`.
+
 ## Environment Variables
 
 The `run` and `config` commands load `RUSTVELLO__*` application configuration

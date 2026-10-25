@@ -19,6 +19,7 @@ workflows
 retries-timeouts-cancellation
 idempotency
 configuration/index
+storage-and-permissions
 monitoring/index
 guarantees
 migrating-from-celery
