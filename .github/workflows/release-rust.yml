@@ -18,7 +18,7 @@ jobs:
       is_release: ${{ steps.check-version.outputs.is_release }}
       version: ${{ steps.check-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check if version is published on crates.io
         id: check-version
@@ -50,11 +50,11 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # PyO3 0.22 supports Python up to 3.13; ubuntu-latest (26.04) ships 3.14.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -70,12 +70,12 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # rustvello-python embeds Python through PyO3 0.22, which supports up
       # to 3.13; the runner's own Python is newer on Ubuntu 26.04.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -98,7 +98,7 @@ jobs:
     needs: [check-version, verify-docs, verify-tests, release-gate]
     if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable

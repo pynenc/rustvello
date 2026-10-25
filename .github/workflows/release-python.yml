@@ -42,10 +42,10 @@ jobs:
       tag: ${{ steps.check-version.outputs.tag }}
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -88,7 +88,7 @@ jobs:
       pep440_version: ${{ steps.set-version.outputs.pep440_version }}
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set PR version
         id: set-version
@@ -107,11 +107,11 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # PyO3 0.22 supports Python up to 3.13; ubuntu-latest (26.04) ships 3.14.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -137,10 +137,10 @@ jobs:
     if: always() && (needs.check-version.result == 'success' || needs.pr-version.result == 'success')
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -168,7 +168,7 @@ jobs:
           cd "$RUNNER_TEMP" && python -c 'import rustvello'
 
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sdist-rustvello
           path: dist/*.tar.gz
@@ -200,10 +200,10 @@ jobs:
             manylinux: "off"
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -240,7 +240,7 @@ jobs:
           cd "$RUNNER_TEMP" && python -c 'import rustvello'
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.os }}-${{ matrix.target }}
           path: dist/*.whl
@@ -271,14 +271,14 @@ jobs:
       # Only the build artifacts: the release gate uploads others (the guarantee
       # matrix), which the publisher rejects as unknown distributions.
       - name: Download the sdist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: sdist-*
           path: dist
           merge-multiple: true
 
       - name: Download the wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheel-*
           path: dist
@@ -326,14 +326,14 @@ jobs:
       # Only the build artifacts: the release gate uploads others (the guarantee
       # matrix), which the publisher rejects as unknown distributions.
       - name: Download the sdist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: sdist-*
           path: dist
           merge-multiple: true
 
       - name: Download the wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheel-*
           path: dist
@@ -379,7 +379,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Comment PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const version = '${{ needs.pr-version.outputs.pep440_version }}';
