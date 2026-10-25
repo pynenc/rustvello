@@ -24,7 +24,12 @@ async fn postgres_server() -> (Guard, String) {
     if let Ok(dsn) = std::env::var("RUSTVELLO_POSTGRES_DSN") {
         return (None, dsn);
     }
-    let container = Postgres::default().start().await.unwrap();
+    // The runtime refuses a server with fsync=off; testcontainers-modules turns it off by default.
+    let container = Postgres::default()
+        .with_fsync_enabled()
+        .start()
+        .await
+        .unwrap();
     let host = container.get_host().await.unwrap();
     let port = container.get_host_port_ipv4(5432).await.unwrap();
     let conn = format!("host={host} port={port} user=postgres password=postgres dbname=postgres");
