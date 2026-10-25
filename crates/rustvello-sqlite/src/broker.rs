@@ -357,9 +357,8 @@ mod tests {
 
     #[tokio::test]
     async fn file_lock_errors_are_visible_and_app_local() {
-        let dir = std::env::temp_dir().join(format!("sqlite-lock-{}", InvocationId::new()));
-        std::fs::create_dir(&dir).unwrap();
-        let path = dir.join("backend.db");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backend.db");
         let locked = Database::open(&path, "a").unwrap();
         let same_app = Arc::new(Database::open(&path, "a").unwrap());
         let other_app = Arc::new(Database::open(&path, "b").unwrap());

@@ -56,12 +56,13 @@ fn openssl(arguments: &[&str], directory: &Path) {
     assert!(status.success(), "openssl command failed: {arguments:?}");
 }
 
-fn tls_fixture() -> std::path::PathBuf {
-    let directory = std::env::temp_dir().join(format!(
-        "rustvello-redis-tls-{}",
-        rustvello_proto::identifiers::InvocationId::new()
-    ));
-    std::fs::create_dir_all(&directory).unwrap();
+/// Throwaway TLS material; removed when the returned directory is dropped.
+fn tls_fixture() -> tempfile::TempDir {
+    let fixture = tempfile::Builder::new()
+        .prefix("rustvello-redis-tls-")
+        .tempdir()
+        .unwrap();
+    let directory = fixture.path();
     openssl(
         &[
             "req",
@@ -78,7 +79,7 @@ fn tls_fixture() -> std::path::PathBuf {
             "-subj",
             "/CN=Rustvello Redis test CA",
         ],
-        &directory,
+        directory,
     );
     openssl(
         &[
@@ -96,7 +97,7 @@ fn tls_fixture() -> std::path::PathBuf {
             "-subj",
             "/CN=Untrusted Redis test CA",
         ],
-        &directory,
+        directory,
     );
     openssl(
         &[
@@ -113,7 +114,7 @@ fn tls_fixture() -> std::path::PathBuf {
             "-addext",
             "subjectAltName=IP:127.0.0.1",
         ],
-        &directory,
+        directory,
     );
     std::fs::write(
         directory.join("server.ext"),
@@ -138,7 +139,7 @@ fn tls_fixture() -> std::path::PathBuf {
             "-extfile",
             "server.ext",
         ],
-        &directory,
+        directory,
     );
     // The key is copied into the container with its mode and owned by root
     // there, while Redis runs as the unprivileged `redis` user: openssl's
@@ -153,7 +154,7 @@ fn tls_fixture() -> std::path::PathBuf {
         )
         .unwrap();
     }
-    directory
+    fixture
 }
 
 fn make_pool(uri: &str) -> Arc<RedisPool> {
@@ -475,9 +476,9 @@ async fn tls_authentication_and_transport_rejections() {
     let image = GenericImage::new("redis", "alpine")
         .with_exposed_port(6379_u16.tcp())
         .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
-        .with_copy_to("/tls/ca.crt", tls.join("ca.crt"))
-        .with_copy_to("/tls/server.crt", tls.join("server.crt"))
-        .with_copy_to("/tls/server.key", tls.join("server.key"))
+        .with_copy_to("/tls/ca.crt", tls.path().join("ca.crt"))
+        .with_copy_to("/tls/server.crt", tls.path().join("server.crt"))
+        .with_copy_to("/tls/server.key", tls.path().join("server.key"))
         .with_cmd([
             "redis-server",
             "--port",
@@ -501,7 +502,7 @@ async fn tls_authentication_and_transport_rejections() {
         ]);
     let container = image.start().await.unwrap();
     let port = container.get_host_port_ipv4(6379).await.unwrap();
-    let ca = std::fs::read(tls.join("ca.crt")).unwrap();
+    let ca = std::fs::read(tls.path().join("ca.crt")).unwrap();
     let options = RedisOptions {
         connection_timeout_ms: 5_000,
         operation_timeout_ms: 5_000,
@@ -531,7 +532,8 @@ async fn tls_authentication_and_transport_rejections() {
         &format!("rediss://default:correct-password@127.0.0.1:{port}/"),
         "wrong-ca",
         options.clone(),
-        RedisTlsOptions::private_ca_pem(std::fs::read(tls.join("other-ca.crt")).unwrap()).unwrap(),
+        RedisTlsOptions::private_ca_pem(std::fs::read(tls.path().join("other-ca.crt")).unwrap())
+            .unwrap(),
     )
     .unwrap();
     assert!(wrong_ca.conn().await.is_err());
@@ -551,5 +553,4 @@ async fn tls_authentication_and_transport_rejections() {
     )
     .unwrap();
     assert!(plaintext.conn().await.is_err());
-    std::fs::remove_dir_all(tls).unwrap();
 }

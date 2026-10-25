@@ -1183,9 +1183,8 @@ async fn cds_purge_clears_data() {
 async fn cds_sqlite_round_trip() {
     use rustvello_core::client_data_store::is_reference;
 
-    let dir = std::env::temp_dir().join("rustvello_cds_sqlite_test");
-    std::fs::create_dir_all(&dir).unwrap();
-    let db_path = dir.join("cds_test.db");
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("cds_test.db");
 
     let app = Rustvello::builder()
         .app_id("cds-sqlite")
@@ -1209,8 +1208,6 @@ async fn cds_sqlite_round_trip() {
 
     cds.purge().await.unwrap();
     assert!(cds.resolve(&key).await.is_err());
-
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 // ---------------------------------------------------------------------------

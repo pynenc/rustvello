@@ -71,7 +71,7 @@ mod isolation_suite {
     use rustvello_sqlite::trigger::SqliteTriggerStore;
 
     fn make_isolation_pair() -> (
-        (),
+        tempfile::TempDir,
         SqliteBroker,
         SqliteBroker,
         SqliteOrchestrator,
@@ -83,17 +83,19 @@ mod isolation_suite {
         SqliteClientDataStore,
         SqliteClientDataStore,
     ) {
-        // Use a unique temp dir per test run to avoid lock contention
-        let id = uuid::Uuid::new_v4();
-        let dir = std::env::temp_dir().join(format!("rustvello_iso_{id}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        let base = dir.join("test.db");
+        // A unique temp dir per test avoids lock contention; it is removed
+        // when the test drops it (callers keep it alive as `_dir`).
+        let dir = tempfile::Builder::new()
+            .prefix("rustvello_iso_")
+            .tempdir()
+            .unwrap();
+        let base = dir.path().join("test.db");
 
         let db_a = Arc::new(Database::open(&base, "app_a").unwrap());
         let db_b = Arc::new(Database::open(&base, "app_b").unwrap());
 
         (
-            (),
+            dir,
             SqliteBroker::new(Arc::clone(&db_a)),
             SqliteBroker::new(Arc::clone(&db_b)),
             SqliteOrchestrator::new(Arc::clone(&db_a)),
@@ -109,31 +111,31 @@ mod isolation_suite {
 
     #[tokio::test]
     async fn suite_isolation_broker() {
-        let (_, ba, bb, _, _, _, _, _, _, _, _) = make_isolation_pair();
+        let (_dir, ba, bb, _, _, _, _, _, _, _, _) = make_isolation_pair();
         rustvello_test_suite::isolation::test_broker_isolation(&ba, &bb).await;
     }
 
     #[tokio::test]
     async fn suite_isolation_orchestrator() {
-        let (_, _, _, oa, ob, _, _, _, _, _, _) = make_isolation_pair();
+        let (_dir, _, _, oa, ob, _, _, _, _, _, _) = make_isolation_pair();
         rustvello_test_suite::isolation::test_orchestrator_isolation(&oa, &ob).await;
     }
 
     #[tokio::test]
     async fn suite_isolation_state_backend() {
-        let (_, _, _, _, _, sa, sb, _, _, _, _) = make_isolation_pair();
+        let (_dir, _, _, _, _, sa, sb, _, _, _, _) = make_isolation_pair();
         rustvello_test_suite::isolation::test_state_backend_isolation(&sa, &sb).await;
     }
 
     #[tokio::test]
     async fn suite_isolation_trigger_store() {
-        let (_, _, _, _, _, _, _, ta, tb, _, _) = make_isolation_pair();
+        let (_dir, _, _, _, _, _, _, ta, tb, _, _) = make_isolation_pair();
         rustvello_test_suite::isolation::test_trigger_store_isolation(&ta, &tb).await;
     }
 
     #[tokio::test]
     async fn suite_isolation_client_data_store() {
-        let (_, _, _, _, _, _, _, _, _, ca, cb) = make_isolation_pair();
+        let (_dir, _, _, _, _, _, _, _, _, ca, cb) = make_isolation_pair();
         rustvello_test_suite::isolation::test_client_data_store_isolation(&ca, &cb).await;
     }
 }

@@ -95,9 +95,8 @@ fn cli_unknown_subcommand() {
 fn cli_cancel_queued_invocation_then_reports_already_final() {
     use rustvello::prelude::*;
 
-    let dir = std::env::temp_dir().join(format!("rustvello-cli-cancel-{}", InvocationId::new()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let db = dir.join("cli.db");
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("cli.db");
     let db_path = db.to_str().unwrap().to_owned();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let invocation_id = runtime.block_on(async {
@@ -141,5 +140,4 @@ fn cli_cancel_queued_invocation_then_reports_already_final() {
         .assert()
         .code(3)
         .stdout(predicate::str::contains("CANCELLED"));
-    let _ = std::fs::remove_dir_all(dir);
 }
