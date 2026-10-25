@@ -1761,7 +1761,7 @@ async fn test_monitoring_capabilities_api() {
         .expect("capabilities request");
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.expect("capabilities JSON");
-    assert_eq!(body["schema_version"], 2);
+    assert_eq!(body["schema_version"], 1);
     assert_eq!(body["pagination"]["default_page_size"], 50);
     assert!(body["timeline"]["filters"]
         .as_array()
@@ -1843,7 +1843,7 @@ async fn test_json_api_routes() {
         .json()
         .await
         .expect("json");
-    assert_eq!(caps["schema_version"], 2);
+    assert_eq!(caps["schema_version"], 1);
     assert_eq!(caps["read_only"], false);
     assert_eq!(caps["json"]["runners"], "/api/runners");
 

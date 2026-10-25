@@ -33,7 +33,7 @@ pub fn router() -> Router<AppState> {
 async fn capabilities(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
     let app = get_active_app(&state)?;
     Ok(axum::response::Json(serde_json::json!({
-        "schema_version": 2,
+        "schema_version": 1,
         "app_id": app.app_id,
         "applications": state.app_ids().unwrap_or_default(),
         "read_only": state.read_only(),

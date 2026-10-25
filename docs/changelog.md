@@ -28,7 +28,7 @@ Operations feedback from a Celery migration on Kubernetes (MongoDB 3.6, RabbitMQ
   monitor probes the backends before serving and refuses to start when one
   refuses its credentials (`check_backends=False`, `--no-check` skip it).
 - JSON API for scripts and agents: `/api/runners`, `/api/invocations?status=`,
-  `/api/queues`, `/api/config`; `/api/capabilities` (schema 2) lists them.
+  `/api/queues`, `/api/config`; `/api/capabilities` lists them (new fields only, so `schema_version` stays 1).
 - `python -m rustvello.doctor module:app [--json]` prints the health report and
   exits 1 on a refused read or 2 when no runner is alive, for Kubernetes probes.
   `App.health()` returns the same dictionary.
