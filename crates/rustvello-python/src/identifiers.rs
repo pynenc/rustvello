@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use crate::utils::parse_task_id;
 
 /// Python wrapper for TaskId
-#[pyclass(name = "TaskId")]
+#[pyclass(name = "TaskId", from_py_object)]
 #[derive(Clone)]
 pub struct PyTaskId {
     pub inner: rustvello_proto::identifiers::TaskId,
@@ -49,7 +49,7 @@ impl PyTaskId {
 }
 
 /// Python wrapper for InvocationId
-#[pyclass(name = "InvocationId")]
+#[pyclass(name = "InvocationId", from_py_object)]
 #[derive(Clone)]
 pub struct PyInvocationId {
     pub inner: rustvello_proto::identifiers::InvocationId,
@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn task_id_valid() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let tid = PyTaskId::new("my_module".into(), "my_func".into(), "python".into()).unwrap();
             assert_eq!(tid.language(), "python");
             assert_eq!(tid.module(), "my_module");
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn task_id_repr() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let tid = PyTaskId::new("mod".into(), "fn".into(), "python".into()).unwrap();
             let repr = tid.__repr__();
             assert!(repr.starts_with("TaskId("));
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn invocation_id_from_valid_uuid() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let uuid_str = "550e8400-e29b-41d4-a716-446655440000";
             let id = PyInvocationId::from_string(uuid_str.into()).unwrap();
             assert_eq!(id.__str__(), uuid_str);
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn invocation_id_from_invalid_uuid() {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let result = PyInvocationId::from_string("not-a-uuid".into());
             assert!(result.is_err());
         });

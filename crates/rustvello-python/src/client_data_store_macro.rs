@@ -4,7 +4,7 @@
 ///
 /// Each backend keeps its own `#[new]` constructor in a separate
 /// `#[pymethods]` block. This macro generates the remaining 6 methods,
-/// all of which release the GIL via `py.allow_threads()`.
+/// all of which release the GIL via `py.detach()`.
 macro_rules! impl_py_client_data_store {
     ($py_type:ty) => {
         #[pyo3::pymethods]
@@ -18,7 +18,7 @@ macro_rules! impl_py_client_data_store {
             ) -> pyo3::PyResult<String> {
                 let mgr = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(mgr.store_if_large(serialized)))
+                py.detach(|| rt.block_on(mgr.store_if_large(serialized)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -27,7 +27,7 @@ macro_rules! impl_py_client_data_store {
             fn resolve(&self, py: pyo3::Python<'_>, data: &str) -> pyo3::PyResult<String> {
                 let mgr = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(mgr.resolve(data)))
+                py.detach(|| rt.block_on(mgr.resolve(data)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -35,7 +35,7 @@ macro_rules! impl_py_client_data_store {
             fn store(&self, py: pyo3::Python<'_>, key: &str, value: &str) -> pyo3::PyResult<()> {
                 let mgr = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(mgr.store(key, value)))
+                py.detach(|| rt.block_on(mgr.store(key, value)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -43,7 +43,7 @@ macro_rules! impl_py_client_data_store {
             fn retrieve(&self, py: pyo3::Python<'_>, key: &str) -> pyo3::PyResult<String> {
                 let mgr = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(mgr.retrieve(key)))
+                py.detach(|| rt.block_on(mgr.retrieve(key)))
                     .map_err(crate::error::to_py_err)
             }
 
@@ -51,7 +51,7 @@ macro_rules! impl_py_client_data_store {
             fn purge(&self, py: pyo3::Python<'_>) -> pyo3::PyResult<()> {
                 let mgr = std::sync::Arc::clone(&self.inner);
                 let rt = crate::runtime::shared_runtime()?;
-                py.allow_threads(|| rt.block_on(mgr.purge()))
+                py.detach(|| rt.block_on(mgr.purge()))
                     .map_err(crate::error::to_py_err)
             }
 

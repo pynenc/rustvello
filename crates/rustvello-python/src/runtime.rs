@@ -34,14 +34,14 @@ mod tests {
 
     #[test]
     fn shared_runtime_returns_ok() {
-        pyo3::prepare_freethreaded_python();
+        pyo3::Python::initialize();
         let rt = shared_runtime();
         assert!(rt.is_ok());
     }
 
     #[test]
     fn shared_runtime_is_same_instance() {
-        pyo3::prepare_freethreaded_python();
+        pyo3::Python::initialize();
         let a = shared_runtime().unwrap() as *const _;
         let b = shared_runtime().unwrap() as *const _;
         assert_eq!(a, b);
@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn shared_runtime_can_block_on_future() {
-        pyo3::prepare_freethreaded_python();
+        pyo3::Python::initialize();
         let rt = shared_runtime().unwrap();
         let result = rt.block_on(async { 1 + 1 });
         assert_eq!(result, 2);

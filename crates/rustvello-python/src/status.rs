@@ -30,7 +30,7 @@ pub fn status_from_serde(serde_name: &str) -> PyResult<String> {
 }
 
 /// Python wrapper for InvocationStatus.
-#[pyclass(name = "InvocationStatus")]
+#[pyclass(name = "InvocationStatus", from_py_object)]
 #[derive(Clone)]
 pub struct PyInvocationStatus {
     pub inner: InvocationStatus,
@@ -148,7 +148,7 @@ impl PyInvocationStatus {
 }
 
 /// Python wrapper for ConcurrencyControlType.
-#[pyclass(name = "ConcurrencyControlType")]
+#[pyclass(name = "ConcurrencyControlType", from_py_object)]
 #[derive(Clone)]
 pub struct PyConcurrencyControlType {
     pub inner: ConcurrencyControlType,

@@ -201,9 +201,8 @@ pub fn backend_health(
         &[],
         config,
     )?;
-    let report = py.allow_threads(|| {
-        shared_runtime().map(|runtime| runtime.block_on(health_report(&instance)))
-    })?;
+    let report =
+        py.detach(|| shared_runtime().map(|runtime| runtime.block_on(health_report(&instance))))?;
     serde_json::to_string(&report).map_err(|error| {
         pyo3::exceptions::PyRuntimeError::new_err(format!("serialize health report: {error}"))
     })

@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn set_and_get_status() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let orch = PyMemOrchestrator::new();
             let inv = register_invocation(&orch, "mod", "func");
 
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn get_invocations_by_status() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let orch = PyMemOrchestrator::new();
             let inv1 = register_invocation(&orch, "mod", "func");
             let inv2 = register_invocation(&orch, "mod", "func");
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn waiting_for_and_release() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let orch = PyMemOrchestrator::new();
             let inv1 = register_invocation(&orch, "mod", "f1");
             let inv2 = register_invocation(&orch, "mod", "f2");
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn invalid_status_string() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let orch = PyMemOrchestrator::new();
             let inv = register_invocation(&orch, "mod", "func");
             let result = orch.set_invocation_status(py, &inv, "NONEXISTENT", None);
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn status_with_runner_id() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let orch = PyMemOrchestrator::new();
             let inv = register_invocation(&orch, "mod", "func");
 

@@ -47,7 +47,7 @@ impl PyRustvello {
         let args = arguments.unwrap_or_default();
 
         let app = Arc::clone(&self.inner);
-        let record = py.allow_threads(|| {
+        let record = py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -100,7 +100,7 @@ impl PyRustvello {
         }
 
         let app = Arc::clone(&self.inner);
-        py.allow_threads(|| {
+        py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -134,7 +134,7 @@ impl PyRustvello {
         let args = arguments.unwrap_or_default();
 
         let app = Arc::clone(&self.inner);
-        py.allow_threads(|| {
+        py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -170,7 +170,7 @@ impl PyRustvello {
         let args = arguments.unwrap_or_default();
 
         let app = Arc::clone(&self.inner);
-        py.allow_threads(|| {
+        py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -210,7 +210,7 @@ impl PyRustvello {
         let args = arguments.unwrap_or_default();
 
         let app = Arc::clone(&self.inner);
-        py.allow_threads(|| {
+        py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -234,7 +234,7 @@ impl PyRustvello {
         let runner = rustvello_proto::identifiers::RunnerId::from(runner_id.to_owned());
 
         let app = Arc::clone(&self.inner);
-        let inv_ids = py.allow_threads(|| {
+        let inv_ids = py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -297,7 +297,7 @@ impl PyRustvello {
         let reg_cc = crate::orchestrator::parse_cc_type(registration_cc)?;
 
         let app = Arc::clone(&self.inner);
-        let result = py.allow_threads(|| {
+        let result = py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -346,7 +346,7 @@ impl PyRustvello {
             .collect();
 
         let app = Arc::clone(&self.inner);
-        py.allow_threads(|| {
+        py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -364,7 +364,7 @@ impl PyRustvello {
         let runner = rustvello_proto::identifiers::RunnerId::from(runner_id.to_owned());
 
         let app = Arc::clone(&self.inner);
-        let ids = py.allow_threads(|| {
+        let ids = py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -392,7 +392,7 @@ impl PyRustvello {
         let runner = rustvello_proto::identifiers::RunnerId::from(runner_id.to_owned());
 
         let app = Arc::clone(&self.inner);
-        let result = py.allow_threads(|| {
+        let result = py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -430,7 +430,7 @@ impl PyRustvello {
         let inv_status = crate::orchestrator::parse_status(status)?;
 
         let app = Arc::clone(&self.inner);
-        let record = py.allow_threads(|| {
+        let record = py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -461,7 +461,7 @@ impl PyRustvello {
         let runner = rustvello_proto::identifiers::RunnerId::from(runner_id.to_owned());
 
         let app = Arc::clone(&self.inner);
-        py.allow_threads(|| {
+        py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -485,7 +485,7 @@ impl PyRustvello {
         let runner = rustvello_proto::identifiers::RunnerId::from(runner_id.to_owned());
 
         let app = Arc::clone(&self.inner);
-        py.allow_threads(|| {
+        py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
@@ -508,7 +508,7 @@ impl PyRustvello {
         let runner = rustvello_proto::identifiers::RunnerId::from(runner_id.to_owned());
 
         let app = Arc::clone(&self.inner);
-        py.allow_threads(|| {
+        py.detach(|| {
             crate::runtime::shared_runtime()?
                 .block_on(async {
                     let app = app.lock().await;
