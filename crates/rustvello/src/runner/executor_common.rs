@@ -120,8 +120,9 @@ pub(crate) async fn execute_invocation_common(
     // the module, or a name submitted by `send_task` that nothing implements.
     let Some(task) = deps.task_catalog.get(&inv_dto.task_id) else {
         let message = format!(
-            "task {} is not registered in this worker: import the module that defines it in the \
-             worker image, or route it to a worker that has it",
+            "task {} is not registered in this runner: import the module that defines it in the \
+             process that runs the worker (with worker processes, the runner process must \
+             register it too), or route it to a runner that has it",
             inv_dto.task_id
         );
         tracing::error!("Invocation status:failed permanently: {message}");

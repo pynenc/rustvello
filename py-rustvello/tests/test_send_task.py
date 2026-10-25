@@ -55,7 +55,7 @@ class TestSendTask:
         try:
             status = _wait_terminal(inv)
             assert status == InvocationStatus.failed(), status
-            with pytest.raises(RuntimeError, match="not registered in this worker"):
+            with pytest.raises(RuntimeError, match="not registered in this runner"):
                 inv.result(timeout=5)
         finally:
             app.stop()

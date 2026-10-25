@@ -43,6 +43,26 @@ Operations feedback from a Celery migration on Kubernetes (MongoDB 3.6, RabbitMQ
   task by name from a process that never imports its code (Celery's
   `send_task`); a proxy carries the routing. `App.get_task` errors now say to
   import the module or use `send_task`.
+- Fix: recovery could leave invocations in `RUNNING_RECOVERY` forever. The
+  non-atomic path (MongoDB, MongoDB 3.6, Redis, in-memory) wrote the recovery
+  status before resolving the task's route, so a task unknown to the
+  recovering process stopped there, and the error aborted the rest of the
+  pass. Now the route is resolved first (an unknown task is left untouched
+  for a runner that knows it), one invocation's error is logged and the pass
+  continues, and invocations left in `RUNNING_RECOVERY` / `PENDING_RECOVERY`
+  are recovered again once stale, on every backend.
+- Recovery limit: an invocation recovered `max_invocation_recoveries` times
+  (default 3, `0` for no limit) fails with a stored `RecoveryLimitExceeded`
+  error instead of being re-queued forever. Both recovery statuses may now
+  move to `FAILED`.
+- `App.run()` and `App.start_monitor()` start the Rust logger from the
+  configuration (`logging_level`, `log_format`, `compact_log_context`, so
+  `RUSTVELLO__LOGGING_LEVEL` applies); before, runner warnings and errors
+  were dropped unless the application called `init_logging()`. An earlier
+  `init_logging()` call keeps its settings.
+- Fix: `init_logging(stream="stderr")`, the default, wrote to stdout: the
+  stderr branch never set its writer. Logs now go to stderr, so a program's
+  own stdout stays clean.
 - Fix: a worker that dequeued a task it did not know returned an error after
   setting the invocation to `Running`, which left it `Running` until stale
   recovery. It now fails the invocation with a stored `TaskNotRegistered`

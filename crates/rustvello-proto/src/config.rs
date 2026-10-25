@@ -377,6 +377,11 @@ pub struct AppConfig {
     /// How often to scan for stale invocations (seconds)
     #[config(default = 60u64)]
     pub recovery_check_interval_seconds: u64,
+    /// Recoveries after which an invocation fails with `RecoveryLimitExceeded`
+    /// instead of being re-queued again (a task whose worker dies every time).
+    /// `0` recovers without limit.
+    #[config(default = 3u32)]
+    pub max_invocation_recoveries: u32,
     /// Whether to display arguments in logs
     #[config(default = true)]
     pub print_arguments: bool,
@@ -457,6 +462,7 @@ impl Default for AppConfig {
             heartbeat_interval_seconds: 30,
             runner_dead_after_seconds: 300,
             recovery_check_interval_seconds: 60,
+            max_invocation_recoveries: 3,
             print_arguments: true,
             argument_print_mode: ArgumentPrintMode::Truncated,
             truncate_arguments_length: 32,

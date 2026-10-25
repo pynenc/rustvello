@@ -43,3 +43,26 @@ pub fn init_logging(
     rustvello::logging::init_logging(&config);
     Ok(())
 }
+
+/// Start the Rust logger from an `AppConfig` (`logging_level`, `log_format`,
+/// `compact_log_context`, so `RUSTVELLO__LOGGING_LEVEL` and friends apply).
+///
+/// `App.run()` and `App.start_monitor()` call this, so runner warnings and
+/// errors reach the logs without an explicit `init_logging()`. The first
+/// initialisation wins: an earlier `init_logging()` call keeps its settings,
+/// and `RUST_LOG` still overrides the level.
+#[pyfunction]
+pub fn init_logging_from_config(config: &crate::config::PyAppConfig) -> PyResult<()> {
+    let app = &config.inner;
+    let mut log_config = LogConfig::default();
+    log_config.level = app.logging_level.clone();
+    log_config.format = match app.log_format {
+        rustvello_proto::config::LogFormat::Json => LogFormat::Json,
+        _ => LogFormat::Text,
+    };
+    log_config.compact_context = app.compact_log_context;
+    // stderr, as init_logging(): stdout belongs to the program's own output.
+    log_config.stream = LogStream::Stderr;
+    rustvello::logging::init_logging(&log_config);
+    Ok(())
+}

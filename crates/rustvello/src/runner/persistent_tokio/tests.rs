@@ -1262,3 +1262,287 @@ async fn idle_wait_is_capped_by_idle_sleep_ms() {
     cancel.cancel();
     assert!(!runner.wait_idle(&cancel).await, "stop once cancelled");
 }
+
+// --- Recovery must never orphan an invocation (unknown task, interrupted
+// recovery, a task whose worker dies every time). ---
+
+struct RecoveryFixture {
+    runner: PersistentTokioRunner,
+    mem_orchestrator: Arc<rustvello_mem::orchestrator::MemOrchestrator>,
+    orchestrator: Arc<dyn InvocationControlBackend>,
+    state_backend: Arc<dyn StateBackend>,
+}
+
+fn recovery_fixture(config: AppConfig) -> RecoveryFixture {
+    let broker: Arc<dyn Broker> = Arc::new(rustvello_mem::broker::MemBroker::new());
+    let mem_orchestrator = Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new());
+    let orchestrator: Arc<dyn InvocationControlBackend> = Arc::clone(&mem_orchestrator) as _;
+    let state_backend: Arc<dyn StateBackend> =
+        Arc::new(rustvello_mem::state_backend::MemStateBackend::new());
+    recovery_fixture_with(
+        config,
+        broker,
+        mem_orchestrator,
+        orchestrator,
+        state_backend,
+    )
+}
+
+fn recovery_fixture_with(
+    config: AppConfig,
+    broker: Arc<dyn Broker>,
+    mem_orchestrator: Arc<rustvello_mem::orchestrator::MemOrchestrator>,
+    orchestrator: Arc<dyn InvocationControlBackend>,
+    state_backend: Arc<dyn StateBackend>,
+) -> RecoveryFixture {
+    let mut registry = TaskRegistry::new();
+    registry
+        .register(TaskDefinition::new(
+            TaskId::new("test", "known"),
+            TaskConfig::default(),
+            Arc::new(|_args: String| Ok("1".to_owned())),
+        ))
+        .unwrap();
+    let runner = PersistentTokioRunner::new(
+        "test-app".to_string(),
+        config,
+        broker,
+        Arc::clone(&orchestrator),
+        Arc::clone(&state_backend),
+        Arc::new(registry),
+        None,
+    );
+    RecoveryFixture {
+        runner,
+        mem_orchestrator,
+        orchestrator,
+        state_backend,
+    }
+}
+
+/// An invocation of `task` left Running by a runner that never heartbeats.
+async fn orphaned_running(fixture: &RecoveryFixture, task: &str) -> InvocationId {
+    let call = CallDTO::new(TaskId::new("test", task), SerializedArguments::new());
+    let inv_id = fixture
+        .orchestrator
+        .register_invocation(&call)
+        .await
+        .unwrap();
+    let dto = InvocationDTO::new(
+        inv_id.clone(),
+        TaskId::new("test", task),
+        call.call_id.clone(),
+    );
+    fixture
+        .state_backend
+        .upsert_invocation(&dto, &call)
+        .await
+        .unwrap();
+    let dead = RunnerId::from_string("dead-runner");
+    for status in [InvocationStatus::Pending, InvocationStatus::Running] {
+        fixture
+            .orchestrator
+            .set_invocation_status(&inv_id, status, Some(&dead))
+            .await
+            .unwrap();
+    }
+    inv_id
+}
+
+#[tokio::test]
+async fn recovery_leaves_unknown_tasks_untouched_and_continues_the_pass() {
+    let fixture = recovery_fixture(AppConfig::default());
+    let unknown = orphaned_running(&fixture, "unknown").await;
+    let known = orphaned_running(&fixture, "known").await;
+
+    // The unknown task used to abort the pass after writing RUNNING_RECOVERY.
+    let recovered = fixture.runner.recover_stale_invocations().await.unwrap();
+    assert_eq!(recovered, 1, "the known task is still recovered");
+    let status = |id: InvocationId| {
+        let orchestrator = Arc::clone(&fixture.orchestrator);
+        async move {
+            orchestrator
+                .get_invocation_status(&id)
+                .await
+                .unwrap()
+                .status
+        }
+    };
+    assert_eq!(status(known).await, InvocationStatus::Rerouted);
+    assert_eq!(
+        status(unknown).await,
+        InvocationStatus::Running,
+        "nothing written for a task this runner cannot route"
+    );
+}
+
+#[tokio::test]
+async fn interrupted_recovery_is_resumed_once_stale() {
+    let fixture = recovery_fixture(AppConfig::default());
+    let inv_id = orphaned_running(&fixture, "known").await;
+    // A recovery that wrote its first status and then died.
+    fixture
+        .orchestrator
+        .set_invocation_status(
+            &inv_id,
+            InvocationStatus::RunningRecovery,
+            Some(&RunnerId::from_string("crashed-recoverer")),
+        )
+        .await
+        .unwrap();
+    fixture
+        .mem_orchestrator
+        .backdate_status_for_testing(&inv_id, chrono::Duration::seconds(600))
+        .await;
+
+    let recovered = fixture.runner.recover_stale_invocations().await.unwrap();
+    assert_eq!(recovered, 1);
+    let status = fixture
+        .orchestrator
+        .get_invocation_status(&inv_id)
+        .await
+        .unwrap();
+    assert_eq!(status.status, InvocationStatus::Rerouted);
+}
+
+#[tokio::test]
+async fn recovery_limit_fails_the_invocation_with_a_stored_error() {
+    let mut config = AppConfig::default();
+    config.max_invocation_recoveries = 2;
+    let fixture = recovery_fixture(config);
+    // Works for a task no runner knows, too: the limit needs no route.
+    let inv_id = orphaned_running(&fixture, "unknown").await;
+    for _ in 0..2 {
+        fixture
+            .state_backend
+            .add_history(&rustvello_proto::invocation::InvocationHistory::new(
+                inv_id.clone(),
+                rustvello_proto::status::InvocationStatusRecord::new(
+                    InvocationStatus::RunningRecovery,
+                    None,
+                ),
+                None,
+            ))
+            .await
+            .unwrap();
+    }
+
+    let recovered = fixture.runner.recover_stale_invocations().await.unwrap();
+    assert_eq!(recovered, 0);
+    let status = fixture
+        .orchestrator
+        .get_invocation_status(&inv_id)
+        .await
+        .unwrap();
+    assert_eq!(status.status, InvocationStatus::Failed);
+    let error = fixture
+        .state_backend
+        .get_error(&inv_id)
+        .await
+        .unwrap()
+        .expect("stored error");
+    assert_eq!(error.error_type, "RecoveryLimitExceeded");
+}
+
+/// The same three cases on SQLite, whose recovery takes the atomic
+/// publication path instead of two status writes.
+#[cfg(feature = "sqlite")]
+mod sqlite_recovery {
+    use super::*;
+
+    fn sqlite_fixture(dir: &std::path::Path, config: AppConfig) -> RecoveryFixture {
+        let db = Arc::new(
+            rustvello_sqlite::db::Database::open(dir.join("recovery.db"), "test-app").unwrap(),
+        );
+        let broker: Arc<dyn Broker> =
+            Arc::new(rustvello_sqlite::broker::SqliteBroker::new(Arc::clone(&db)));
+        let orchestrator: Arc<dyn InvocationControlBackend> = Arc::new(
+            rustvello_sqlite::orchestrator::SqliteOrchestrator::new(Arc::clone(&db)),
+        );
+        let state_backend: Arc<dyn StateBackend> =
+            Arc::new(rustvello_sqlite::state_backend::SqliteStateBackend::new(db));
+        assert!(
+            orchestrator.runtime_publication().is_some(),
+            "SQLite recovery must exercise the publication path"
+        );
+        recovery_fixture_with(
+            config,
+            broker,
+            Arc::new(rustvello_mem::orchestrator::MemOrchestrator::new()),
+            orchestrator,
+            state_backend,
+        )
+    }
+
+    async fn status(fixture: &RecoveryFixture, id: &InvocationId) -> InvocationStatus {
+        fixture
+            .orchestrator
+            .get_invocation_status(id)
+            .await
+            .unwrap()
+            .status
+    }
+
+    #[tokio::test]
+    async fn unknown_task_is_left_untouched_and_the_pass_continues() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = sqlite_fixture(dir.path(), AppConfig::default());
+        let unknown = orphaned_running(&fixture, "unknown").await;
+        let known = orphaned_running(&fixture, "known").await;
+        assert_eq!(fixture.runner.recover_stale_invocations().await.unwrap(), 1);
+        assert_eq!(status(&fixture, &known).await, InvocationStatus::Rerouted);
+        assert_eq!(status(&fixture, &unknown).await, InvocationStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn interrupted_recovery_is_resumed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = AppConfig::default();
+        // Every recovery status is already "stale": no clock to backdate here.
+        config.runner_dead_after_seconds = 0;
+        let fixture = sqlite_fixture(dir.path(), config);
+        let inv_id = orphaned_running(&fixture, "known").await;
+        fixture
+            .orchestrator
+            .set_invocation_status(
+                &inv_id,
+                InvocationStatus::RunningRecovery,
+                Some(&RunnerId::from_string("crashed-recoverer")),
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(fixture.runner.recover_stale_invocations().await.unwrap(), 1);
+        assert_eq!(status(&fixture, &inv_id).await, InvocationStatus::Rerouted);
+    }
+
+    #[tokio::test]
+    async fn recovery_limit_fails_with_a_stored_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.max_invocation_recoveries = 1;
+        let fixture = sqlite_fixture(dir.path(), config);
+        let inv_id = orphaned_running(&fixture, "known").await;
+        fixture
+            .state_backend
+            .add_history(&rustvello_proto::invocation::InvocationHistory::new(
+                inv_id.clone(),
+                rustvello_proto::status::InvocationStatusRecord::new(
+                    InvocationStatus::RunningRecovery,
+                    None,
+                ),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(fixture.runner.recover_stale_invocations().await.unwrap(), 0);
+        assert_eq!(status(&fixture, &inv_id).await, InvocationStatus::Failed);
+        let error = fixture
+            .state_backend
+            .get_error(&inv_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(error.error_type, "RecoveryLimitExceeded");
+    }
+}

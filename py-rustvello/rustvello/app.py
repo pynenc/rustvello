@@ -79,6 +79,7 @@ from rustvello.rustvello import (
     get_current_invocation_id,
     get_current_num_retries,
     get_current_trace_context,
+    init_logging_from_config,
     on_attempt_abandoned,
     wait_runner_python_calls,
 )
@@ -928,6 +929,10 @@ class App:
         """
         if queues is not None:
             self._config.runner_queues = list(queues)
+        # Runner warnings and errors (refused heartbeats, recovery problems)
+        # are Rust log lines: start the logger from logging_level
+        # (RUSTVELLO__LOGGING_LEVEL). An earlier init_logging() call wins.
+        init_logging_from_config(self._config)
         runner = self._build_runner(
             num_workers=num_workers,
             idle_sleep_ms=idle_sleep_ms,
@@ -1322,6 +1327,7 @@ class App:
         from rustvello.rustvello import start_monitor
 
         assert self._backend_objects is not None
+        init_logging_from_config(self._config)
         server = start_monitor(
             self._app_id,
             self._backend_objects["broker"],

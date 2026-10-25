@@ -176,6 +176,10 @@ fn rustvello(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
         rustvello_python::logging::init_logging,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(
+        rustvello_python::logging::init_logging_from_config,
+        m
+    )?)?;
 
     m.add_function(wrap_pyfunction!(
         rustvello_python::utils::compute_args_id,
