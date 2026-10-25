@@ -476,6 +476,30 @@ pub async fn test_stale_running_detection(orch: &dyn InvocationControlBackend) {
     );
 }
 
+/// A runner that has not sent its first heartbeat yet (a worker that just
+/// started) is not dead: its fresh RUNNING invocation must not be recovered.
+pub async fn test_fresh_running_without_heartbeat_is_not_stale(
+    orch: &dyn InvocationControlBackend,
+) {
+    let task_id = test_task_id("fresh_running_no_heartbeat");
+    let call = make_call(&task_id);
+    let inv_id = orch.register_invocation(&call).await.unwrap();
+
+    let worker = rustvello_proto::identifiers::RunnerId::from_string("fresh-worker-no-heartbeat");
+    orch.set_invocation_status(&inv_id, InvocationStatus::Pending, Some(&worker))
+        .await
+        .unwrap();
+    orch.set_invocation_status(&inv_id, InvocationStatus::Running, Some(&worker))
+        .await
+        .unwrap();
+
+    let stale = orch.get_stale_running_invocations(300).await.unwrap();
+    assert!(
+        !stale.contains(&inv_id),
+        "a RUNNING invocation of a runner without a heartbeat yet is not stale while fresh"
+    );
+}
+
 /// Ownership violation: a different runner cannot transition a Pending invocation.
 pub async fn test_ownership_violation(orch: &dyn InvocationControlBackend) {
     let task_id = test_task_id("test_task");
@@ -628,6 +652,12 @@ macro_rules! orchestrator_suite {
         async fn suite_orch_stale_running_detection() {
             let orch = $setup;
             $crate::orchestrator::test_stale_running_detection(&orch).await;
+        }
+
+        #[tokio::test]
+        async fn suite_orch_fresh_running_without_heartbeat_is_not_stale() {
+            let orch = $setup;
+            $crate::orchestrator::test_fresh_running_without_heartbeat_is_not_stale(&orch).await;
         }
     };
 }
@@ -784,6 +814,13 @@ macro_rules! async_orchestrator_suite {
         async fn suite_orch_stale_running_detection() {
             let (_c, orch) = $setup.await;
             $crate::orchestrator::test_stale_running_detection(&orch).await;
+        }
+
+        #[tokio::test]
+        #[ignore = "requires Docker"]
+        async fn suite_orch_fresh_running_without_heartbeat_is_not_stale() {
+            let (_c, orch) = $setup.await;
+            $crate::orchestrator::test_fresh_running_without_heartbeat_is_not_stale(&orch).await;
         }
     };
 }

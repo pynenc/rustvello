@@ -192,6 +192,18 @@ impl Orchestrator {
     }
 
     /// Whether the invocation has been cancelled (used by running workers).
+    /// The invocation's current status record as the orchestrator stores it.
+    pub(crate) async fn current_status(
+        &self,
+        invocation_id: &InvocationId,
+    ) -> Option<rustvello_proto::status::InvocationStatusRecord> {
+        self.backends
+            .invocation_control
+            .get_invocation_status(invocation_id)
+            .await
+            .ok()
+    }
+
     pub(crate) async fn is_cancelled(&self, invocation_id: &InvocationId) -> bool {
         matches!(
             self.backends

@@ -280,7 +280,8 @@ impl RuntimePublication for SqlitePublication {
                     if old.status != expected { return Ok(None); }
                     let cutoff = Utc::now() - chrono::Duration::seconds((*stale_after_seconds).min(i64::MAX as u64) as i64);
                     let heartbeat: Option<String> = tx.query_row("SELECT last_heartbeat FROM runner_heartbeats WHERE runner_id=?1", [old.runner_id.as_ref().map(RunnerId::as_str)], |r| r.get(0)).optional().map_err(sql_err)?;
-                    let last_seen = if expected == InvocationStatus::Pending { Some(old.timestamp) } else { heartbeat.as_deref().map(parse_timestamp).transpose()? };
+                    // A runner without a heartbeat yet (a worker that just started) counts from its RUNNING status time.
+                    let last_seen = if expected == InvocationStatus::Pending { Some(old.timestamp) } else { heartbeat.as_deref().map(parse_timestamp).transpose()?.or(Some(old.timestamp)) };
                     if last_seen.is_some_and(|t| t >= cutoff) { return Ok(None); }
                     old = transition(&tx, &id, &runner, &old, *status)?;
                     point("recovery_status")?;

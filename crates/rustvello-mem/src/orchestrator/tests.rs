@@ -171,10 +171,17 @@ async fn test_stale_running_no_heartbeat() {
         .await
         .unwrap();
 
-    // Runner never sent heartbeat — should be considered stale
+    // A runner without a heartbeat yet is not dead while its RUNNING status is
+    // fresh (a worker that just started)...
     let stale = orch.get_stale_running_invocations(60).await.unwrap();
-    assert_eq!(stale.len(), 1);
-    assert_eq!(stale[0], inv_id);
+    assert!(
+        stale.is_empty(),
+        "fresh RUNNING without a heartbeat is not stale"
+    );
+    // ...but it is once the status is older than the threshold.
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let stale = orch.get_stale_running_invocations(0).await.unwrap();
+    assert_eq!(stale, vec![inv_id]);
 }
 
 #[tokio::test]

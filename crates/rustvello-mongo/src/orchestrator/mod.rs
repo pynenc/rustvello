@@ -38,13 +38,13 @@ impl MongoOrchestrator {
     }
 }
 
-fn serialize_record(record: &InvocationStatusRecord) -> RustvelloResult<String> {
+pub(crate) fn serialize_record(record: &InvocationStatusRecord) -> RustvelloResult<String> {
     serde_json::to_string(record).map_err(|e| RustvelloError::Serialization {
         message: format!("status record: {}", e),
     })
 }
 
-fn deserialize_record(s: &str) -> RustvelloResult<InvocationStatusRecord> {
+pub(crate) fn deserialize_record(s: &str) -> RustvelloResult<InvocationStatusRecord> {
     serde_json::from_str(s).map_err(|e| RustvelloError::Serialization {
         message: format!("status record: {}", e),
     })

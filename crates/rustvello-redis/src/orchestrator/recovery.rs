@@ -90,13 +90,13 @@ impl OrchestratorRecovery for RedisOrchestrator {
             .await
             .map_err(redis_err)?;
 
-        // Collect (inv_id, runner_id) pairs for running invocations
-        let mut runner_pairs: Vec<(InvocationId, String)> = Vec::new();
+        // Collect (inv_id, runner_id, status time) for running invocations
+        let mut runner_pairs: Vec<(InvocationId, String, chrono::DateTime<Utc>)> = Vec::new();
         for (inv_id, val) in candidates.into_iter().zip(status_values) {
             if let Some(s) = val {
                 if let Ok(record) = deserialize_status_record(&s) {
                     if let Some(runner_id) = record.runner_id {
-                        runner_pairs.push((inv_id, runner_id.to_string()));
+                        runner_pairs.push((inv_id, runner_id.to_string(), record.timestamp));
                     }
                 }
             }
@@ -109,7 +109,7 @@ impl OrchestratorRecovery for RedisOrchestrator {
         // Batch-fetch all heartbeats with MGET
         let hb_keys: Vec<String> = runner_pairs
             .iter()
-            .map(|(_, rid)| prefixed_key(&self.heartbeat_prefix, rid))
+            .map(|(_, rid, _)| prefixed_key(&self.heartbeat_prefix, rid))
             .collect();
         let hb_values: Vec<Option<String>> = redis::cmd("MGET")
             .arg(&hb_keys)
@@ -118,12 +118,14 @@ impl OrchestratorRecovery for RedisOrchestrator {
             .map_err(redis_err)?;
 
         let mut stale = Vec::new();
-        for ((inv_id, _), hb_val) in runner_pairs.into_iter().zip(hb_values) {
+        for ((inv_id, _, since), hb_val) in runner_pairs.into_iter().zip(hb_values) {
             let is_stale = match hb_val {
                 Some(ts) => {
                     chrono::DateTime::parse_from_rfc3339(&ts).map_or(true, |dt| dt < threshold)
                 }
-                None => true,
+                // No heartbeat yet (a worker that just started): stale only
+                // once the RUNNING status itself is older than the threshold.
+                None => since < threshold,
             };
             if is_stale {
                 stale.push(inv_id);

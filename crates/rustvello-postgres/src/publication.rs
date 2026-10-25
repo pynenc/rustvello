@@ -342,7 +342,11 @@ impl RuntimePublication for PostgresPublication {
                 let last_seen = if expected == InvocationStatus::Pending {
                     Some(old.timestamp)
                 } else {
-                    heartbeat.map(|row| row.get::<_, DateTime<Utc>>(0))
+                    // A runner without a heartbeat yet (a worker that just
+                    // started) counts from its RUNNING status time.
+                    heartbeat
+                        .map(|row| row.get::<_, DateTime<Utc>>(0))
+                        .or(Some(old.timestamp))
                 };
                 if last_seen.is_some_and(|t| t >= cutoff) {
                     return Ok(None);

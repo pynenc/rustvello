@@ -84,6 +84,16 @@ impl PersistentTokioRunner {
                     e
                 );
             }
+            // First heartbeat now, not at the next management cycle: until a
+            // worker has one, another runner's recovery could see the
+            // invocation it claims as owned by a dead runner.
+            if let Err(e) = self.control_plane.heartbeat(&worker_runner_id, false).await {
+                tracing::warn!(
+                    "worker:{} initial heartbeat failed: {}",
+                    worker_runner_id,
+                    e
+                );
+            }
 
             self.emitter
                 .on_worker_lifecycle(&WorkerLifecycleEvent::started(
@@ -192,6 +202,10 @@ impl PersistentTokioRunner {
                         .await
                     {
                         tracing::warn!(%error, "Reconnected worker context is not yet persisted");
+                    }
+                    if let Err(error) = self.control_plane.heartbeat(&worker_runner_id, false).await
+                    {
+                        tracing::warn!(%error, "Reconnected worker heartbeat failed");
                     }
                     continue;
                 }

@@ -145,13 +145,18 @@ fn cleanup_child() {
                     "duplicate claim should be skipped: {result:?}"
                 );
             } else {
+                // The fence rejects the stale executor's outcome. Since 0.9.1 an
+                // outcome rejected because another runner took the invocation
+                // over is discarded (the worker is not retired); the parent
+                // checks that the replacement owner's slot and status survive.
                 assert!(
                     matches!(
                         result,
-                        Err(RustvelloError::OwnershipViolation { .. })
+                        Ok(_)
+                            | Err(RustvelloError::OwnershipViolation { .. })
                             | Err(RustvelloError::InvalidStatusTransition { .. })
                     ),
-                    "expected ownership fence, got {result:?}"
+                    "expected a fenced outcome, got {result:?}"
                 );
             }
         });

@@ -65,7 +65,8 @@ impl OrchestratorRecovery for PostgresOrchestrator {
                 "SELECT sr.invocation_id FROM status_records sr
                  LEFT JOIN runner_heartbeats rh ON sr.runner_id = rh.runner_id
                  WHERE sr.status = 'RUNNING'
-                   AND (rh.last_heartbeat IS NULL OR rh.last_heartbeat < clock_timestamp() - $1 * interval '1 second') ORDER BY sr.timestamp LIMIT 256",
+                   AND ((rh.last_heartbeat IS NULL AND sr.timestamp < clock_timestamp() - $1 * interval '1 second')
+                        OR rh.last_heartbeat < clock_timestamp() - $1 * interval '1 second') ORDER BY sr.timestamp LIMIT 256",
                 &[&age],
             )
             .await

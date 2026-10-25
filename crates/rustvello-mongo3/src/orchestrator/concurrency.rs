@@ -291,8 +291,15 @@ impl OrchestratorConcurrency for Mongo3Orchestrator {
                 }
             }
 
-            if intersection.map_or(0, |members| members.len())
-                < task_config.running_concurrency.unwrap_or(1) as usize
+            // Count only other invocations: an entry left by this invocation's
+            // own earlier attempt (rerouted by recovery) must not block it.
+            let own = invocation_id.as_str();
+            if intersection.map_or(0, |members| {
+                members
+                    .iter()
+                    .filter(|member| member.as_str() != own)
+                    .count()
+            }) < task_config.running_concurrency.unwrap_or(1) as usize
             {
                 self.index_for_concurrency_control(invocation_id, task_id, Some(args))
                     .await?;

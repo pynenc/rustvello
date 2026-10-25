@@ -154,7 +154,14 @@ impl OrchestratorConcurrency for MemOrchestrator {
             });
         }
 
-        let reserved = intersection.map_or(0, |members| members.len());
+        // Count only other invocations: an entry left by this invocation's own
+        // earlier attempt (rerouted by recovery) must not block it.
+        let reserved = intersection.map_or(0, |members| {
+            members
+                .iter()
+                .filter(|member| member.as_ref() != invocation_id.as_str())
+                .count()
+        });
         let limit = task_config.running_concurrency.unwrap_or(1) as usize;
         if reserved >= limit {
             return Ok(false);
